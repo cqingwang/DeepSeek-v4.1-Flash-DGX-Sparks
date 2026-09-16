@@ -155,7 +155,7 @@ def main() -> int:
     # Resolve after load_dotenv so values that live only in the .env file apply.
     host = args.host or os.environ.get("WORKER_HOST", "10.0.0.2")
     user = args.user or os.environ.get("WORKER_USER") or os.environ.get("USER", "spark")
-    identity = args.identity or os.environ.get("SSH_IDENTITY", "~/.ssh/id_ed25519_shared")
+    identity = args.identity or os.environ.get("SSH_IDENTITY", "~/.ssh/id_ed25519")
     timeout = args.timeout if args.timeout is not None else int(os.environ.get("REMOTE_TIMEOUT", "600"))
     password = os.environ.get("WORKER_PASS") or None
     return ssh_cmd(

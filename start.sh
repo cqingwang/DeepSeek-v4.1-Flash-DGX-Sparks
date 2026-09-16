@@ -68,7 +68,7 @@ fi
 [[ ${#WORKER_HOSTS[@]} -eq ${#WORKER_IPS[@]} ]] || { echo "WORKER_HOSTS and WORKER_IPS differ in length" >&2; exit 1; }
 WORKER1_IP="${WORKER_IPS[0]}"; WORKER2_IP="${WORKER_IPS[1]:-}"   # legacy names, still read by files/nfs-share.sh
 WORKER_USER="${WORKER_USER:-zurih}"
-SSH_IDENTITY="${SSH_IDENTITY:-$HOME/.ssh/id_ed25519_shared}"
+SSH_IDENTITY="${SSH_IDENTITY:-$HOME/.ssh/id_ed25519}"
 FABRIC_IFACE="${FABRIC_IFACE:-enp1s0f1np1}"
 GLOO_SOCKET_IFNAME="${GLOO_SOCKET_IFNAME:-enP7s7}"
 NCCL_SOCKET_IFNAME="${NCCL_SOCKET_IFNAME:-enP7s7}"
@@ -488,14 +488,26 @@ cmd_doctor() {
     warn "RAM Engram mode pins ~189 GiB into unified memory — will not fit on Spark. Use nvme."
     ok=1
   fi
-  if nfs_rpc_ready 127.0.0.1; then
-    local _mounts="" _i
+  local _i _h
+  if [[ "$WEIGHTS_MODE" == "local" ]]; then
+    info "weights: node-local read-only paths on all ranks ($WORKER_MODEL_DIR); NFS skipped"
+    for _i in "${!WORKER_HOSTS[@]}"; do
+      _h="${WORKER_HOSTS[$_i]}"
+      if remote_on "$_h" "test -f '$WORKER_MODEL_DIR/config.json'"; then
+        info "weights $_h: config.json present"
+      else
+        warn "weights $_h: missing $WORKER_MODEL_DIR"
+        ok=1
+      fi
+    done
+  elif nfs_rpc_ready 127.0.0.1; then
+    local _mounts=""
     for _i in "${!WORKER_HOSTS[@]}"; do _mounts+=" ${WORKER_HOSTS[$_i]}→$(nfs_server_ip_for "${WORKER_HOSTS[$_i]}" "$_i" 2>/dev/null || echo '?')"; done
     info "NFSv4 listening on this host (workers should mount CX7:${_mounts})"
+    info "weights: workers use docker NFS volume $NFS_VOLUME (head $MODEL_DIR)"
   else
     warn "NFSv4 not listening yet — ./start.sh share will start or reuse the exporter"
   fi
-  info "weights: spark2/spark3 use docker NFS volume $NFS_VOLUME (head $MODEL_DIR); no rsync/SSHFS"
   if [[ "$TP_SIZE" -eq 3 ]]; then
     info "TP3 note: heads=64, o_groups=8, vocab=129280 are not divisible by 3; adapter/tp3_pad.py pads them"
     info "  (heads 64→96, groups 8→12, draft experts 128→129). experts=384 divides. Rank 2 holds padded shards only."
