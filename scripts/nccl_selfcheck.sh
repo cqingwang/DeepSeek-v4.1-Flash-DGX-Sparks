@@ -17,6 +17,14 @@ DBG_DIR="${1:-$HOME/nccl-debug}"
 EXPECT_HCA="${2:-4}"
 fail=0
 
+# This report validates the legacy IB/RoCE ring-only path.  The deployed
+# four-node topology is a routed L3 ring, so NCCL intentionally uses Socket;
+# there is no RoCE device matrix or RING-ONLY preload contract to validate.
+if [[ "${NCCL_NET:-}" == "Socket" || "${EXTRA_DOCKER_ENV:-}" == *"NCCL_NET=Socket"* ]]; then
+  echo "[i] NCCL_NET=Socket：当前为跨 L3 fabric 的 Socket 数据面，跳过 IB/RoCE ring-only 自检"
+  exit 0
+fi
+
 log=$(ls -t "$DBG_DIR"/*.log 2>/dev/null | head -1)
 if [[ -z "${log:-}" ]]; then
   echo "[x] 未找到 NCCL 调试日志（$DBG_DIR/*.log）——确认 NCCL_DEBUG_FILE 已设且服务已启动"

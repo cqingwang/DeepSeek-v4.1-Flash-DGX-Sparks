@@ -260,7 +260,7 @@ docker_common_args() {
     --shm-size "${SHM_SIZE:-32g}"
     --ulimit "memlock=-1:-1" --ulimit stack=67108864
     --device /dev/infiniband:/dev/infiniband
-    -v "$src:/models/DeepSeek-V4.1-Flash"
+    -v "$src:/models/DeepSeek-V4.1-Flash:ro"
     -v "$STATE_DIR:/state"
     -v "$HOME/.cache:/root/.cache"
     -e "OFFLOAD_MODE=$OFFLOAD_MODE"
@@ -361,7 +361,9 @@ push_spec_tables() {
   local name local_path host
   for name in dspark_sps.json dspark_sts.json; do
     local_path="$STATE_DIR/$name"
-    for host in "${WORKER_IPS[@]}"; do
+    # WORKER_IPS is the fabric/data-plane address list; all control-plane SSH
+    # operations must use the management addresses in the same rank order.
+    for host in "${WORKER_HOSTS[@]}"; do
       if [[ -f "$local_path" ]]; then
         local payload
         payload=$(base64 -w0 <"$local_path")
@@ -602,6 +604,11 @@ cmd_build() {
   info "overlay image on all 3 nodes"
 }
 
+overlay_image_present() {
+  docker image inspect "$IMAGE" \
+    --format '{{index .Config.Labels "com.spark.dsv41.overlay"}}' 2>/dev/null | grep -qx '1'
+}
+
 cmd_share() {
   info "=== share spark1 checkpoint over NFSv4 on ConnectX ==="
   [[ -f "$MODEL_DIR/config.json" ]] || die "no checkpoint — ./start.sh download"
@@ -640,7 +647,8 @@ cmd_serve() {
     die "GPU is busy (glm53-exl3 or similar). Stop the other stack, or FORCE=1 ./start.sh serve"
   fi
 
-  if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
+  if ! overlay_image_present; then
+    info "overlay image $IMAGE missing or is only the base SGLang image — building from local source"
     cmd_build
   fi
 
@@ -659,7 +667,7 @@ cmd_serve() {
     done
   fi
   for h in "${WORKER_HOSTS[@]}"; do
-    if ! remote_ok_on "$h" "docker image inspect $(printf '%q' "$IMAGE") >/dev/null 2>&1"; then
+    if ! remote_ok_on "$h" "docker image inspect $(printf '%q' "$IMAGE") --format '{{index .Config.Labels \"com.spark.dsv41.overlay\"}}' 2>/dev/null | grep -qx 1"; then
       info "image missing on $h — building"
       cmd_build
       break
@@ -940,7 +948,7 @@ cmd_pack() {
     /opt/dsv41/scripts/pack_engram.py --rank 0 --tp "$TP_SIZE" --out /engram \
     || die "pack failed on head"
   local idx=1 host wsrc
-  for host in "${WORKER_IPS[@]}"; do
+  for host in "${WORKER_HOSTS[@]}"; do
     info "packing rank $idx on $host..."
     # Ring adaptation: in local-weights mode the worker's checkpoint lives at
     # WORKER_MODEL_DIR; the NFS volume only exists in nfs mode. Without this the
