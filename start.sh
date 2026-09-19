@@ -24,14 +24,17 @@
 #   ./start.sh logs [N]        tail head boot logs
 #   ./start.sh logs worker<N> [lines]   (worker1, worker2, ...)
 #   ./start.sh smoke           arithmetic (+ optional tools/vision)
+#   ./start.sh ncclcheck       verify NCCL came up ring-only (patch + algo matrix)
+#   ./start.sh gate [--full]   is the engine *trustworthy*, not merely Up
 #
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT"
 
-# Profiles: start.sh reads .env (3 Sparks, TP3); start-tp4.sh points ENV_FILE at
-# .env.tp4 (4 Sparks, TP4) and gives that profile its own state/log dirs.
+# Profiles: start.sh reads .env; the checked-in .env.example is the TP4-safe
+# fallback. start-tp4.sh points ENV_FILE at .env.tp4 and gives that profile its
+# own state/log dirs.
 ENV_FILE="${ENV_FILE:-$ROOT/.env}"
 ENV_EXAMPLE="${ENV_EXAMPLE:-$ROOT/.env.example}"
 if [[ ! -f "$ENV_FILE" ]]; then
@@ -66,7 +69,7 @@ fi
 [[ ${#WORKER_HOSTS[@]} -eq ${#WORKER_IPS[@]} ]] || { echo "WORKER_HOSTS and WORKER_IPS differ in length" >&2; exit 1; }
 WORKER1_IP="${WORKER_IPS[0]}"; WORKER2_IP="${WORKER_IPS[1]:-}"   # legacy names, still read by files/nfs-share.sh
 WORKER_USER="${WORKER_USER:-zurih}"
-SSH_IDENTITY="${SSH_IDENTITY:-$HOME/.ssh/id_ed25519_shared}"
+SSH_IDENTITY="${SSH_IDENTITY:-$HOME/.ssh/id_ed25519}"
 FABRIC_IFACE="${FABRIC_IFACE:-enp1s0f1np1}"
 GLOO_SOCKET_IFNAME="${GLOO_SOCKET_IFNAME:-enP7s7}"
 NCCL_SOCKET_IFNAME="${NCCL_SOCKET_IFNAME:-enP7s7}"
@@ -138,6 +141,11 @@ SERVE_LOG="${SERVE_LOG:-$LOG_DIR/dsv41.log}"
 REMOTE_PY="$ROOT/scripts/remote.py"
 NFS_VOLUME="${NFS_VOLUME:-dsv41-weights}"
 NFS_SHARE="${NFS_SHARE:-1}"
+# Ring adaptation (internal mirror dsv41/): local weights on every node — skip the
+# NFS export/mount machinery entirely (WEIGHTS_MODE=local). WORKER_MODEL_DIR
+# must hold a flat checkpoint (config.json + 48 shards) on each worker.
+WEIGHTS_MODE="${WEIGHTS_MODE:-nfs}"
+WORKER_MODEL_DIR="${WORKER_MODEL_DIR:-/home/spark/models/DeepSeek-V4.1-Flash}"
 
 _abs() { readlink -f "$1" 2>/dev/null || echo "$1"; }
 MODEL_DIR="$(_abs "$MODEL_DIR")"
@@ -188,13 +196,19 @@ ensure_ssh_keys() {
 }
 
 model_src() {
+  local src
   if [[ -L "$COMMON_MODEL" ]]; then
-    readlink -f "$COMMON_MODEL"
+    src="$(readlink -f "$COMMON_MODEL")"
   elif [[ -d "$COMMON_MODEL" ]]; then
-    echo "$COMMON_MODEL"
+    src="$COMMON_MODEL"
   else
-    echo "$MODEL_DIR"
+    src="$MODEL_DIR"
   fi
+  # Ring adaptation: never silently return a path with no checkpoint. A missing
+  # dir here made `pack` mount an empty tree, write zero shards and still
+  # report success (workers stayed on the 2-read unpacked Engram path).
+  [[ -f "$src/config.json" ]] || die "no checkpoint at $src (config.json missing) — set MODEL_DIR"
+  echo "$src"
 }
 
 api_key() {
@@ -247,7 +261,7 @@ docker_common_args() {
     --shm-size "${SHM_SIZE:-32g}"
     --ulimit "memlock=-1:-1" --ulimit stack=67108864
     --device /dev/infiniband:/dev/infiniband
-    -v "$src:/models/DeepSeek-V4.1-Flash"
+    -v "$src:/models/DeepSeek-V4.1-Flash:ro"
     -v "$STATE_DIR:/state"
     -v "$HOME/.cache:/root/.cache"
     -e "OFFLOAD_MODE=$OFFLOAD_MODE"
@@ -280,7 +294,7 @@ docker_common_args() {
     -e "SKIP_PREPARE=$SKIP_PREPARE"
     -e "SKIP_VERIFY=$SKIP_VERIFY"
     -e "WARMUP=${WARMUP:-1}"
-    -e "HOST=0.0.0.0"
+    -e "HOST=${HOST:-0.0.0.0}"
     -e "NCCL_NET=$NCCL_NET"
     -e "NCCL_IB_DISABLE=$NCCL_IB_DISABLE"
     -e "NCCL_IB_HCA=$IB_HCA"
@@ -317,6 +331,29 @@ docker_common_args() {
   if [[ -f "$NCCL_HOST_DIR/libnccl.so.2.30.7" || -f "$NCCL_HOST_DIR/libnccl.so.2" ]]; then
     _a+=(-v "$NCCL_HOST_DIR:$NCCL_CONTAINER_DIR:ro" -e "LD_LIBRARY_PATH=$NCCL_CONTAINER_DIR")
   fi
+  # Ring adaptation: host ring-only NCCL + core-pinning shim (same LD_PRELOAD
+  # pair as the vLLM production stack), and the NCCL debug-log取证 mount.
+  if [[ -f /opt/aicad-prod/lib/libncclpin.so && -d /opt/nccl-ringonly ]]; then
+    mkdir -p "$HOME/nccl-debug"
+    _a+=(-v "/opt/aicad-prod/lib/libncclpin.so:/opt/libncclpin.so:ro"
+         -v "/opt/nccl-ringonly:/opt/nccl-ringonly:ro"
+         -v "$HOME/nccl-debug:/nccl-debug:rw"
+         -e 'LD_PRELOAD=/opt/libncclpin.so /opt/nccl-ringonly/libnccl.so.2')
+  fi
+  # Ring adaptation: per-rank PEER_HCA for rank 0 (workers get theirs in
+  # worker_env_lines via PEER_HCA_RANK<n>).
+  if [[ -n "${PEER_HCA_RANK0:-}" ]]; then
+    _a+=(-e "NCCL_IB_PEER_HCA=${PEER_HCA_RANK0}")
+  fi
+  # Ring adaptation: generic passthrough, appended last so it overrides any
+  # default set above (docker keeps the last -e for a duplicated key).
+  if [[ -n "${EXTRA_DOCKER_ENV:-}" ]]; then
+    local _ed
+    for _ed in ${EXTRA_DOCKER_ENV}; do
+      [[ -z "$_ed" ]] && continue
+      _a+=(-e "$_ed")
+    done
+  fi
 }
 
 # Every rank builds its own planner, so the SPS/STS calibration has to exist on
@@ -325,7 +362,9 @@ push_spec_tables() {
   local name local_path host
   for name in dspark_sps.json dspark_sts.json; do
     local_path="$STATE_DIR/$name"
-    for host in "${WORKER_IPS[@]}"; do
+    # WORKER_IPS is the fabric/data-plane address list; all control-plane SSH
+    # operations must use the management addresses in the same rank order.
+    for host in "${WORKER_HOSTS[@]}"; do
       if [[ -f "$local_path" ]]; then
         local payload
         payload=$(base64 -w0 <"$local_path")
@@ -346,6 +385,23 @@ push_spec_tables() {
 
 worker_env_lines() {
   local wip="$1" wgid="$2" rank="$3"
+  # Ring adaptation: generic env passthrough + per-rank PEER_HCA
+  # (PEER_HCA_RANK<n> from .env). Emitted as single-quoted lines so values
+  # with commas/semicolons survive the remote bash -lc round trip.
+  local _ed _extra=""
+  # LD_PRELOAD must be a literal single-quoted line here: embedding it in a
+  # remote variable (SHIM_VOL) breaks word splitting (quotes are not
+  # re-parsed after variable expansion).
+  _extra+="        -e 'LD_PRELOAD=${LD_PRELOAD_SHIM:-/opt/libncclpin.so /opt/nccl-ringonly/libnccl.so.2}' \\"$'\n'
+  for _ed in ${EXTRA_DOCKER_ENV:-}; do
+    [[ -z "$_ed" ]] && continue
+    _extra+="        -e '$_ed' \\"$'\n'
+  done
+  local _ph_var="PEER_HCA_RANK${rank}"
+  local _ph="${!_ph_var:-}"
+  if [[ -n "$_ph" ]]; then
+    _extra+="        -e 'NCCL_IB_PEER_HCA=$_ph' \\"$'\n'
+  fi
   cat <<EOF
         -e NODE_RANK=$rank -e NNODES=$NNODES \\
         -e TP_SIZE=$TP_SIZE -e EP_SIZE=$EP_SIZE \\
@@ -361,7 +417,7 @@ worker_env_lines() {
         -e DSPARK_STS_TABLE=$DSPARK_STS_TABLE \\
         -e DSV41_SOURCE=/models/DeepSeek-V4.1-Flash \\
         -e MODEL_PATH=/models/DeepSeek-V4.1-Flash -e STATE_PATH=/state \\
-        -e SERVER_PORT=$PORT -e HOST=0.0.0.0 \\
+        -e SERVER_PORT=$PORT -e HOST=${HOST:-0.0.0.0} \\
         -e CONTEXT_LENGTH=$CONTEXT_LENGTH \\
         -e MEM_FRACTION_STATIC=$MEM_FRACTION_STATIC \\
         -e MAX_RUNNING_REQUESTS=$MAX_RUNNING_REQUESTS \\
@@ -390,6 +446,7 @@ worker_env_lines() {
         -e SGLANG_ENABLE_DSV41_ENGRAM_HOST_TABLE=0 \\
         -e DSV41_TP_PAD=${DSV41_TP_PAD:-1} \\
         -e HOST_IP=$wip -e VLLM_HOST_IP=$wip \\
+${_extra}
 EOF
 }
 
@@ -434,14 +491,26 @@ cmd_doctor() {
     warn "RAM Engram mode pins ~189 GiB into unified memory — will not fit on Spark. Use nvme."
     ok=1
   fi
-  if nfs_rpc_ready 127.0.0.1; then
-    local _mounts="" _i
+  local _i _h
+  if [[ "$WEIGHTS_MODE" == "local" ]]; then
+    info "weights: node-local read-only paths on all ranks ($WORKER_MODEL_DIR); NFS skipped"
+    for _i in "${!WORKER_HOSTS[@]}"; do
+      _h="${WORKER_HOSTS[$_i]}"
+      if remote_on "$_h" "test -f '$WORKER_MODEL_DIR/config.json'"; then
+        info "weights $_h: config.json present"
+      else
+        warn "weights $_h: missing $WORKER_MODEL_DIR"
+        ok=1
+      fi
+    done
+  elif nfs_rpc_ready 127.0.0.1; then
+    local _mounts=""
     for _i in "${!WORKER_HOSTS[@]}"; do _mounts+=" ${WORKER_HOSTS[$_i]}→$(nfs_server_ip_for "${WORKER_HOSTS[$_i]}" "$_i" 2>/dev/null || echo '?')"; done
     info "NFSv4 listening on this host (workers should mount CX7:${_mounts})"
+    info "weights: workers use docker NFS volume $NFS_VOLUME (head $MODEL_DIR)"
   else
     warn "NFSv4 not listening yet — ./start.sh share will start or reuse the exporter"
   fi
-  info "weights: spark2/spark3 use docker NFS volume $NFS_VOLUME (head $MODEL_DIR); no rsync/SSHFS"
   if [[ "$TP_SIZE" -eq 3 ]]; then
     info "TP3 note: heads=64, o_groups=8, vocab=129280 are not divisible by 3; adapter/tp3_pad.py pads them"
     info "  (heads 64→96, groups 8→12, draft experts 128→129). experts=384 divides. Rank 2 holds padded shards only."
@@ -536,6 +605,11 @@ cmd_build() {
   info "overlay image on all 3 nodes"
 }
 
+overlay_image_present() {
+  docker image inspect "$IMAGE" \
+    --format '{{index .Config.Labels "com.spark.dsv41.overlay"}}' 2>/dev/null | grep -qx '1'
+}
+
 cmd_share() {
   info "=== share spark1 checkpoint over NFSv4 on ConnectX ==="
   [[ -f "$MODEL_DIR/config.json" ]] || die "no checkpoint — ./start.sh download"
@@ -574,22 +648,33 @@ cmd_serve() {
     die "GPU is busy (glm53-exl3 or similar). Stop the other stack, or FORCE=1 ./start.sh serve"
   fi
 
-  if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
+  if ! overlay_image_present; then
+    info "overlay image $IMAGE missing or is only the base SGLang image — building from local source"
     cmd_build
   fi
 
   local h need_share=0
+  if [[ "$WEIGHTS_MODE" == "local" ]]; then
+    info "WEIGHTS_MODE=local — workers read node-local weights, NFS skipped"
+    for h in "${WORKER_HOSTS[@]}"; do
+      remote_ok_on "$h" "test -f $WORKER_MODEL_DIR/config.json" \
+        || die "missing local weights on $h: $WORKER_MODEL_DIR"
+    done
+  else
+    for h in "${WORKER_HOSTS[@]}"; do
+      if ! nfs_worker_has_model "$h"; then
+        need_share=1
+      fi
+    done
+  fi
   for h in "${WORKER_HOSTS[@]}"; do
-    if ! nfs_worker_has_model "$h"; then
-      need_share=1
-    fi
-    if ! remote_ok_on "$h" "docker image inspect $(printf '%q' "$IMAGE") >/dev/null 2>&1"; then
+    if ! remote_ok_on "$h" "docker image inspect $(printf '%q' "$IMAGE") --format '{{index .Config.Labels \"com.spark.dsv41.overlay\"}}' 2>/dev/null | grep -qx 1"; then
       info "image missing on $h — building"
       cmd_build
       break
     fi
   done
-  if [[ "$need_share" -eq 1 || "$NFS_SHARE" == "1" ]]; then
+  if [[ "$WEIGHTS_MODE" != "local" && ( "$need_share" -eq 1 || "$NFS_SHARE" == "1" ) ]]; then
     cmd_share
   fi
 
@@ -604,13 +689,21 @@ cmd_serve() {
 
   local GID_HEAD gi g
   local -a WORKER_GIDS=()
-  GID_HEAD=$(gid_index_local "$HEAD_IP" 2>/dev/null || true)
-  GID_HEAD="${GID_HEAD:-${NCCL_IB_GID_INDEX:-3}}"
-  for gi in "${!WORKER_IPS[@]}"; do
-    g=$(gid_index_remote "${WORKER_HOSTS[$gi]}" "${WORKER_IPS[$gi]}" | tr -d '\r' || true)
-    WORKER_GIDS+=("${g:-${NCCL_IB_GID_INDEX:-3}}")
-  done
-  info "RoCEv2 GID indexes: head=$GID_HEAD workers=${WORKER_GIDS[*]}"
+  # Ring adaptation: kernel-1031 GID-table reorder makes auto-detection
+  # untrustworthy here; the fleet runs NCCL_IB_GID_INDEX=-1 as a hard rule.
+  if [[ -n "${NCCL_IB_GID_INDEX_FORCE:-}" ]]; then
+    GID_HEAD="$NCCL_IB_GID_INDEX_FORCE"
+    for gi in "${!WORKER_IPS[@]}"; do WORKER_GIDS+=("$NCCL_IB_GID_INDEX_FORCE"); done
+    info "RoCEv2 GID indexes: FORCED head=$GID_HEAD workers=${WORKER_GIDS[*]} (NCCL_IB_GID_INDEX_FORCE)"
+  else
+    GID_HEAD=$(gid_index_local "$HEAD_IP" 2>/dev/null || true)
+    GID_HEAD="${GID_HEAD:-${NCCL_IB_GID_INDEX:-3}}"
+    for gi in "${!WORKER_IPS[@]}"; do
+      g=$(gid_index_remote "${WORKER_HOSTS[$gi]}" "${WORKER_IPS[$gi]}" | tr -d '\r' || true)
+      WORKER_GIDS+=("${g:-${NCCL_IB_GID_INDEX:-3}}")
+    done
+    info "RoCEv2 GID indexes: head=$GID_HEAD workers=${WORKER_GIDS[*]}"
+  fi
 
   docker rm -f "$HEAD_CTN" >/dev/null 2>&1 || true
   for h in "${WORKER_HOSTS[@]}"; do
@@ -626,24 +719,33 @@ cmd_serve() {
     rank=$((idx + 1))
     remote_on "$h" "
       set -e
-      docker volume inspect $NFS_VOLUME >/dev/null || { echo 'MISSING docker volume $NFS_VOLUME on $h — run ./start.sh share'; exit 1; }
+      if [ '$WEIGHTS_MODE' != 'local' ]; then
+        docker volume inspect $NFS_VOLUME >/dev/null || { echo 'MISSING docker volume $NFS_VOLUME on $h — run ./start.sh share'; exit 1; }
+      fi
       test -d /dev/infiniband || { echo 'MISSING /dev/infiniband on $h'; exit 1; }
       mkdir -p $WORKER_DIR/state $WORKER_DIR/logs
       NCCL_VOL=''
       NCCL_ENV=''
-      if [ -f \$HOME/nccl-2.30.7/libnccl.so.2.30.7 ]; then
-        NCCL_VOL=\"-v \$HOME/nccl-2.30.7:$NCCL_CONTAINER_DIR:ro\"
+      if [ -f $NCCL_HOST_DIR/libnccl.so.2.30.7 ] || [ -f $NCCL_HOST_DIR/libnccl.so.2 ]; then
+        NCCL_VOL=\"-v $NCCL_HOST_DIR:$NCCL_CONTAINER_DIR:ro\"
         NCCL_ENV='-e LD_LIBRARY_PATH=$NCCL_CONTAINER_DIR'
       fi
+      SHIM_VOL=''
+      if [ -f /opt/aicad-prod/lib/libncclpin.so ] && [ -d /opt/nccl-ringonly ]; then
+        mkdir -p \$HOME/nccl-debug
+        SHIM_VOL=\"-v /opt/aicad-prod/lib/libncclpin.so:/opt/libncclpin.so:ro -v /opt/nccl-ringonly:/opt/nccl-ringonly:ro -v \$HOME/nccl-debug:/nccl-debug:rw\"
+      fi
+      MODEL_SRC='$NFS_VOLUME'
+      if [ '$WEIGHTS_MODE' = 'local' ]; then MODEL_SRC='$WORKER_MODEL_DIR'; fi
       docker run -d --name $WORKER_CTN \
         --network host --ipc host --privileged --cap-add IPC_LOCK --gpus all \
         --shm-size ${SHM_SIZE:-32g} \
         --ulimit memlock=-1:-1 --ulimit stack=67108864 \
         --device /dev/infiniband:/dev/infiniband \
-        -v $NFS_VOLUME:/models/DeepSeek-V4.1-Flash:ro \
+        -v \$MODEL_SRC:/models/DeepSeek-V4.1-Flash:ro \
         -v $WORKER_DIR/state:/state \
         -v \$HOME/.cache:/root/.cache \
-        \$NCCL_VOL \$NCCL_ENV \\
+        \$NCCL_VOL \$NCCL_ENV \$SHIM_VOL \\
 $(worker_env_lines "$wip" "$wgid" "$rank")
         -e API_KEY=$(printf '%q' "$API_KEY") \\
         -e EXTRA_SGLANG_ARGS=$(printf '%q' "${EXTRA_SGLANG_ARGS:-}") \\
@@ -726,6 +828,10 @@ $(worker_env_lines "$wip" "$wgid" "$rank")
       ( setsid docker logs -f --since 1s "$HEAD_CTN" >>"$SERVE_LOG" 2>&1 </dev/null & ) 2>/dev/null
       echo
       info "API is up on :$PORT (smoke + warm-up passed) — engine keeps running, this script is done."
+      # Ring adaptation: verify NCCL came up ring-only (RING-ONLY patch present,
+      # Tree disabled in the algorithm matrix, expected RoCE devices in use).
+      # Non-fatal: a report is printed, the engine keeps running either way.
+      "$ROOT/scripts/nccl_selfcheck.sh" || warn "NCCL 自检未通过 — 见上（./start.sh ncclcheck 可重跑）"
       cmd_status
       echo
       echo "  curl http://$HEAD_IP:$PORT/v1/chat/completions \\"
@@ -814,6 +920,13 @@ cmd_smoke() {
   echo
 }
 
+# Ring adaptation: one command that answers "may this engine be trusted?",
+# not merely "is the container Up" (alexellis's gate discipline).
+cmd_gate() {
+  SERVER_PORT="$PORT" API_KEY_FILE="$STATE_DIR/api-key" \
+    "$ROOT/scripts/gate.sh" "$@"
+}
+
 usage() {
   sed -n '2,24p' "$0" | tr -d '#'
 }
@@ -835,11 +948,21 @@ cmd_pack() {
     --entrypoint python3 "$IMAGE" \
     /opt/dsv41/scripts/pack_engram.py --rank 0 --tp "$TP_SIZE" --out /engram \
     || die "pack failed on head"
-  local idx=1 host
-  for host in "${WORKER_IPS[@]}"; do
+  local idx=1 host wsrc
+  for host in "${WORKER_HOSTS[@]}"; do
     info "packing rank $idx on $host..."
-    remote_on "$host" "mkdir -p $WORKER_ENGRAM_DIR && docker run --rm --network host \
-      -v $NFS_VOLUME:/models/DeepSeek-V4.1-Flash:ro \
+    # Ring adaptation: in local-weights mode the worker's checkpoint lives at
+    # WORKER_MODEL_DIR; the NFS volume only exists in nfs mode. Without this the
+    # mount silently resolves to a non-existent path and pack writes nothing,
+    # leaving the worker on the 2-read unpacked path.
+    if [[ "$WEIGHTS_MODE" == "local" ]]; then
+      wsrc="$WORKER_MODEL_DIR"
+    else
+      wsrc="$NFS_VOLUME"
+    fi
+    remote_on "$host" "test -f $wsrc/config.json || { echo 'MISSING checkpoint on $host: $wsrc'; exit 1; }
+      mkdir -p $WORKER_ENGRAM_DIR && docker run --rm --network host \
+      -v $wsrc:/models/DeepSeek-V4.1-Flash:ro \
       -v $WORKER_ENGRAM_DIR:/engram \
       -e DSV41_SOURCE=/models/DeepSeek-V4.1-Flash \
       --entrypoint python3 $IMAGE \
@@ -863,6 +986,8 @@ case "$CMD" in
   status) cmd_status ;;
   logs) cmd_logs "$@" ;;
   smoke) cmd_smoke ;;
+  ncclcheck) "$ROOT/scripts/nccl_selfcheck.sh" "$@" ;;
+  gate) cmd_gate "$@" ;;
   -h|--help|help) usage ;;
   *) die "unknown command: $CMD (try ./start.sh help)" ;;
 esac

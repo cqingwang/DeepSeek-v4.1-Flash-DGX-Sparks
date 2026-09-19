@@ -68,9 +68,9 @@ else
   done
 fi
 WORKER_USER="${WORKER_USER:-zurih}"
-SSH_IDENTITY="$(_abs "${SSH_IDENTITY:-$HOME/.ssh/id_ed25519_shared}")"
+SSH_IDENTITY="$(_abs "${SSH_IDENTITY:-$HOME/.ssh/id_ed25519}")"
 NFS_VOLUME="${NFS_VOLUME:-dsv41-weights}"
-IMAGE="${IMAGE:-dsv41-3x-spark:local}"
+IMAGE="${IMAGE:-dsv41-4x-spark:local}"
 REMOTE_PY="${REMOTE_PY:-$ROOT/scripts/remote.py}"
 LOG_DIR="${LOG_DIR:-$ROOT/logs}"
 RM_TIMEOUT="${RM_TIMEOUT:-30}"
