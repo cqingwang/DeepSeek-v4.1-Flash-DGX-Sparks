@@ -150,12 +150,21 @@ def install_gate(module):
         return
     module._dsv41_verify_cap = True
     original = module.moe_fused_gate
+    fused = None
+    if os.environ.get("DSV41_ROUTER_LIVE", "0").strip() not in ("0", "", "off", "false"):
+        # DSV41_ROUTER_LIVE: the router loads the anchor's scores for dead rows (no remap launch)
+        from router_live import build
+        fused = build(module)
+        print("[verify_cap] dead-row remap folded into the router kernel", flush=True)
 
     def wrapped(scores, bias, topk, *a, **kw):
-        weights, indices = original(scores, bias, topk, *a, **kw)
         m = scores.shape[0] if scores.dim() == 2 else 0
-        if (_state["in_verify"] and scores.shape[-1] == E_TARGET and topk == K_TARGET
-                and m and m % STRIDE == 0 and m // STRIDE <= MAX_BS):
+        verify = (_state["in_verify"] and scores.shape[-1] == E_TARGET and topk == K_TARGET
+                  and m and m % STRIDE == 0 and m // STRIDE <= MAX_BS)
+        if verify and fused is not None:
+            return fused(scores, bias, topk, *a, live=live_buf(scores.device), live_stride=STRIDE, **kw)
+        weights, indices = original(scores, bias, topk, *a, **kw)
+        if verify:
             return remap_dead_rows(weights, indices)
         return weights, indices
 

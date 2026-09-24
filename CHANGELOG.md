@@ -16,6 +16,14 @@ raw results live under `docs/results/`.
 - **`adapter/roce_gather.py`, `DSV41_ROCE_GATHER=2097152`, on.** TP all-gathers up to 2 MiB per rank
   over the RoCEnante one-shot kernel (the overlay built it with gathers disabled): draft logits
   gathers 600 -> 400 us per step.
+- **`adapter/router_live.py`, `DSV41_ROUTER_LIVE=1`, on.** The dead-row remap of the verify cap folded
+  into the router kernel (dead rows load the anchor row's scores): 40 launches per step fewer, bit-identical.
+  Step probe prose 36.76 -> 36.65 ms, code 43.55 -> 43.46 ms; 45 varied prompts +0.3 %.
+- Measured and kept off: a dynamic shared-expert split between the EP groups (each rank holds half the
+  shared expert, the group with fewer routed experts takes more columns per step, range-limited Triton
+  kernels): step -1.7 % prose / -2.4 % code and +2-4 % on structured and sampled traffic, but not
+  bit-identical and -15 % on sparkDash's prose prompt (the greedy text diverges into a continuation the
+  draft predicts worse). Not in the repository.
 - `adapter/autotune_keep.py`: a cache whose launch fingerprint does not match is now deleted, not just
   reported as non-matching (with every rank reporting "" the stock gate agreed and FlashInfer loaded
   each rank's stale file anyway; found independently in MiaAI-Lab's port). Decode-side switches that
