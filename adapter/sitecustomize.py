@@ -81,6 +81,11 @@ class EngramLoader(importlib.abc.Loader):
             if os.environ.get('DSV41_WO_A_W8', '0').strip() not in ('0', 'off', 'false', ''):
                 from wo_a_w8 import install_dspark as install_wo_a_w8_dspark
                 install_wo_a_w8_dspark(module)
+            # Gated on DSV41_DRAFT_MAIN_PROJ_SPLIT: the draft's replicated main_proj column-split over TP
+            # (fp8 shard + all-gather; target untouched).
+            if os.environ.get('DSV41_DRAFT_MAIN_PROJ_SPLIT', '0').strip() not in ('0', 'off', 'false', ''):
+                from draft_main_proj import install as install_draft_main_proj
+                install_draft_main_proj(module)
             # Gated on DSV41_DRAFT_HEAD_FP8: the draft's LM head from an fp8 copy (target untouched).
             if os.environ.get('DSV41_DRAFT_HEAD_FP8', '0').strip() not in ('0', 'off', 'false', ''):
                 from draft_head_fp8 import install as install_draft_head_fp8
@@ -129,6 +134,18 @@ class EngramLoader(importlib.abc.Loader):
             if os.environ.get('DSV41_AUTOTUNE_KEEP', '0').strip() not in ('0', 'off', 'false', ''):
                 from autotune_keep import install as install_autotune_keep
                 install_autotune_keep(module)
+        elif module.__name__ == 'sglang.srt.layers.linear':
+            # Gated on DSV41_REPLICATED_SPLIT=<prefix suffixes>: chosen ReplicatedLinear layers
+            # column-split over TP, enabled per layer only when bit-identical on every rank.
+            if os.environ.get('DSV41_REPLICATED_SPLIT', '').strip():
+                from replicated_split import install as install_replicated_split
+                install_replicated_split(module)
+        elif module.__name__ == 'sglang.srt.distributed.device_communicators.pynccl':
+            # Gated on DSV41_ROCE_GATHER=<max bytes per rank>: small TP all-gathers (the draft's
+            # vocab-parallel logits) take the RoCEnante one-shot kernel instead of NCCL.
+            if os.environ.get('DSV41_ROCE_GATHER', '0').strip() not in ('', '0'):
+                from roce_gather import install as install_roce_gather
+                install_roce_gather(module)
         elif module.__name__ == 'sglang.srt.managers.schedule_batch':
             from loop_abort import install as install_loop_abort
             install_loop_abort(module)
@@ -166,6 +183,8 @@ class EngramFinder(importlib.abc.MetaPathFinder):
                             'sglang.srt.speculative.dspark_components.dspark_draft',
                             'sglang.srt.speculative.dspark_components.dspark_planner',
                             'sglang.srt.model_executor.runner.flashinfer_autotune',
+                            'sglang.srt.distributed.device_communicators.pynccl',
+                            'sglang.srt.layers.linear',
                             'sglang.srt.layers.attention.dsv4.metadata'):
             return None
         spec = importlib.machinery.PathFinder.find_spec(fullname, path)

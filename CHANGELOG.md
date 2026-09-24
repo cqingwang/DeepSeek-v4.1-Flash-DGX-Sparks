@@ -3,6 +3,27 @@
 Newest first. Each entry says what changed in the production stack and what was measured; the
 raw results live under `docs/results/`.
 
+## 2026-09-24
+
+- **`adapter/replicated_split.py`, `DSV41_REPLICATED_SPLIT=wqkv_a,engram.wkv`, on.** `ReplicatedLinear`
+  layers made every rank stream the whole weight for the same output; the Engram `wkv` (183 MB) alone
+  cost 2 x 756 us per c1 step. Each rank now runs the same quantized linear on its 128-row weight
+  tiles and the columns are all-gathered; per layer, and only if bit-identical to the stock layer on
+  every rank (checked at boot). Step probe prose 38.2 -> 36.8 ms; sparkDash prose c1 71.8 -> 74.7;
+  greedy outputs identical.
+- **`adapter/draft_main_proj.py`, `DSV41_DRAFT_MAIN_PROJ_SPLIT=1`, on.** The draft's replicated
+  `main_proj` as a 1/4 fp8 column shard (exact weight bytes) + all-gather: -0.2..-0.4 ms per step.
+- **`adapter/roce_gather.py`, `DSV41_ROCE_GATHER=2097152`, on.** TP all-gathers up to 2 MiB per rank
+  over the RoCEnante one-shot kernel (the overlay built it with gathers disabled): draft logits
+  gathers 600 -> 400 us per step.
+- Production rows re-measured at the uncapped GPU clock: prose c1 73.9 (72.2 / 73.9 / 74.4), c16 319,
+  code c1 119, structured 131.5.
+- Measured and not adopted: splitting the indexer `wq_b` / compressor `wkv_gate` (no gain); a
+  logistic verify-length policy on draft-distribution features (+0.9 % modelled, flat live); Markov W2
+  on a Triton GEMV (slower than cuBLAS at 19 us); static expert re-placement between the EP groups
+  was not built: routing counts show EP group 1 streaming 3.8 % more experts, but the per-layer
+  imbalance is mostly step-to-step noise (estimate ~0.2 ms/step recoverable, untested).
+
 ## 2026-09-23 (evening)
 
 - **`adapter/verify_cap.py`, `DSV41_VERIFY_CAP=conf:0.1`, on.** Adaptive verify length without changing
