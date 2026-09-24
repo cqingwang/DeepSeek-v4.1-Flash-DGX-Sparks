@@ -17,20 +17,18 @@ Other work this profile builds on:
 
 ## Current results
 
-Production stack (the last `EXTRA_CONTAINER_ENV` line of [`.env.tp4.example`](.env.tp4.example), `Dockerfile.canary-roce` image), sparkDash 1.8.8 decode and prefill benches, 256 new tokens, temperature 0, thinking off, idle fleet, measured 2026-09-24. Boot-to-boot spread is about ±2 % on c1. The upstream row is MiaAI-Lab `main` at `25379c2` with its own `.env.tp4.example` (8 slots, so c16 queues), same fleet, same day, on sparkDash 1.8.6 (identical prose, structured and JSON prompts; 1.8.7 replaced the code prompts, so upstream has no comparable code number here).
+Production stack (the last `EXTRA_CONTAINER_ENV` line of [`.env.tp4.example`](.env.tp4.example), `Dockerfile.canary-roce` image), sparkDash 1.8.8 decode and prefill benches, 256 new tokens, temperature 0, thinking off, idle fleet, measured 2026-09-24. Boot-to-boot spread is about ±2 % on c1.
 
 **Decode, aggregate tok/s (per stream in brackets)**
 
 | | c1 | c2 | c4 | c8 | c16 |
 |---|---:|---:|---:|---:|---:|
-| prose, this profile | **74.4** | 102.9 (54.0) | 141.6 (36.8) | 191.7 (25.4) | 319.4 (20.9) |
-| prose, upstream `main` | 40.4 | 63.3 (33.7) | 95.0 (24.6) | 118.5 (15.4) | 124.2 (16.3) |
-| code, this profile | 108.1 | – | – | 279.8 (37.2) | 392.1 (26.7) |
+| prose | **74.4** | 102.9 (54.0) | 141.6 (36.8) | 191.7 (25.4) | 319.4 (20.9) |
+| code | 108.1 | – | – | 279.8 (37.2) | 392.1 (26.7) |
 
 | c1 | prose | code | structured | json |
 |---|---:|---:|---:|---:|
-| this profile | **74.4** | 108.1 | 133.4 | 104.3 |
-| upstream `main` | 40.4 | – | 65.0 | 57.9 |
+| tok/s | **74.4** | 108.1 | 133.4 | 104.3 |
 
 Prose c1 is the median of three runs (73.9 / 74.7 / 74.4) after two discarded warm-ups; raw output in [`docs/results/prodbench-20260924-current.txt`](docs/results/prodbench-20260924-current.txt). Sampled chat at the model card's T=1 / top_p=0.95 with thinking runs ~62 tok/s at c1 (sparkDash benches are greedy, where the draft temperature and block verification do not act).
 
