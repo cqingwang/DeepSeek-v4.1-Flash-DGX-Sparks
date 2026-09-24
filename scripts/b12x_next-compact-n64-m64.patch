@@ -1,0 +1,39 @@
+diff -ru b12x_next/moe/fused_moe/_tuning.py b12x_next/moe/fused_moe/_tuning.py
+--- b12x_next/moe/fused_moe/_tuning.py	2026-09-24 18:47:49
++++ b12x_next/moe/fused_moe/_tuning.py	2026-09-24 18:47:49
+@@ -250,6 +250,19 @@
+     )
+ 
+ 
++# ds41 patch (b12x_next only): compact N64 (N % 128 == 64) W4A8 admits the M64 tile for prefill-sized
++# capacities.  Decode capacities stay on M16; the heuristic still selects M16 everywhere, so M64 runs
++# only through an explicit override.  M32 is NOT admitted: its fused n64 path returns wrong results
++# (rel-L2 1.37 vs the M16 path, 2026-09-24 Spark_02).
++_COMPACT_N64_M64_MIN_TOKENS = 128
++
++
++def _compact_n64_tiles(query):
++    if query.num_tokens >= _COMPACT_N64_M64_MIN_TOKENS:
++        return (16, 64)
++    return (16,)
++
++
+ def _compact_w4a8_query(query):
+     return (
+         query.quant_mode == "w4a8_mx"
+@@ -346,9 +359,13 @@
+     if (
+         query.quant_mode == "w4a8_mx" and query.source_format == "fp4_e8m0_k32"
+         and query.intermediate_size % 128 == 64 and config.backend == "dynamic"
+-        and (config.dynamic_tile_m != 16 or config.dynamic_route_mode != "grouped")
++        and (config.dynamic_tile_m not in _compact_n64_tiles(query)
++             or config.dynamic_route_mode != "grouped")
+     ):
+-        raise ValueError("compact N64 W4A8 dynamic execution requires grouped M16 routing")
++        raise ValueError(
++            "compact N64 W4A8 dynamic execution requires grouped M16 routing "
++            f"(M64 from {_COMPACT_N64_M64_MIN_TOKENS} tokens)"
++        )
+     if config.backend not in {"micro", "dynamic", "w4a16"}:
+         raise ValueError(f"unsupported MoE backend {config.backend!r}")
+     if query.quant_mode == "w4a16":

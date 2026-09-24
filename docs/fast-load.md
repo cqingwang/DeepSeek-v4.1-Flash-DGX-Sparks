@@ -40,11 +40,12 @@ Profiled with `py-spy dump` every 10 s and `/proc/diskstats` every 5 s during pr
 
 1. `safetensors.safe_open` is wrapped (as used by `weight_utils`). For a shard, the names this
    rank will copy are every tensor except the routed experts another EP rank owns and the Engram
-   tables; owned experts are read whole even though MoE-TP copies half of w1/w3 (FusedMoE's
-   narrowing has too many branches to mirror safely; the extra read is ~50 GB at NVMe speed).
+   tables. Under EP2, owned experts are read whole even though MoE-TP copies half of w1/w3 (the
+   extra read is ~50 GB at NVMe speed). At EP1 they are TP-sliced (next section).
    Those tensors are read by a 16-thread pool into pinned host buffers (torch's caching host
    allocator, so the copy into the parameter is a plain DMA; anonymous mmaps when CUDA is not
-   available); `get_tensor` returns them, everything else stays the stock mmap tensor. The EP rank comes from the runtime
+   available). The buffers are 256 MiB slabs shared by many tensors (next-to-last section);
+   `get_tensor` returns them, everything else stays the stock mmap tensor. The EP rank comes from the runtime
    context, then `parallel_state`, then `DSV41_FAST_LOAD_EP_SIZE`; `n_routed_experts` from
    `config.json` (nested under `text_config` for V4.1) or `DSV41_FAST_LOAD_N_EXPERTS`. If the
    layout is unknown only the non-expert tensors are read eagerly.
@@ -59,6 +60,106 @@ Profiled with `py-spy dump` every 10 s and `/proc/diskstats` every 5 s during pr
    `malloc_trim`, `torch.cuda.empty_cache`, the pinned blocks handed back to the driver
    (`torch._C._host_emptyCache`) and every shard's page cache dropped (`POSIX_FADV_DONTNEED`).
    The log line reports RSS, `MemAvailable` and the CUDA allocator before and after.
+
+## Expert tensor parallelism (EP_SIZE=1)
+
+At TP4 with `EP_SIZE=1` (routed MoE on `adapter/moe_b12x_next.py`) every rank holds a quarter of
+every one of the 384 experts. Reading owned experts whole would mean all of them: 279 GiB per rank
+and a pinned window of 2 x 7.4 GB, the read pattern behind the host-memory livelock. So when
+`moe_ep_size == 1` and `moe_tp_size > 1` (read from `get_parallel()` like FusedMoE does, then
+`parallel_state`, then `DSV41_FAST_LOAD_EP_SIZE` with TP), routed expert tensors are TP-sliced
+(`DSV41_FAST_LOAD_TP_SLICE`, default `auto`):
+
+- `w1`/`w3` weight and scale (`[2304, 2560]` I8, `[2304, 160]` E8M0): FusedMoE narrows dim 0 by
+  `shape // moe_tp_size` at `moe_tp_rank`, a contiguous 576-row block, read with one `pread`.
+- `w2` weight and scale (`[5120, 1152]` I8, `[5120, 72]` E8M0): FusedMoE narrows dim 1, 288 of
+  every 1152 bytes per row. Every 4 KB page holds needed bytes, so the device reads the whole tensor
+  either way. Whole rows go into a per-thread 8 MB bounce buffer and the rank's columns are copied
+  out. That costs ~0.35 ms per tensor, against ~2.6 ms for 5120 per-row `pread`s, which are held back
+  by the GIL.
+- `get_tensor` returns a full-shape stand-in (a `torch.Tensor` wrapper subclass) holding only the
+  slice. `shape`/`size`/`dim`/`device` report the checkpoint tensor, and `narrow` along the sliced
+  dim within the slice returns the resident (pinned, contiguous) bytes. Any other operation, or a
+  narrow outside the slice, raises with the name of the tensor, so if the engine's layout differs
+  the boot fails instead of loading unread bytes. The pacing budget counts the slice, not the full
+  shape.
+- The draft's routed experts (3 stages x 128, same FusedMoE groups) are sliced the same way.
+- With `DSV41_FAST_LOAD_TP_SLICE=0`, or with the MoE-TP layout unknown, EP1 leaves the routed
+  experts to the stock mmap tensors instead of reading them whole. `=1` also slices the owned experts
+  under EP2. EP2 at the default `auto` gets the same read list as before.
+
+Per rank, from the checkpoint headers:
+
+| | target read | target kept | largest shard kept | 2-shard window | draft read / kept |
+|---|---:|---:|---:|---:|---:|
+| EP2 (today) | 155.2 GB (144.5 GiB) | 155.2 GB | 3.80 GB | 7.6 GB | 7.9 / 7.9 GB |
+| EP1, experts whole (not used) | 299.6 GB (279.0 GiB) | 299.6 GB | 7.41 GB | 14.8 GB | 7.9 / 7.9 GB |
+| **EP1, TP-sliced** | **155.2 GB (144.5 GiB)** | **83.0 GB** | **1.99 GB** | **4.0 GB** | **4.3 / 2.5 GB** |
+| EP2 + `TP_SLICE=1` | 107.1 GB | 83.0 GB | 1.99 GB | 4.0 GB | 5.5 / 4.3 GB |
+
+EP1 reads exactly EP2's bytes (half of every expert, against all of half the experts) and keeps half
+of them in a pinned window about half of EP2's. `tests/test_fast_load_tp_slice.py` (image build, CPU)
+builds shards with the real expert shapes and dtypes and runs every rank at EP1 and EP2, target and
+draft, through FusedMoE's own `_load_w13`/`_load_w2` (a mirror of their narrowing where sglang does
+not import). The bytes that land in the expert parameter match the stock path. The test also checks
+that EP2 gets the legacy read list, that 19 kinds of out-of-slice access raise, that the budget is
+paced on slices, and that the bounce buffers are released. The checkpoint test checks the EP1 totals
+and compares every slice of one real shard with the stock tensor's narrow.
+
+## Pinned slabs (2026-09-24, not yet booted)
+
+The KV pool investigation (`sparks/diagnostics/dsv41-kv-pool-ep1/RESULTS.md`) found 1.1-1.9 GiB
+more memory missing from the head's `MemAvailable` at pool sizing with the fast loader than with
+the stock one (3.3-3.5 GiB non-torch at EP2, 4.0 at EP1, against 1.2-2.1 GiB stock). No counter
+shows it: not shmem, not the page cache, not the CUDA cache. The suspect is driver-side
+state left by thousands of small `cudaHostAlloc` blocks. From the checkpoint headers
+(`count_allocs.py` in that directory, the caching host allocator simulated over the loader's 3-shard window):
+
+| per rank | eager tensors (pinned requests before) | new `cudaHostAlloc` before | slabs | new `cudaHostAlloc` with slabs | peak pinned before / after |
+|---|---:|---:|---:|---:|---:|
+| EP1 target | 93,680 | 7,224 | 330 | 27 | 7.9 / 5.8 GiB |
+| EP1 draft | 2,401 | 2,401 | 11 | 11 | 3.3 / 2.5 GiB |
+| EP2 target | 47,600 | 3,738 | 610 | 48 | 15.0 / 10.9 GiB |
+| EP2 draft | 2,401 | 2,401 | 32 | 32 | 10.5 / 7.8 GiB |
+
+- `_EagerShard` packs the shard's eager tensors, in the order the loader yields them (sorted
+  names), into slabs of `DSV41_FAST_LOAD_SLAB_MB` (default 256, rounded down to a power of two), each
+  tensor 4 KiB aligned. A tensor bigger than a slab gets its own buffer. Every tensor handed to
+  the model, and every TP slice, is a view into its slab. The bytes, dtypes and shapes are unchanged.
+- Full slabs all fall in one power-of-two bin of torch's caching host allocator, so a slab freed
+  by an earlier shard is reused by the next one. The same packing also drops the power-of-two
+  rounding waste per tensor (EP1's 1.47 MB slices took 2 MB blocks), so the peak is ~28 % lower.
+- A slab is freed when the last view into it dies. `__exit__` now drops every future nobody
+  asked for, because such a future would keep its tensor, and so the whole slab, alive. The model's
+  `load_weights` copies each tensor into its parameter and keeps nothing. The only holders that
+  outlive one step are the pair buffers (compressor `wkv`/`wgate`, `wq_a`/`wkv`, and the
+  bf16 `wo_a` weight/scale dequant), and those are empty when the load ends. After each load, `_release_all` checks each slab's storage
+  weak reference. If a slab is still alive, it logs the tensor names that hold it
+  (`slab of ... still alive after the load`) instead of letting it silently take pool budget.
+- Memory is still bounded. The loader window holds whole shards as before, and the paced copies add at most
+  `DSV41_FAST_LOAD_INFLIGHT_GB` plus two slabs. The pacing budget still counts tensor bytes.
+- `DSV41_FAST_LOAD_SLAB_MB=0` restores one pinned buffer per tensor.
+- `DSV41_FAST_LOAD_MEMLOG=1` adds one `DSV41 fast load memlog: phase=...` line per load. It logs
+  MemTotal, MemAvailable, SecPageTables and the other meminfo counters, CUDA reserved, and NVML's per-process GPU memory
+  (host PIDs), plus the pinned requests, slabs and peak live of this module and
+  torch's process-wide `num_host_alloc` / `num_host_free`. It also gives `unaccounted_gib` (MemTotal minus
+  the counters minus CUDA reserved) and `nontorch_since_load_start_gib` (MemAvailable lost since the
+  target's `load_weights` began, minus the CUDA reserved growth). It also works with `DSV41_FAST_LOAD=observe`.
+
+Alternative that was not taken: `PYTORCH_CUDA_ALLOC_CONF=pinned_use_cuda_host_register:True`
+(malloc + `cudaHostRegister` instead of `cudaHostAlloc`). It changes the driver path but not the
+count: 93k per-tensor requests would still become thousands of registrations. glibc serves the
+sub-32 MB ones from its arenas, and the first eager loader showed those arenas keep freed
+chunks (~11 GB resident). The flag is also process-wide, so it moves SGLang's own pinned
+buffers too. It is worth one A/B boot on top of slabs only if slabs do not move the non-torch
+number. At 256 MiB every slab is above the mmap threshold, so registration would then be clean.
+
+Tests: `tests/test_fast_load_slab.py` (image build, CPU; the slabs are mmaps without CUDA, same
+packing and views). It covers the layout invariants, bytes equal to stock `safe_open` for every rank at EP1 and EP2
+(target and draft, slab 4 MiB / 256 MiB / off, through FusedMoE's own loaders in the image), one
+buffer per slab, lifetimes (unrequested futures, escaped plain/sliced views reported by name and
+freed), and a paced load through a copy of sglang's buffered iterator (budget kept, live slabs
+within window + budget + 2 slabs). The pinned branch itself needs a GPU and runs on the next boot.
 
 ## Measured (production image + fast load, 2026-09-18)
 
@@ -79,6 +180,8 @@ run-to-run spread of the production table (the first point after a boot reads lo
 
 ## Correctness
 
+- `tests/test_fast_load_slab.py` (image build): slab packing, byte equality at EP1/EP2, slab
+  lifetimes and the escape report, paced loading within the memory bound (section above).
 - `tests/test_fast_load_pacing.py` (runs in every image build): the paced submit never exceeds
   the budget, completes every copy, leaves the synchronous path untouched and leaks no permit on
   an exception.

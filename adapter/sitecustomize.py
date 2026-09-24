@@ -146,6 +146,22 @@ class EngramLoader(importlib.abc.Loader):
             if os.environ.get('DSV41_ROCE_GATHER', '0').strip() not in ('', '0'):
                 from roce_gather import install as install_roce_gather
                 install_roce_gather(module)
+        elif module.__name__ == 'sglang.srt.layers.quantization.mxfp4_flashinfer_cutlass_moe':
+            # Gated on DSV41_MOE_B12X_NEXT: routed experts on b12x main (package b12x_next), which
+            # also runs EP_SIZE=1 at TP4 (N=576 per rank). Gate checked BEFORE the import.
+            if os.environ.get('DSV41_MOE_B12X_NEXT', '0').strip() not in ('0', 'off', 'false', ''):
+                from moe_b12x_next import install_method as install_moe_b12x_next
+                install_moe_b12x_next(module)
+        elif module.__name__ == 'sglang.srt.layers.moe.moe_runner.flashinfer_cutlass':
+            if os.environ.get('DSV41_MOE_B12X_NEXT', '0').strip() not in ('0', 'off', 'false', ''):
+                from moe_b12x_next import install_runner as install_moe_b12x_next_runner
+                install_moe_b12x_next_runner(module)
+        elif module.__name__ == 'sglang.kernels.ops.layernorm.mhc':
+            # Gated on DSV41_HC_FUSED: prefill-size hc mix stats in one K walk, bit-identical to
+            # the stock split-K + reduce (adapter/hc_fused.py). Gate checked BEFORE the import.
+            if os.environ.get('DSV41_HC_FUSED', '0').strip() not in ('0', 'off', 'false', ''):
+                from hc_fused import install as install_hc_fused
+                install_hc_fused(module)
         elif module.__name__ == 'sglang.srt.managers.schedule_batch':
             from loop_abort import install as install_loop_abort
             install_loop_abort(module)
@@ -185,6 +201,9 @@ class EngramFinder(importlib.abc.MetaPathFinder):
                             'sglang.srt.model_executor.runner.flashinfer_autotune',
                             'sglang.srt.distributed.device_communicators.pynccl',
                             'sglang.srt.layers.linear',
+                            'sglang.srt.layers.quantization.mxfp4_flashinfer_cutlass_moe',
+                            'sglang.srt.layers.moe.moe_runner.flashinfer_cutlass',
+                            'sglang.kernels.ops.layernorm.mhc',
                             'sglang.srt.layers.attention.dsv4.metadata'):
             return None
         spec = importlib.machinery.PathFinder.find_spec(fullname, path)
