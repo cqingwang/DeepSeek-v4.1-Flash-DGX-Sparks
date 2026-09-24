@@ -16,6 +16,10 @@ raw results live under `docs/results/`.
 - **`adapter/roce_gather.py`, `DSV41_ROCE_GATHER=2097152`, on.** TP all-gathers up to 2 MiB per rank
   over the RoCEnante one-shot kernel (the overlay built it with gathers disabled): draft logits
   gathers 600 -> 400 us per step.
+- `DSV41_DRAFT_TAU` 0.8 -> 0.7: sampled thinking traffic (T=1, top_p 0.95) +1.8 % and +2.0 % on two
+  disjoint prompt sets; greedy unaffected. The verify-length threshold was re-checked on the same
+  sampled traffic (0.07 / 0.1 / 0.15: 61.3 / 61.2 / 61.3 tok/s) and on 45 varied greedy prompts (flat):
+  0.1 stays.
 - Production rows re-measured at the uncapped GPU clock: prose c1 73.9 (72.2 / 73.9 / 74.4), c16 319,
   code c1 119, structured 131.5.
 - Measured and not adopted: splitting the indexer `wq_b` / compressor `wkv_gate` (no gain); a

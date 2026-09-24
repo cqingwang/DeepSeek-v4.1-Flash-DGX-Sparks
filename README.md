@@ -29,7 +29,7 @@ One image, one env file. Everything in the tables below labelled **production** 
 | Prefill | `CHUNKED_PREFILL_SIZE=4096` + `DSV41_INDEXER_CHUNKED=1` (v3) + `SPARK_PREFILL_TP_SPLIT=1` | on | bounded indexer transient (sglang#39187) plus the SG18 row split across ranks; 985k prompt leaves 5 GiB on the head |
 | Shared expert | `DSV41_SHARED_PAD_K=1` | on | keeps the K=576 shape on the b12x kernel, −0.9 ms/step, bit-identical |
 | wo_a | `DSV41_WO_A_W8=1` | on | verify/draft `wo_a` reads the checkpoint's fp8 bytes (exact twin of the bf16 copy) in the stock tiling: 43 layers 3.43 → 2.20 ms, step 52.9 → 51.7 ms at c1 |
-| Draft temperature | `DSV41_DRAFT_TAU=0.8` | on | sampled requests only; exact by construction (same q for proposal and acceptance), +1.2 % accepted tokens per step at T=1 / top_p=0.95 |
+| Draft temperature | `DSV41_DRAFT_TAU=0.7` | on | sampled requests only; exact by construction (same q for proposal and acceptance). At T=1 / top_p=0.95 with thinking (c1, 18 x 800 tokens per arm), 0.7 beat 0.8 on two disjoint prompt sets: 62.3 vs 61.2 and 59.8 vs 58.6 tok/s (+1.8 %, +2.0 %; accepted tokens per step +3.3 %, +2.2 %); 0.6 and 0.9 were below 0.7. (0.8 was the offline pick on 2026-09-23, +1.2 % over no scaling.) |
 | Draft LM head | `DSV41_DRAFT_HEAD_FP8=1` | on | the draft reads an fp8 copy of the shared LM head (target logits untouched): 1405 → 721 us per step, acceptance unchanged |
 | Verification | `DSV41_BLOCK_VERIFY=1` | on | block verification for sampled rows: exact output distribution, +1.8 % (prose) / +2.5 % (coding with thinking) accepted tokens per step |
 | Folded results | `DSV41_FOLDED_FENCE=1` | on | correctness: folded (all-greedy) verify results cloned before the overlapped D2H copy, closes the sglang#40919 race |
