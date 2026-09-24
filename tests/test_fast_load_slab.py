@@ -14,6 +14,13 @@ same code as the pinned path). Checks, on synthetic shards with the checkpoint's
 - pacing + bounded memory: driving the shards like sglang's buffered iterator (max_workers=1) into
   a paced, slow copy pool keeps the budget on tensor bytes and the live slab bytes within the
   loader window + budget + 2 slabs.
+- delayed small copies: the first (small) tensor of every slab copies slowly while its siblings
+  finish at once. Each slow copy keeps its whole slab alive; the slab charge keeps the live slabs
+  within window + budget + 2 slabs, where the old per-tensor charge let every slab of the load
+  stay alive at once (shown with the old charge swapped in).
+- escape after a load: through the real ``load_weights`` wrappers, a view kept past the target load
+  is an error naming the tensor (a clean load returns normally, a load that raised keeps its own
+  exception); after the draft load it is a warning.
 - memlog: ``DSV41_FAST_LOAD_MEMLOG=1`` logs one line per phase with the allocation counts.
 """
 import collections
@@ -262,6 +269,141 @@ def check_paced_bound(d):
           f"+ budget + 2 slabs; all slabs freed")
 
 
+def build_small(d, n_shards=8, per_shard=64):
+    """n_shards shards of per_shard 64 KiB non-expert tensors (16 per 1 MiB slab, 4 slabs a shard)."""
+    files = []
+    for i in range(n_shards):
+        sd = {f"layers.{i}.attn.t{j:03d}.weight": tps.rnd((128, 256), torch.bfloat16) for j in range(per_shard)}
+        p = os.path.join(d, f"model-{i + 1:05d}-of-{n_shards:05d}.safetensors")
+        st.save_file(sd, p)
+        files.append(p)
+    with open(os.path.join(d, "config.json"), "w") as f:
+        json.dump({"text_config": {"n_routed_experts": tps.N_TARGET}}, f)
+    return files
+
+
+def delayed_load(files, slow, budget, gate=None, delay=0.15):
+    """Paced load where the tensors in ``slow`` copy late: after ``gate`` is set (the old charge,
+    which never blocks here) or after ``delay`` seconds. Returns (peak live slab bytes, seconds)."""
+    fl._escaped_slabs()
+    fl._state["slab_peak_live"] = fl._state["slab_peak_bytes"] = 0
+    os.environ["DSV41_FAST_LOAD_INFLIGHT_GB"] = repr(budget / 2**30)
+
+    def orig(*, executor, futures, use_async, func, func_args=(), func_kwargs=None):
+        futures.append(executor.submit(func, *func_args, **(func_kwargs or {})))
+
+    mod = types.SimpleNamespace(maybe_executor_submit=orig)
+    fl.install_deepseek_v4(mod)
+    param = torch.nn.Parameter(torch.zeros(1), requires_grad=False)
+
+    def copy(p, t, name):
+        if name in slow:
+            if gate is not None:
+                assert gate.wait(timeout=30), "gate never opened"
+            else:
+                time.sleep(delay)
+        t.view(torch.uint8).sum()
+
+    t0 = time.time()
+    futures = []
+    with concurrent.futures.ThreadPoolExecutor(64) as ex:
+        for name, t in buffered_iterator(files):
+            mod.maybe_executor_submit(executor=ex, futures=futures, use_async=True, func=copy,
+                                      func_args=(param, t, name))
+            del t
+        if gate is not None:
+            gate.set()
+        for fu in concurrent.futures.as_completed(futures):
+            fu.result()
+    del futures
+    peak = fl._state["slab_peak_bytes"]
+    assert not all_slabs_expired()
+    fl._escaped_slabs()
+    return peak, time.time() - t0
+
+
+def check_delayed_copies(d):
+    files = build_small(d)
+    slab = 1 * MB
+    set_slab(1)
+    fl._ep_info, fl._moe_tp_info, fl._state["phase"] = (lambda: (0, 1)), (lambda: (0, 4)), "target"
+    slow, shard_kept, n_slabs = set(), [], 0
+    for p in files:
+        _, h = fl._parse_header(p)
+        lay = fl.slab_layout(h, fl.read_plan(p, "target", (0, 1), tps.N_TARGET, (0, 4)), slab)
+        assert len(lay) == 4 and all(len(ms) == 16 for _, ms in lay), [len(ms) for _, ms in lay]
+        slow |= {ms[0][0] for _, ms in lay}          # the first 64 KiB tensor of every slab
+        shard_kept.append(sum(n for n, _ in lay))
+        n_slabs += len(lay)
+    budget = 3 * slab
+    window = max(sum(shard_kept[i:i + 3]) for i in range(len(shard_kept)))
+    bound = window + budget + 2 * slab
+    peak, secs = delayed_load(files, slow, budget)
+    assert peak <= bound, (peak, bound)
+    # the same load with the old charge (tensor bytes only): nothing stops the loader, so every slab
+    # stays alive behind its slow copy
+    new_charge = fl._charge
+    fl._charge = lambda args: (None, fl._tensor_bytes(args))
+    try:
+        old_peak, _ = delayed_load(files, slow, budget, gate=threading.Event())
+    finally:
+        fl._charge = new_charge
+    assert old_peak > bound, (old_peak, bound)
+    set_slab(None)
+    print(f"delayed small copies over {n_slabs} slabs of {slab >> 20} MiB: live slabs peak {peak / MB:.0f} MiB <= "
+          f"window {window / MB:.0f} + budget {budget / MB:.0f} + 2 slabs = {bound / MB:.0f} MiB ({secs:.1f} s); "
+          f"per-tensor charge: {old_peak / MB:.0f} MiB")
+
+
+def check_escape_raises(files):
+    set_slab(4)
+    fl._ep_info, fl._moe_tp_info, fl._state["phase"] = (lambda: (0, 1)), (lambda: (1, 4)), "target"
+    fl._escaped_slabs()
+    held = []
+    draft_file = next(p for p in files if any(k.startswith("mtp.") for k in fl._parse_header(p)[1]))
+
+    def load(path, keep, fail=False):
+        with safetensors.safe_open(path, framework="pt", device="cpu") as f:
+            got = {k: f.get_tensor(k) for k in f.keys()}
+        if keep:
+            held.append(got[keep])
+        del got
+        if fail:
+            raise ValueError("load failed")
+        return "loaded"
+
+    class Target:
+        def load_weights(self, weights, keep=None, fail=False):
+            return load(files[0], keep, fail)
+
+    class Draft:
+        def load_weights(self, weights, keep=None):
+            return load(draft_file, keep)
+
+    fl._wrap_target_load(types.SimpleNamespace(DeepseekV4ForCausalLM=Target))
+    fl.install_dspark(types.SimpleNamespace(DeepseekV4ForCausalLMDSpark=Draft))
+    assert Target().load_weights(None) == "loaded"
+    try:
+        Target().load_weights(None, keep="layers.0.attn.wo_a.weight")
+        raise AssertionError("an escaped slab after the target load did not raise")
+    except RuntimeError as exc:
+        assert "still alive after the target load" in str(exc) and "layers.0.attn.wo_a.weight" in str(exc), exc
+    held.clear()
+    try:
+        Target().load_weights(None, keep="layers.0.attn.wo_a.weight", fail=True)
+        raise AssertionError("the load's own exception was lost")
+    except ValueError:
+        pass
+    held.clear()
+    mtp = sorted(k for k in fl._parse_header(draft_file)[1] if k.startswith("mtp."))[0]
+    assert Draft().load_weights(None, keep=mtp) == "loaded" and fl._state["phase"] == "target"
+    held.clear()
+    gc.collect()
+    assert not all_slabs_expired()
+    set_slab(None)
+    print("escape after load: target raises naming the tensor, a failed load keeps its exception, draft warns")
+
+
 def check_memlog(files):
     """DSV41_FAST_LOAD_MEMLOG=1: one line per phase end with the counters and the allocation counts."""
     import logging
@@ -316,6 +458,10 @@ def main():
         d2 = os.path.join(d, "many")
         os.makedirs(d2)
         check_paced_bound(d2)
+        d3 = os.path.join(d, "small")
+        os.makedirs(d3)
+        check_delayed_copies(d3)
+        check_escape_raises(files)
         check_memlog(files)
         fl._release_all()
         print("fast_load slab OK")

@@ -51,8 +51,10 @@ Profiled with `py-spy dump` every 10 s and `/proc/diskstats` every 5 s during pr
    layout is unknown only the non-expert tensors are read eagerly.
 2. `maybe_executor_submit` in `deepseek_v4` is wrapped with a byte budget
    (`DSV41_FAST_LOAD_INFLIGHT_GB`, default 6): the enumeration, and with it the loader's window
-   and the eager reads, stays just ahead of the copies. Host memory in flight is bounded by that
-   budget plus the loader's window (`--model-loader-extra-config {"num_threads":1}` = 2 shards).
+   and the eager reads, stays just ahead of the copies. A copy whose source is a view into a slab
+   charges the whole slab, once, until the last queued copy from that slab finishes; other sources
+   charge their own bytes. Host memory in flight is bounded by that budget plus one slab plus the
+   loader's window (`--model-loader-extra-config {"num_threads":1}` = 2 shards).
 3. The DSpark draft's `load_weights` is marked; during it shards without `mtp.*` are handed back
    as empty handles and the three real ones are read eagerly.
 4. When the target's `load_weights` returns and again after the draft's, before the engine
@@ -106,7 +108,7 @@ that EP2 gets the legacy read list, that 19 kinds of out-of-slice access raise, 
 paced on slices, and that the bounce buffers are released. The checkpoint test checks the EP1 totals
 and compares every slice of one real shard with the stock tensor's narrow.
 
-## Pinned slabs (2026-09-24, not yet booted)
+## Pinned slabs (2026-09-24, booted on the fleet)
 
 The KV pool investigation (`sparks/diagnostics/dsv41-kv-pool-ep1/RESULTS.md`) found 1.1-1.9 GiB
 more memory missing from the head's `MemAvailable` at pool sizing with the fast loader than with
@@ -135,9 +137,12 @@ state left by thousands of small `cudaHostAlloc` blocks. From the checkpoint hea
   outlive one step are the pair buffers (compressor `wkv`/`wgate`, `wq_a`/`wkv`, and the
   bf16 `wo_a` weight/scale dequant), and those are empty when the load ends. After each load, `_release_all` checks each slab's storage
   weak reference. If a slab is still alive, it logs the tensor names that hold it
-  (`slab of ... still alive after the load`) instead of letting it silently take pool budget.
-- Memory is still bounded. The loader window holds whole shards as before, and the paced copies add at most
-  `DSV41_FAST_LOAD_INFLIGHT_GB` plus two slabs. The pacing budget still counts tensor bytes.
+  (`slab of ... still alive after the load`); after the target load that is an error (the boot
+  stops before the KV pool is sized), after the draft load a warning.
+- Memory is bounded. The loader window holds whole shards as before, and the paced copies add at
+  most `DSV41_FAST_LOAD_INFLIGHT_GB` plus one slab: a copy from a slab charges the whole slab, once
+  for all its copies in flight, because one slow small copy keeps the whole slab alive after its
+  siblings finish. Sources outside a slab charge their own bytes.
 - `DSV41_FAST_LOAD_SLAB_MB=0` restores one pinned buffer per tensor.
 - `DSV41_FAST_LOAD_MEMLOG=1` adds one `DSV41 fast load memlog: phase=...` line per load. It logs
   MemTotal, MemAvailable, SecPageTables and the other meminfo counters, CUDA reserved, and NVML's per-process GPU memory
@@ -158,8 +163,12 @@ Tests: `tests/test_fast_load_slab.py` (image build, CPU; the slabs are mmaps wit
 packing and views). It covers the layout invariants, bytes equal to stock `safe_open` for every rank at EP1 and EP2
 (target and draft, slab 4 MiB / 256 MiB / off, through FusedMoE's own loaders in the image), one
 buffer per slab, lifetimes (unrequested futures, escaped plain/sliced views reported by name and
-freed), and a paced load through a copy of sglang's buffered iterator (budget kept, live slabs
-within window + budget + 2 slabs). The pinned branch itself needs a GPU and runs on the next boot.
+freed), a paced load through a copy of sglang's buffered iterator (budget kept, live slabs
+within window + budget + 2 slabs), and the same load with one slow small copy per slab (live slabs
+still within that bound; with the old per-tensor charge they are not).
+
+Booted on the fleet 2026-09-24 (EP1 target): 330 slabs, 0 alive after release, and the KV pool
+0.73M tokens larger than with one pinned buffer per tensor.
 
 ## Measured (production image + fast load, 2026-09-18)
 

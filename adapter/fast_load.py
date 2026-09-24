@@ -21,9 +21,11 @@ What this does, gated by ``DSV41_FAST_LOAD=1``:
 2. The model's ``load_weights`` submits every copy to a thread pool and never waits, so the
    shard enumeration would run far ahead and keep whole shards resident. ``maybe_executor_submit``
    is wrapped with a byte budget (``DSV41_FAST_LOAD_INFLIGHT_GB``, default 6): the enumeration,
-   and with it the loader's window and the eager reads, stays just ahead of the copies. Host
-   memory in flight is bounded by that budget plus the loader window (``--model-loader-extra-config
-   {"num_threads":1}`` = 2 shards, ~3.4 GB each on TP4/EP2).
+   and with it the loader's window and the eager reads, stays just ahead of the copies. A copy
+   whose source is a view into a slab charges the whole slab, once, until the last queued copy
+   from that slab finishes (one slow small copy keeps its whole slab alive); other sources charge
+   their own bytes. Host memory in flight is bounded by that budget plus one slab plus the loader
+   window (``--model-loader-extra-config {"num_threads":1}`` = 2 shards, ~3.4 GB each on TP4/EP2).
 3. The DSpark draft is loaded from the same 48 shards but consumes only ``mtp.*`` tensors (see
    ``_remap_dspark_weight_name``). During that load, shards without any ``mtp.*`` key are handed
    back empty so the loader does not open and enumerate 45 files for nothing.
@@ -42,8 +44,9 @@ What this does, gated by ``DSV41_FAST_LOAD=1``:
    of thousands (EP1 used to request 92k small pinned blocks, each rounded up to a power of two).
    A slab goes back to the allocator when the last view into it dies; ``_release_all`` checks with
    storage weak references that none is still alive (an escaped view would pin a whole slab) and
-   names the tensors if one is. ``DSV41_FAST_LOAD_MEMLOG=1`` logs the host-memory counters, the
-   GPU processes and the pinned-allocation counts at each phase end.
+   names the tensors if one is. After the target load an escaped slab is an error (it would sit in
+   the KV pool's budget); after the draft load it is a warning. ``DSV41_FAST_LOAD_MEMLOG=1`` logs
+   the host-memory counters, the GPU processes and the pinned-allocation counts at each phase end.
 
 Everything is released before the KV pool is sized, so the head's memory budget is unchanged.
 """
@@ -60,12 +63,14 @@ _DRAFT_PREFIX = "mtp."
 _TARGET_SKIP_PREFIXES = (_DRAFT_PREFIX,)
 _ENGRAM_TABLE = ".engram.embed."
 _CHUNK = 8 << 20
-_state = {"phase": "target", "armed": False, "warned": False, "ep_warned": False, "layout_logged": False,
+_state = {"phase": "target", "armed": False, "ep_warned": False, "layout_logged": False,
           "bytes": 0, "files": 0, "skipped": 0, "resident": 0, "sliced": 0, "tp_logged": False,
+          "open_failures": 0, "read_failures": 0,
           # host buffers requested by this module in the current phase (slabs + standalone tensors)
           "host_allocs": 0, "host_alloc_bytes": 0, "slabs": 0, "slab_peak_live": 0, "slab_peak_bytes": 0}
 _SLAB_ALIGN = 4096            # every tensor starts on a page boundary inside its slab
 _slab_refs: list = []         # [StorageWeakRef, nbytes, path, members, base ptr] of every slab of this phase
+_slab_size: dict = {}         # storage base ptr -> (nbytes, StorageWeakRef) of this phase's slabs (pacing)
 _load_start: dict = {}        # MemAvailable / cuda_reserved when the target load began (memlog)
 _lock = threading.Lock()
 _header_cache: dict = {}
@@ -458,10 +463,11 @@ def _tp_slice_cls():
 
 def _executor():
     global _pool
-    if _pool is None:
-        _pool = concurrent.futures.ThreadPoolExecutor(
-            max_workers=int(os.environ.get("DSV41_FAST_LOAD_THREADS", "16")), thread_name_prefix="dsv41-read")
-    return _pool
+    with _lock:
+        if _pool is None:
+            _pool = concurrent.futures.ThreadPoolExecutor(
+                max_workers=int(os.environ.get("DSV41_FAST_LOAD_THREADS", "16")), thread_name_prefix="dsv41-read")
+        return _pool
 
 
 def _read_into(fd, mv, off):
@@ -511,10 +517,13 @@ def _new_slab(n, path, members):
         from torch.multiprocessing.reductions import StorageWeakRef
 
         ref = StorageWeakRef(flat.untyped_storage())
-    except Exception:
+    except Exception as exc:
         ref = None
+        logger.warning("DSV41 fast load: no weak reference to a slab of %s (%r); its release is not checked",
+                       os.path.basename(path), exc)
     with _lock:
         _slab_refs.append([ref, n, path, list(members), flat.data_ptr()])
+        _slab_size[flat.data_ptr()] = (n, ref)
         _state["slabs"] += 1
         live = [r for r in _slab_refs if r[0] is not None and not r[0].expired()]
         _state["slab_peak_live"] = max(_state["slab_peak_live"], len(live))
@@ -704,7 +713,8 @@ class _EagerShard:
                 pass
             os.close(self._fd)
         finally:
-            return self._inner.__exit__(*exc)
+            ret = self._inner.__exit__(*exc)
+        return ret
 
     def keys(self):
         return self._inner.keys()
@@ -730,9 +740,12 @@ class _EagerShard:
             _, header = _parse_header(self._path)
             return _tp_slice_cls()(t, header[name]["shape"], spec[0], spec[1], name)
         except Exception as exc:
-            if not _state["warned"]:
-                _state["warned"] = True
-                logger.warning("DSV41 fast load: eager read of %s failed (%r); falling back to mmap", name, exc)
+            with _lock:
+                _state["read_failures"] += 1
+                n = _state["read_failures"]
+            if n <= 8 or n & (n - 1) == 0:
+                logger.warning("DSV41 fast load: eager read of %s failed (%r); falling back to mmap "
+                               "(%d eager-read failures so far)", name, exc, n)
             return self._inner.get_tensor(name)
 
 
@@ -779,10 +792,11 @@ def install_weight_utils(module):
     def safe_open(filename, *args, **kwargs):
         try:
             return _wrap_open(orig, filename, args, kwargs)
-        except Exception as exc:  # never let the fast path break the load
-            if not _state["warned"]:
-                _state["warned"] = True
-                logger.warning("DSV41 fast load: disabled after error on %s: %r", filename, exc)
+        except Exception as exc:  # never let the fast path break the load, but say so for every shard
+            with _lock:
+                _state["open_failures"] += 1
+            logger.warning("DSV41 fast load: shard %s falls back to the stock loader after error %r "
+                           "(%d shards so far this phase)", filename, exc, _state["open_failures"])
             return orig(filename, *args, **kwargs)
 
     safetensors.safe_open = safe_open
@@ -879,6 +893,7 @@ def _escaped_slabs():
     with _lock:
         refs = list(_slab_refs)
         _slab_refs.clear()
+        _slab_size.clear()
     alive = [r for r in refs if r[0] is not None and not r[0].expired()]
     if not alive:
         return []
@@ -958,11 +973,13 @@ def _snapshot():
 
 
 def _log_phase(phase):
+    """Release and report the phase; returns the escaped slabs (see ``_escaped_slabs``)."""
     with _lock:
         b, f, s = _state["bytes"], _state["files"], _state["skipped"]
         kept, sliced = _state["resident"], _state["sliced"]
+        fails = _state["open_failures"], _state["read_failures"]
         allocs = {k: _state[k] for k in ("host_allocs", "host_alloc_bytes", "slabs", "slab_peak_live", "slab_peak_bytes")}
-        for k in ("bytes", "files", "skipped", "resident", "sliced") + tuple(allocs):
+        for k in ("bytes", "files", "skipped", "resident", "sliced", "open_failures", "read_failures") + tuple(allocs):
             _state[k] = 0
     before = _snapshot()
     escaped = []
@@ -975,6 +992,9 @@ def _log_phase(phase):
                        phase, b / 1e9, f, s, extra, allocs["host_allocs"], allocs["host_alloc_bytes"] / 1e9,
                        allocs["slabs"], slab_bytes() >> 20, allocs["slab_peak_live"], allocs["slab_peak_bytes"] / 1e9,
                        len(escaped), live, live_bytes / 1e9, rss)
+        if any(fails):
+            logger.warning("DSV41 fast load: phase=%s %d shards fell back to the stock loader, %d eager reads fell "
+                           "back to mmap (see the warnings above)", phase, *fails)
         for nbytes, path, names in escaped:
             logger.warning("DSV41 fast load: phase=%s slab of %.1f MB from %s still alive after the load, held by "
                            "a view the model kept: %s. It stays pinned and out of the KV pool budget; report this "
@@ -983,6 +1003,7 @@ def _log_phase(phase):
     logger.warning("DSV41 fast load: phase=%s memory before release %s | after %s", phase, before, _snapshot())
     if memlog_on():
         logger.warning("DSV41 fast load memlog: phase=%s %s", phase, _memlog(allocs, len(escaped)))
+    return escaped
 
 
 def memlog_on() -> bool:
@@ -1127,6 +1148,34 @@ def _tensor_bytes(func_args):
     return 0
 
 
+def _charge(func_args):
+    """(key, bytes) a copy charges against the pacing budget.
+
+    The source tensor (first non-Parameter tensor argument; a TP-sliced stand-in's resident slice)
+    is looked up by its storage: a view into a slab of this phase charges the whole slab under the
+    key ``("slab", base ptr)``, once for all its copies in flight, because any one of them keeps
+    the whole slab alive. Anything else charges its own bytes under a key of its own (None).
+    """
+    try:
+        import torch
+
+        for a in func_args:
+            if isinstance(a, torch.Tensor) and not isinstance(a, torch.nn.Parameter):
+                part = getattr(a, "_dsv41_part", None)
+                src = part if part is not None else a
+                with torch._C.DisableTorchFunctionSubclass():
+                    ptr = src.untyped_storage().data_ptr()
+                with _lock:
+                    hit = _slab_size.get(ptr)
+                # an expired entry is a freed slab whose address now backs another buffer
+                if hit is not None and (hit[1] is None or not hit[1].expired()):
+                    return ("slab", ptr), hit[0]
+                break
+    except Exception:
+        pass
+    return None, _tensor_bytes(func_args)
+
+
 def install_deepseek_v4(module):
     """Pace the model's async weight copies so the eager reads stay just ahead of consumption."""
     if not enabled():
@@ -1135,21 +1184,35 @@ def install_deepseek_v4(module):
     budget = int(float(os.environ.get("DSV41_FAST_LOAD_INFLIGHT_GB", "6")) * 2**30)
     cv = threading.Condition()
     inflight = [0]
+    held = {}       # slab key -> [copies in flight, bytes charged]
 
     def paced_submit(*, executor, futures, use_async, func, func_args=(), func_kwargs=None):
         if not use_async:
             return orig(executor=executor, futures=futures, use_async=use_async, func=func,
                         func_args=func_args, func_kwargs=func_kwargs)
-        size = max(1, _tensor_bytes(func_args))
+        key, nbytes = _charge(func_args)
+        size = max(1, nbytes)
         with cv:
-            while inflight[0] > 0 and inflight[0] + size > budget:
+            while not (key is not None and key in held) and inflight[0] > 0 and inflight[0] + size > budget:
                 cv.wait(timeout=1.0)
-            inflight[0] += size
+            if key is not None and key in held:
+                held[key][0] += 1           # the slab is already charged (and alive)
+            else:
+                inflight[0] += size
+                if key is not None:
+                    held[key] = [1, size]
         before = len(futures)
 
         def release(_f=None):
             with cv:
-                inflight[0] -= size
+                if key is None:
+                    inflight[0] -= size
+                else:
+                    h = held[key]
+                    h[0] -= 1
+                    if h[0] == 0:
+                        inflight[0] -= h[1]
+                        del held[key]
                 cv.notify_all()
 
         try:
@@ -1177,13 +1240,22 @@ def _wrap_target_load(module):
     orig = cls.load_weights
 
     def load_weights(self, weights, *args, **kwargs):
-        if _state["phase"] == "target":
+        target = _state["phase"] == "target"
+        if target:
             _mark_load_start()
+        escaped = []
         try:
-            return orig(self, weights, *args, **kwargs)
+            out = orig(self, weights, *args, **kwargs)
         finally:
-            if _state["phase"] == "target":
-                _log_phase("target")
+            if target:
+                escaped = _log_phase("target")
+        if escaped:
+            # an escaped slab stays pinned outside the KV pool budget the engine sizes next
+            raise RuntimeError(
+                f"DSV41 fast load: {len(escaped)} slab(s) ({sum(e[0] for e in escaped) / 2**20:.0f} MiB) still "
+                f"alive after the target load, held by {sorted({n for e in escaped for n in e[2]})[:8]}; boot with "
+                f"DSV41_FAST_LOAD_SLAB_MB=0 (one buffer per tensor) and report this")
+        return out
 
     load_weights._dsv41_fast_load = True
     cls.load_weights = load_weights

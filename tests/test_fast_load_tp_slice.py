@@ -283,9 +283,12 @@ def main():
         del w1, w2, rest
         print(f"out-of-slice access: {len(bad)} cases raise")
 
-        # -- pacing counts the resident slice, not the full shape --
+        # -- pacing counts the resident slice, not the full shape (one buffer per tensor: a view
+        #    into a slab charges its whole slab instead, see test_fast_load_slab.py) --
+        os.environ["DSV41_FAST_LOAD_SLAB_MB"] = "0"
         with safetensors.safe_open(files[1], framework="pt", device="cpu") as f:
             parts = [f.get_tensor(k) for k in f.keys() if k.endswith(".w1.weight") or k.endswith(".w3.weight")]
+        os.environ.pop("DSV41_FAST_LOAD_SLAB_MB", None)
         one = parts[0]._dsv41_resident_nbytes
         full_one = parts[0].numel()
         assert one * 4 == full_one

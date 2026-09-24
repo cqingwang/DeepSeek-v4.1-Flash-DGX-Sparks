@@ -18,17 +18,20 @@ What it patches (all refuse to boot if the engine symbol drifted):
 * ``...process_weights_after_loading``: no FlashInfer interleave; the checkpoint bytes are repacked
   in place into b12x W4A8 (MXFP4 weights, in-kernel MXFP8 activations) ``PreparedExperts``, one
   shared ``WeightPlan`` per geometry.
-* ``FusedOpPool[("none", "flashinfer_mxfp4")]``: replaced by ``_fused_b12x_next``. Layers the
-  adapter did not convert fall through to the stock function.
+* ``FusedOpPool[("none", "flashinfer_mxfp4")]``: replaced by ``_fused_b12x_next``. A layer that
+  reaches it without having been converted refuses to run: the patched ``process_weights_after_loading``
+  left its weights in checkpoint layout, which the stock FlashInfer kernel would read as garbage.
 
 Execution plans are per geometry (experts, K, N, top-k, EP rank, swiglu limit), prepared once at
 load on the first layer and shared by every layer of that geometry (the binding carries each layer's
 own prepared experts; see ``_Geometry._run``). Capacities: every exact decode/verify M of the CUDA
 graph list (verify rows B+1 and draft rows B per request, B = DSPARK_BLOCK_SIZE) plus a bounded
 ladder (128 .. max(4096, CHUNKED_PREFILL_SIZE)); a batch uses the smallest capacity >= M, larger
-batches run in chunks of the top capacity. Scratch: one arena per geometry sized for the largest
-plan. EP: a Triton kernel maps global top-k ids to local ids in-graph; slots owned by another EP
-group and CUDA-graph padding ids (-1) get weight 0 and point at an expert the batch already reads.
+batches run in chunks of the top capacity. A capacity above b12x's per-launch token limit for the
+geometry is dropped (warning), so the chunk is always a prepared capacity one launch can run.
+Scratch: one arena per geometry sized for the largest plan. EP: a Triton kernel maps global top-k
+ids to local ids in-graph; slots owned by another EP group and CUDA-graph padding ids (-1) get
+weight 0 and point at an expert the batch already reads.
 
 Autotune: the exact-M plans of the primary row count are raced at load (b12x PreparationSession),
 the rest use b12x's heuristic. Selections persist in ``$B12X_NEXT_COMPILE_CACHE_DIR/preparation``
@@ -38,10 +41,14 @@ of plans, so the M -> plan mapping is rank-invariant. Race buffers are released 
 
 Knobs: DSV41_MOE_B12X_NEXT_TUNE (1), _TUNE_ROWS ("6:6,3:5" top-k:rows raced), _GRAPH_BS
 ("1,2,3,4,5,6,7,8,10,12,14,16"), _LADDER ("128,256,512,1024,2048,4096"), _CACHE_ONLY (0),
-_WARM (1: run every plan once at load), _DETERMINISTIC (0; EP1 only, b12x rejects it at N=1152),
+_WARM (1: run every plan once at load), _DETERMINISTIC (0; EP1 only, b12x rejects it at N=1152;
+the <= 8 row plan then uses the internal route planner, the Triton one refuses deterministic output,
+and nothing is raced: b12x's race cannot compile the deterministic top-k sum kernel),
 _MEMSTATS (0: 1 logs load-time peak transients, resetting torch's peak counters),
-_M64_MIN_CAP (2048: compact-N64 ladder capacities >= this run the M64 tile; 0 = off; needs the
-runtime patch scripts/b12x_next-compact-n64-m64.patch, else M16 with a warning),
+_SMALL_PLAN ("triton:48:16": route planner, max active clusters, tile rows of the dynamic plan pinned
+at <= 8 rows for compact N64), _M64_MIN_CAP (2048: compact-N64 ladder capacities >= this run the
+M64 tile; 0 = off; needs the runtime patch scripts/b12x_next-compact-n64-m64.patch, else M16 with a
+warning),
 _DIRECT_IDS (1: at EP_SIZE=1 the router's int32 ids / fp32 weights go straight to b12x, no remap
 kernel; b12x skips ids outside [0, E), so CUDA-graph padding rows (-1) contribute nothing and their
 output rows are 0. Off, or at EP>1, or with other dtypes / _DETERMINISTIC, the remap kernel runs).
@@ -96,6 +103,9 @@ def _peak_begin(dev):
 def _peak_mb(dev, base):
     torch.cuda.synchronize(dev)
     return round((torch.cuda.max_memory_allocated(dev) - base) / 2**20, 1) if MEMSTATS else None
+
+
+
 GRAPH_BS = _ints(_env("DSV41_MOE_B12X_NEXT_GRAPH_BS", "1,2,3,4,5,6,7,8,10,12,14,16"))
 _MAX_BS = int(_env("CUDA_GRAPH_MAX_BS_DECODE", "16") or 16)
 GRAPH_BS = [b for b in GRAPH_BS if b <= _MAX_BS] or [1]
@@ -103,6 +113,12 @@ BLOCK = int(_env("DSPARK_BLOCK_SIZE", "5") or 5)
 LADDER = _ints(_env("DSV41_MOE_B12X_NEXT_LADDER", "128,256,512,1024,2048,4096"))
 # Prefill capacities of the compact N64 geometry (EP1, N=576) on the M64 tile instead of b12x's M16 pin.
 M64_MIN_CAP = int(_env("DSV41_MOE_B12X_NEXT_M64_MIN_CAP", "2048") or 0)
+# Decode plan pinned for compact N64 at <= 8 rows: planner:max_active_clusters:tile_m (dynamic, grouped).
+_SMALL = _env("DSV41_MOE_B12X_NEXT_SMALL_PLAN", "triton:48:16").split(":")
+SMALL_PLANNER, SMALL_MAC, SMALL_TILE = _SMALL[0], (int(_SMALL[1]) if _SMALL[1] != "none" else None), int(_SMALL[2])
+if DETERMINISTIC and SMALL_PLANNER == "triton":
+    # b12x's Triton route planner refuses deterministic compact queries (_tuning validation)
+    SMALL_PLANNER = "internal"
 _CHUNK_ENV = int(_env("CHUNKED_PREFILL_SIZE", "0") or 0)
 if _CHUNK_ENV > max(LADDER):
     LADDER.append(_CHUNK_ENV)
@@ -110,12 +126,14 @@ TUNE_ROWS = {int(k): int(v) for k, v in (p.split(":") for p in
              _env("DSV41_MOE_B12X_NEXT_TUNE_ROWS", "6:6,3:5").split(",") if p)}
 EXACT_MAX = 96 if not GRAPH_BS else max(96, (BLOCK + 1) * max(GRAPH_BS))
 
-_state = {"method_installed": False, "runner_installed": False, "orig_fused": None}
+_state = {"method_installed": False, "runner_installed": False, "orig_fused": None, "b12x_ready": False,
+          "ep_logged": False}
 _LAYERS = {}        # w13_weight.data_ptr() -> _LayerState
 _GEOMS = {}         # geometry key -> _Geometry
 _SESSION = [None]
 _PREP_PEAK_MB = []    # per-layer peak transient of prepare_weights
-_B = {}             # lazily imported b12x_next modules and engine helpers
+_B = {}             # b12x_next modules, filled only by _b12x() after the pin/drift checks
+_ENG = {}           # engine helpers of the fused function (install_runner)
 
 
 def _die(msg):
@@ -127,7 +145,7 @@ def _die(msg):
 # b12x_next import and drift checks
 # --------------------------------------------------------------------------------------------
 def _b12x():
-    if _B:
+    if _state["b12x_ready"]:
         return _B
     if not os.environ.get("B12X_NEXT_COMPILE_CACHE_DIR"):
         state = os.environ.get("STATE_PATH", "/state")
@@ -163,6 +181,7 @@ def _b12x():
     if "replace(state.bind(**kwargs), plan=plan)" not in inspect.getsource(fapi.bind):
         _die("b12x_next fused_moe.bind drifted")
     _B.update(fm=fm, prep=prep, pkg=b12x_next)
+    _state["b12x_ready"] = True
     return _B
 
 
@@ -178,8 +197,10 @@ def _remap_kernel():
         import triton
         import triton.language as tl
 
-        @triton.jit(do_not_specialize=["M", "OFFSET", "NUM_LOCAL"])
-        def kernel(IDS, W, OUT_IDS, OUT_W, M, OFFSET, NUM_LOCAL,
+        # Input strides are runtime arguments (no specialization, so a strided view never JITs a
+        # new variant inside graph capture); the outputs are contiguous [M, K].
+        @triton.jit(do_not_specialize=["M", "OFFSET", "NUM_LOCAL", "SI0", "SI1", "SW0", "SW1"])
+        def kernel(IDS, W, OUT_IDS, OUT_W, M, OFFSET, NUM_LOCAL, SI0, SI1, SW0, SW1,
                    K: tl.constexpr, KP: tl.constexpr, BR: tl.constexpr):
             cols = tl.arange(0, KP)
             cmask = cols < K
@@ -187,7 +208,7 @@ def _remap_kernel():
             for r0 in range(0, M, BR):
                 rows = r0 + tl.arange(0, BR)
                 m = (rows[:, None] < M) & cmask[None, :]
-                lid = tl.load(IDS + rows[:, None] * K + cols[None, :], mask=m, other=-1).to(tl.int32) - OFFSET
+                lid = tl.load(IDS + rows[:, None] * SI0 + cols[None, :] * SI1, mask=m, other=-1).to(tl.int32) - OFFSET
                 ok = m & (lid >= 0) & (lid < NUM_LOCAL)
                 best = tl.minimum(best, tl.min(tl.min(tl.where(ok, lid, 2147483647), axis=1), axis=0))
             fb = tl.where(best < NUM_LOCAL, best, 0)
@@ -195,8 +216,8 @@ def _remap_kernel():
                 rows = r0 + tl.arange(0, BR)
                 m = (rows[:, None] < M) & cmask[None, :]
                 offs = rows[:, None] * K + cols[None, :]
-                lid = tl.load(IDS + offs, mask=m, other=-1).to(tl.int32) - OFFSET
-                w = tl.load(W + offs, mask=m, other=0.0).to(tl.float32)
+                lid = tl.load(IDS + rows[:, None] * SI0 + cols[None, :] * SI1, mask=m, other=-1).to(tl.int32) - OFFSET
+                w = tl.load(W + rows[:, None] * SW0 + cols[None, :] * SW1, mask=m, other=0.0).to(tl.float32)
                 ok = m & (lid >= 0) & (lid < NUM_LOCAL)
                 row_min = tl.min(tl.where(ok, lid, 2147483647), axis=1)
                 fill = tl.where(row_min < NUM_LOCAL, row_min, fb)
@@ -208,12 +229,19 @@ def _remap_kernel():
 
 
 def ep_remap(topk_ids, topk_weights, out_ids, out_w, offset, num_local):
-    """Writes out_ids (int32) / out_w (fp32) [M, K]; one CTA, no host sync, graph-capturable."""
+    """Writes out_ids (int32) / out_w (fp32), contiguous [M, K]; one CTA, no host sync, graph-capturable.
+
+    ``topk_ids`` / ``topk_weights`` may be any strided [M, K] views (each read by its own strides)."""
     kernel, np2 = _remap_kernel()
     m, k = topk_ids.shape
     if m == 0:
         return
+    if tuple(topk_weights.shape) != (m, k) or not (out_ids.is_contiguous() and out_w.is_contiguous()) \
+            or out_ids.shape[0] < m or out_w.shape[0] < m:
+        raise RuntimeError(f"DSV41_MOE_B12X_NEXT: ep_remap shapes ids {tuple(topk_ids.shape)} weights "
+                           f"{tuple(topk_weights.shape)} out {tuple(out_ids.shape)}/{tuple(out_w.shape)}")
     kernel[(1,)](topk_ids, topk_weights, out_ids, out_w, m, offset, num_local,
+                 topk_ids.stride(0), topk_ids.stride(1), topk_weights.stride(0), topk_weights.stride(1),
                  K=k, KP=np2(k), BR=32, num_warps=4)
 
 
@@ -287,7 +315,10 @@ class _Geometry:
         return sorted(set(exact) | {c for c in LADDER if c > max(exact)})
 
     def tuned_caps(self):
-        if not TUNE:
+        # DETERMINISTIC: no race. b12x does not declare the deterministic top-k sum kernel among a
+        # plan's programs, so its race refuses to compile it ("unplanned CuTe program"); the
+        # heuristic plans compile it in _warm instead.
+        if not TUNE or DETERMINISTIC:
             return set()
         r = TUNE_ROWS.get(self.topk)
         if r is None:
@@ -316,8 +347,8 @@ class _Geometry:
                 # `dynamic` streams each distinct expert once (~16 in real decode, fewer with dead
                 # verify rows). Measured on the engine's path: 523 -> 349 us per call at EP1, M=6.
                 kw["override"] = fm.MoeDecodeConfig(
-                    backend="dynamic", route_planner="triton", max_active_clusters=48,
-                    dynamic_tile_m=16, dynamic_route_mode="grouped")
+                    backend="dynamic", route_planner=SMALL_PLANNER, max_active_clusters=SMALL_MAC,
+                    dynamic_tile_m=SMALL_TILE, dynamic_route_mode="grouped")
             elif M64_MIN_CAP and cap >= M64_MIN_CAP and cap > EXACT_MAX and self.N % 128 == 64 \
                     and _m64_admitted():
                 # b12x pins compact N64 to M16 tiles at every capacity: each 16-row tile re-stages the
@@ -342,10 +373,15 @@ class _Geometry:
                 cap=cap, plan=plan, state=state, specs=tuple(plan.scratch_specs()), tuned=race is not None,
                 source=str(getattr(sel, "source", "")), config=str(getattr(sel, "config", "")),
                 max_per_launch=int(getattr(lp, "max_tokens_per_launch", cap) or cap))
-        self.caps = sorted(self.plans)
-        top = self.plans[self.caps[-1]]
-        self.chunk = min(top.cap, top.max_per_launch)
-        self.caps = [c for c in self.caps if c <= self.chunk] or [self.chunk]
+        self.chunk, self.caps, dropped = select_chunk({c: e.max_per_launch for c, e in self.plans.items()})
+        if dropped:
+            limit = min(self.plans[c].max_per_launch for c in dropped)
+            print(f"{_TAG} WARNING: E={self.E} K={self.K} N={self.N} top-k {self.topk}: capacities {dropped} "
+                  f"exceed b12x's per-launch limit of {limit} tokens and are dropped; larger batches run in "
+                  f"chunks of {self.chunk} (set CHUNKED_PREFILL_SIZE <= {limit} to prepare a larger plan)",
+                  flush=True)
+            for c in dropped:
+                del self.plans[c]
         self.table = [None] + [self._lookup(m) for m in range(1, EXACT_MAX + 1)]
         # one arena per geometry, each plan's specs carved from its start (plans never overlap in time)
         need = max(sum(_align(s.nbytes) for s in self.plans[c].specs) for c in self.caps)
@@ -415,6 +451,9 @@ class _Geometry:
         del x, out, ids, w
 
     def _run(self, cap, x, ids, w, out, impl):
+        if x.shape[0] > cap:
+            raise RuntimeError(f"DSV41_MOE_B12X_NEXT: {x.shape[0]} rows on the capacity-{cap} plan "
+                               f"(chunk {self.chunk}, capacities {self.caps})")
         e = self.plans[cap]
         st = e.state
         kw = dict(scratch=e.views, a=x, topk_ids=ids, topk_weights=w, output=out,
@@ -444,6 +483,19 @@ class _Geometry:
             self._run(self.cap_for(m), x[s:e], ids, w, out[s:e], impl)
             s = e
         return out
+
+
+def select_chunk(limits):
+    """``limits``: {prepared capacity: that plan's max tokens per launch}.
+
+    Returns ``(chunk, kept capacities, dropped capacities)``. A capacity is kept only if its plan
+    runs it in one launch (capacity <= its launch limit), and the chunk is the largest kept one, so
+    every chunk ``forward`` issues has a prepared plan whose scratch holds it.
+    """
+    kept = sorted(c for c, lim in limits.items() if c <= lim)
+    if not kept:
+        _die(f"no prepared capacity fits b12x's per-launch limit ({limits})")
+    return kept[-1], kept, sorted(set(limits) - set(kept))
 
 
 _M64_STATE = []
@@ -545,6 +597,26 @@ def install_method(module):
     _state["method_installed"] = True
     print(f"{_TAG} armed: routed MoE on b12x_next {PINNED_COMMIT[:8]} (W4A8, in-place repack); "
           f"graph bs {GRAPH_BS}, rows {BLOCK}/{BLOCK + 1}, ladder {LADDER}, tune={TUNE}", flush=True)
+    if DETERMINISTIC:
+        print(f"{_TAG} deterministic reduction: <= 8 row plan on the {SMALL_PLANNER} route planner, no autotune "
+              f"race (heuristic plans)", flush=True)
+    rows = uncovered_rows()
+    if rows:
+        print(f"{_TAG} WARNING: CUDA_GRAPH_MAX_BS_DECODE={_MAX_BS} exceeds the adapter's graph bs list (max "
+              f"{max(GRAPH_BS)}); decode/verify row counts {rows} (bs {max(GRAPH_BS) + 1}..{_MAX_BS} x "
+              f"{BLOCK}/{BLOCK + 1}) have no exact plan and run on the next capacity up: correct, but slower. "
+              f"Set DSV41_MOE_B12X_NEXT_GRAPH_BS to the engine's capture list to cover them.", flush=True)
+
+
+def uncovered_rows():
+    """Draft/verify row counts of decode batch sizes above the adapter's graph list, up to
+    CUDA_GRAPH_MAX_BS_DECODE, that have no exact-M plan (the engine's own capture list is not known
+    here, so every batch size in that range is named)."""
+    top = max(GRAPH_BS)
+    if _MAX_BS <= top:
+        return []
+    exact = {r * b for r in (BLOCK, BLOCK + 1) for b in GRAPH_BS if r * b <= EXACT_MAX}
+    return sorted({r * b for r in (BLOCK, BLOCK + 1) for b in range(top + 1, _MAX_BS + 1)} - exact)
 
 
 def _convert_layer(method, layer):
@@ -579,6 +651,11 @@ def _convert_layer(method, layer):
     if new_geom:
         geom = _Geometry(key, E, k, n, topk, ep_rank, limit, dev, ep_size=ep_size)
         _GEOMS[key] = geom
+    if not _state["ep_logged"]:
+        _state["ep_logged"] = True
+        print(f"{_TAG} INFO: routed MoE at EP_SIZE={ep_size} (this rank: EP rank {ep_rank}, {E} experts x "
+              f"N={n}){'' if ep_size == 1 else '; the production profile is EP_SIZE=1, EP>1 is an A/B setup'}",
+              flush=True)
     base = _peak_begin(dev)
     ones = torch.ones(E, dtype=torch.float32, device=dev)
     ptrs = tuple(t.untyped_storage().data_ptr() for t in (w13, w2, s13, s2))
@@ -613,6 +690,7 @@ def install_runner(module):
     """sglang.srt.layers.moe.moe_runner.flashinfer_cutlass (after its fused funcs registered)."""
     if not ENABLED or _state["runner_installed"]:
         return
+    _b12x()                                       # pin/drift checks whichever hook runs first
     from sglang.srt.layers.moe.moe_runner.base import FusedOpPool
     orig = FusedOpPool._fused_funcs.get(_FUSED_KEY)
     if orig is None or getattr(orig, "__name__", "") != "fused_experts_none_to_flashinfer_mxfp4":
@@ -625,7 +703,7 @@ def install_runner(module):
         from sglang.srt.layers.moe.topk import TopKOutputChecker
     except Exception as exc:
         _die(f"engine helper import failed: {exc!r}")
-    _B.update(get_tp_group=get_tp_group, use_symmetric_memory=use_symmetric_memory,
+    _ENG.update(get_tp_group=get_tp_group, use_symmetric_memory=use_symmetric_memory,
               is_allocation_symmetric=is_allocation_symmetric,
               StandardCombineInput=StandardCombineInput, TopKOutputChecker=TopKOutputChecker)
     _state["orig_fused"] = orig
@@ -636,8 +714,8 @@ def install_runner(module):
 
 def _alloc_out(m, k, dev):
     # Same allocation as the stock path: the output feeds the TP all-reduce.
-    if _B["is_allocation_symmetric"]():
-        with _B["use_symmetric_memory"](_B["get_tp_group"]()):
+    if _ENG["is_allocation_symmetric"]():
+        with _ENG["use_symmetric_memory"](_ENG["get_tp_group"]()):
             return torch.empty(m, k, dtype=torch.bfloat16, device=dev)
     return torch.empty(m, k, dtype=torch.bfloat16, device=dev)
 
@@ -645,17 +723,20 @@ def _alloc_out(m, k, dev):
 def _fused_b12x_next(dispatch_output, quant_info, runner_config):
     st = _LAYERS.get(quant_info.w13_weight.data_ptr())
     if st is None:
-        return _state["orig_fused"](dispatch_output, quant_info, runner_config)
+        # process_weights_after_loading is patched class-wide, so this layer's weights are in
+        # checkpoint layout (not FlashInfer-interleaved): the stock kernel would return garbage.
+        _die(f"a flashinfer_mxfp4 MoE layer reached the fused function without a b12x_next conversion "
+             f"(w13 {tuple(quant_info.w13_weight.shape)}; e.g. _mega_moe_weights_built skipped it)")
     if getattr(quant_info, "padded_hidden", None) not in (None, st.hidden):
         raise RuntimeError("DSV41_MOE_B12X_NEXT: padded hidden size is not supported")
     x = dispatch_output.hidden_states
     topk = dispatch_output.topk_output
-    if _B["TopKOutputChecker"].format_is_bypassed(topk):
+    if _ENG["TopKOutputChecker"].format_is_bypassed(topk):
         topk = topk.to_standard()
     out = _alloc_out(x.shape[0], x.shape[1], x.device)
     if x.shape[0]:
         st.geom.forward(st.impl, x, topk.topk_ids, topk.topk_weights, out)
-    return _B["StandardCombineInput"](hidden_states=out)
+    return _ENG["StandardCombineInput"](hidden_states=out)
 
 
 def geometry_reports():
