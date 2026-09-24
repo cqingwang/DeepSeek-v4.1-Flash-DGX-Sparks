@@ -23,6 +23,8 @@ _PREFIXES = ("SGLANG_", "DSV41_", "SPARK_", "B12X_", "NCCL_")
 _VOLATILE = ("DSV41_DRAFT_CAPTURE", "DSV41_DRAFT_CAPTURE_OUT", "DSV41_DRAFT_CAPTURE_TRIGGER",
              "DSV41_DRAFT_CAPTURE_MAX_GIB", "DSV41_VERIFY_CAP", "DSV41_VERIFY_CAP_MIN", "DSV41_DRAFT_TAU",
              "DSV41_BLOCK_VERIFY", "DSV41_FOLDED_FENCE", "DSV41_AUTOTUNE_KEEP",
+             # set by the engine itself, a new timestamp every boot (found by MiaAI-Lab)
+             "SGLANG_RUN_ID",
              # switches that change neither the tuned MoE shapes nor their kernels: toggling one must
              # reuse the tactics, or every A/B boot re-draws them (which moves the numerics)
              "DSV41_DRAFT_HEAD_FP8", "DSV41_ENGRAM_PREFETCH", "DSV41_ENGRAM_PREFETCH_CHECK",

@@ -46,6 +46,8 @@ def main():
     assert mod._autotune_cache_digest(paths[1], env) == "", "a changed launch must drop the cache"
     assert not paths[1].exists(), "and delete it, so no rank can load it"
     fp_before = ak.launch_fingerprint()
+    os.environ["SGLANG_RUN_ID"] = "sglang-run-1.0-1"   # per boot, set by the engine
+    assert ak.launch_fingerprint() == fp_before
     os.environ["DSV41_REPLICATED_SPLIT"] = "wqkv_a"      # decode-side switch: volatile
     assert ak.launch_fingerprint() == fp_before
     os.environ["DSV41_VERIFY_CAP"] = "conf:0.1"          # A/B-neutral switch: same fingerprint

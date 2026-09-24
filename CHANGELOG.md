@@ -22,6 +22,8 @@ raw results live under `docs/results/`.
   change neither the tuned MoE shapes nor their kernels (draft head fp8, Engram prefetch, the
   replicated/draft splits, RoCE gathers, the DRM row cache, the logging switches) are volatile, so
   toggling one reuses the tactics instead of re-drawing them for every A/B boot.
+  `SGLANG_RUN_ID` (a per-boot timestamp the engine sets in its own processes) is excluded too: with it
+  no fingerprint ever matched and every boot re-tuned (found by MiaAI-Lab).
 - `DSV41_DRAFT_TAU` 0.8 -> 0.7: sampled thinking traffic (T=1, top_p 0.95) +1.8 % and +2.0 % on two
   disjoint prompt sets; greedy unaffected. The verify-length threshold was re-checked on the same
   sampled traffic (0.07 / 0.1 / 0.15: 61.3 / 61.2 / 61.3 tok/s) and on 45 varied greedy prompts (flat):
