@@ -21,22 +21,22 @@ Production stack (the last `EXTRA_CONTAINER_ENV` line of [`.env.tp4.example`](.e
 
 **Decode, aggregate tok/s (per stream in brackets)**
 
-| | c1 | c2 | c4 | c8 | c16 |
+| prompt type | c1 | c2 | c4 | c8 | c16 |
 |---|---:|---:|---:|---:|---:|
-| prose | **74.4** | 102.9 (54.0) | 141.6 (36.8) | 191.7 (25.4) | 319.4 (20.9) |
-| code | 108.1 | – | – | 279.8 (37.2) | 392.1 (26.7) |
+| prose | **74.8** | 101.9 (53.5) | 143.9 (37.4) | 192.9 (25.6) | 318.5 (20.8) |
+| code | 113.0 | 151.4 (75.7) | 212.6 (55.3) | 280.7 (37.3) | 391.8 (26.7) |
+| structured | 137.1 | 156.0 (88.1) | 196.1 (57.1) | 201.7 (35.7) | 517.2 (44.2) |
+| json | 105.6 | 164.8 (82.4) | 261.1 (65.6) | 398.2 (52.1) | 648.9 (41.8) |
 
-| c1 | prose | code | structured | json |
-|---|---:|---:|---:|---:|
-| tok/s | **74.4** | 108.1 | 133.4 | 104.3 |
-
-Prose c1 is the median of three runs (73.9 / 74.7 / 74.4) after two discarded warm-ups; raw output in [`docs/results/prodbench-20260924-current.txt`](docs/results/prodbench-20260924-current.txt). Sampled chat at the model card's T=1 / top_p=0.95 with thinking runs ~62 tok/s at c1 (sparkDash benches are greedy, where the draft temperature and block verification do not act).
+Prose c1 is the median of three runs (74.9 / 74.8 / 74.7) after two discarded warm-ups; the other cells are single runs. sparkDash uses a different set of prompts at each concurrency for the non-prose types, so per-stream values are not comparable across columns (structured c8 was re-run twice and reproduces). Raw output: [`docs/results/sweep-20260924-types.txt`](docs/results/sweep-20260924-types.txt). Sampled chat at the model card's T=1 / top_p=0.95 with thinking runs ~62 tok/s at c1 (sparkDash benches are greedy, where the draft temperature and block verification do not act).
 
 **Prefill, cold, tok/s by prompt length**
 
 | 4k | 16k | 32k | 64k | 128k | 262k |
 |---:|---:|---:|---:|---:|---:|
 | 3119 | 4001 | 4681 | 4675 | 4575 | 4206 |
+
+Single cold pass, raw output in [`docs/results/prodbench-20260924-current.txt`](docs/results/prodbench-20260924-current.txt).
 
 sparkDash's prefill filler is one repeated token, so every filler token hits the same Engram row and the row cache inflates these numbers by 9–20 % at 16k–128k (reported by koldfrontier in [MiaAI-Lab#21](https://github.com/MiaAI-Lab/DeepSeek-v4.1-Flash-DGX-Sparks/issues/21)); on random text the 2026-09-18 production engine measured 2.9k / 3.6k / 3.8k / 4.0k / 3.1k tok/s at 12k / 24k / 47k / 94k / 189k. Needle retrieval passes at 131k, 262k and 985k tokens (985k cold prefill 585 s, head `MemAvailable` low-water 5.0 GiB). Engine start to ready is ~2 minutes with the fast loader.
 
@@ -50,7 +50,7 @@ Every earlier measurement, the per-stage tables and the experiments that were tr
 |---|---|---|
 | Image | `Dockerfile.canary-roce` | upstream SGLang `dsv4.1` branch at `f80c91a4b` + rhys101's RoCEnante overlay + all adapters |
 | Slots | `MAX_RUNNING_REQUESTS=16` | adds the c16 tier |
-| Experts | `EP_SIZE=2`, `--enable-deepseek-v4-fp4-indexer` | two expert groups halve the per-layer straggler wait |
+| Experts | `EP_SIZE=2` | two expert groups halve the per-layer straggler wait |
 | Engram | `DSV41_CACHE_GIB=4`, `DSV41_CACHE_WAYS=16`, `DSV41_ENGRAM_PREFETCH=1` | row cache (67–76 % hits) and row lookups on a side stream, rows bit-identical |
 | Draft | `DSPARK_BLOCK_SIZE=5`, `SGLANG_DSPARK_FOLDED_SAMPLING=2` | k=5 wins on code, ties on prose; sampled requests stay in the CUDA graph |
 | Draft sampling | `DSV41_DRAFT_TAU=0.7`, `DSV41_BLOCK_VERIFY=1` | sharper draft proposals and block verification for sampled rows, both exact in distribution |
@@ -75,7 +75,7 @@ Relative to the upstream TP4 example, all of it in `.env.tp4.example` plus gated
 | `EP_SIZE` | 4 | **2** | Two expert groups instead of four halve the per-layer straggler wait: NCCL time per step 16.5 → 10.2 ms, MoE GEMM unchanged |
 | `DSV41_CACHE_GIB`/`WAYS` | 0/4 | **4/16** | Engram rows do repeat (bigram/trigram heads): 67–76 % hit rate, 4x fewer NVMe reads; 16 ways are free |
 | `--min-free-slots-delay 1` | on | on | Without it the admission delayer never fills the last slot |
-| `--enable-deepseek-v4-fp4-indexer` | off | **on** | FP4 DSA indexer kernel path |
+| `--enable-deepseek-v4-fp4-indexer` | off | on | no effect on V4.1: the model has no ratio-4 layers and its only indexer is fp4 by design; a four-boot A/B (off/on/off/on) gave identical greedy output and speed. Kept only so the argument line matches earlier runs |
 | `DSPARK_BLOCK_SIZE` | 3 | **5** | k=3 is a 3-node prose result; on TP4 k=5 wins on code by ~10 % and ties on prose |
 | `MAX_RUNNING_REQUESTS` | 8 | **16** | CUDA graphs to bs 16 cost ~5.6 GB and add a c16 tier (+64 % aggregate over c8) |
 | `CHUNKED_PREFILL_SIZE` | 1024 | **4096** | Safe only together with the indexer backport below |

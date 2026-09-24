@@ -5,6 +5,10 @@ raw results live under `docs/results/`.
 
 ## 2026-09-24
 
+- README decode table: all four sparkDash prompt types at c1-c16 on one boot
+  (`docs/results/sweep-20260924-types.txt`). `--enable-deepseek-v4-fp4-indexer` measured as a no-op on
+  V4.1 (four-boot off/on/off/on A/B: identical greedy output, speed and prefill; the model's only
+  indexer pool is fp4 by construction); the README no longer lists it as a kernel change.
 - README reduced to the current state; every dated table, note and rejected experiment moved
   unchanged to `docs/history.md`, the adapter reference to `docs/adapters.md`, the optional images and
   the switchless ring to `docs/optional-setups.md`. Current numbers re-measured on sparkDash 1.8.8:
