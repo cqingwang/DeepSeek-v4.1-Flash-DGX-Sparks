@@ -36,13 +36,18 @@ def main():
     ak.install(mod)
     env = {"cuda": "13.0"}
     assert mod._autotune_cache_digest(paths[0], env) == "", "no sidecar yet: must not be kept"
-    for rank in (0, 1):                                  # a tuning boot writes the sidecars
-        with mod.flashinfer_autotune_context(rank):
-            pass
+    assert not paths[0].exists(), "a cache without a matching sidecar must be deleted (forces a re-tune)"
+    for rank, shapes in ((0, ["(192, 2304, 320)"]), (1, ["(64, 2304, 320)"])):
+        with mod.flashinfer_autotune_context(rank):       # a tuning boot rewrites cache and sidecar
+            paths[rank].write_text(json.dumps({"_metadata": meta, **{s: [16, 36] for s in shapes}}))
     d0, d1 = mod._autotune_cache_digest(paths[0], env), mod._autotune_cache_digest(paths[1], env)
     assert d0 and d0 == d1, "disjoint EP shape sets with matching launches must digest alike"
     ak.sidecar(paths[1]).write_text("other-launch\n")
     assert mod._autotune_cache_digest(paths[1], env) == "", "a changed launch must drop the cache"
+    assert not paths[1].exists(), "and delete it, so no rank can load it"
+    fp_before = ak.launch_fingerprint()
+    os.environ["DSV41_REPLICATED_SPLIT"] = "wqkv_a"      # decode-side switch: volatile
+    assert ak.launch_fingerprint() == fp_before
     os.environ["DSV41_VERIFY_CAP"] = "conf:0.1"          # A/B-neutral switch: same fingerprint
     assert ak.launch_fingerprint() == ak.launch_fingerprint()
     fp_a = ak.launch_fingerprint()

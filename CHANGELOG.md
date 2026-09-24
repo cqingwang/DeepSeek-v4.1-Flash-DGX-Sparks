@@ -16,6 +16,12 @@ raw results live under `docs/results/`.
 - **`adapter/roce_gather.py`, `DSV41_ROCE_GATHER=2097152`, on.** TP all-gathers up to 2 MiB per rank
   over the RoCEnante one-shot kernel (the overlay built it with gathers disabled): draft logits
   gathers 600 -> 400 us per step.
+- `adapter/autotune_keep.py`: a cache whose launch fingerprint does not match is now deleted, not just
+  reported as non-matching (with every rank reporting "" the stock gate agreed and FlashInfer loaded
+  each rank's stale file anyway; found independently in MiaAI-Lab's port). Decode-side switches that
+  change neither the tuned MoE shapes nor their kernels (draft head fp8, Engram prefetch, the
+  replicated/draft splits, RoCE gathers, the DRM row cache, the logging switches) are volatile, so
+  toggling one reuses the tactics instead of re-drawing them for every A/B boot.
 - `DSV41_DRAFT_TAU` 0.8 -> 0.7: sampled thinking traffic (T=1, top_p 0.95) +1.8 % and +2.0 % on two
   disjoint prompt sets; greedy unaffected. The verify-length threshold was re-checked on the same
   sampled traffic (0.07 / 0.1 / 0.15: 61.3 / 61.2 / 61.3 tok/s) and on 45 varied greedy prompts (flat):

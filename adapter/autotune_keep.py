@@ -22,7 +22,16 @@ _PREFIXES = ("SGLANG_", "DSV41_", "SPARK_", "B12X_", "NCCL_")
 # Switches that change neither the GEMM shapes nor the kernels tuned: A/B arms over them share tactics.
 _VOLATILE = ("DSV41_DRAFT_CAPTURE", "DSV41_DRAFT_CAPTURE_OUT", "DSV41_DRAFT_CAPTURE_TRIGGER",
              "DSV41_DRAFT_CAPTURE_MAX_GIB", "DSV41_VERIFY_CAP", "DSV41_VERIFY_CAP_MIN", "DSV41_DRAFT_TAU",
-             "DSV41_BLOCK_VERIFY", "DSV41_FOLDED_FENCE", "DSV41_AUTOTUNE_KEEP")
+             "DSV41_BLOCK_VERIFY", "DSV41_FOLDED_FENCE", "DSV41_AUTOTUNE_KEEP",
+             # switches that change neither the tuned MoE shapes nor their kernels: toggling one must
+             # reuse the tactics, or every A/B boot re-draws them (which moves the numerics)
+             "DSV41_DRAFT_HEAD_FP8", "DSV41_ENGRAM_PREFETCH", "DSV41_ENGRAM_PREFETCH_CHECK",
+             "DSV41_REPLICATED_SPLIT", "DSV41_REPLICATED_SPLIT_MAX_M", "DSV41_DRAFT_MAIN_PROJ_SPLIT",
+             "DSV41_DRAFT_MAIN_PROJ_MAX_M", "DSV41_ROCE_GATHER", "DSV41_ROUTER_LIVE", "DSV41_DYN_SHARED",
+             "DSV41_DYN_SHARED_RATIO", "DSV41_DYN_SHARED_FIXED", "DSV41_DYN_SHARED_MAX_M",
+             "DSV41_DYN_SHARED_SERIAL", "DSV41_VERIFY_CAP_LOG", "DSV41_VERIFY_CAP_LOG_FEATURES",
+             "DSV41_ROUTE_STATS", "DSV41_ROUTE_RING", "DSV41_DRAFT_TAU_POS", "DSV41_ENGRAM_DRM_NODE",
+             "DSV41_ENGRAM_DRM_MIB", "DSV41_ENGRAM_DRM_LAYER")
 
 
 def launch_fingerprint() -> str:
@@ -56,8 +65,11 @@ def install(mod):
             configs = json.loads(cache_path.read_text())
             same_launch = sidecar(cache_path).read_text().strip() == fp
         except (OSError, ValueError):
-            return ""
+            configs, same_launch = None, False
         if not isinstance(configs, dict) or not same_launch:
+            # a different launch re-tunes: an empty digest alone would still let the stock code
+            # load the old file when every rank reports "" (they agree)
+            cache_path.unlink(missing_ok=True)
             return ""
         stamp = configs.get("_metadata")
         if not isinstance(stamp, dict):
