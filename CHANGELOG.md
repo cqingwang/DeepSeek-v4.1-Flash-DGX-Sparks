@@ -5,6 +5,11 @@ raw results live under `docs/results/`.
 
 ## 2026-09-24
 
+- README reduced to the current state; every dated table, note and rejected experiment moved
+  unchanged to `docs/history.md`, the adapter reference to `docs/adapters.md`, the optional images and
+  the switchless ring to `docs/optional-setups.md`. Current numbers re-measured on sparkDash 1.8.8:
+  prose c1 74.4 / c16 319.4, code c1 108.1, structured 133.4, json 104.3, prefill 262k 4206
+  (`docs/results/prodbench-20260924-current.txt`).
 - **`adapter/replicated_split.py`, `DSV41_REPLICATED_SPLIT=wqkv_a,engram.wkv`, on.** `ReplicatedLinear`
   layers made every rank stream the whole weight for the same output; the Engram `wkv` (183 MB) alone
   cost 2 x 756 us per c1 step. Each rank now runs the same quantized linear on its 128-row weight

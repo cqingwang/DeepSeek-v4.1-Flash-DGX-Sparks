@@ -1,0 +1,23 @@
+# 2026-09-24, production (.env.tp4.example production line), sparkDash 1.8.8. First two prose c1 lines are warm-ups (discarded).
+prose c1 per 72.36 agg 72.36
+prose c1 per 73.99 agg 73.99
+prose c1 per 73.94 agg 73.94
+prose c1 per 74.73 agg 74.73
+prose c1 per 74.4 agg 74.4
+prose c2 per 54 agg 102.86
+prose c4 per 36.83 agg 141.58
+prose c8 per 25.4 agg 191.65
+prose c16 per 20.85 agg 319.35
+code c1 per 108.12 agg 108.12
+code c8 per 37.18 agg 279.78
+code c16 per 26.65 agg 392.12
+structured c1 per 133.43 agg 133.43
+json c1 per 104.25 agg 104.25
+prefill 4115 tok/s 3118.5
+prefill 16403 tok/s 4000.6
+prefill 32787 tok/s 4681.48
+prefill 65556 tok/s 4675.37
+prefill 131091 tok/s 4575.34
+prefill 262164 tok/s 4206.01
+7
+BENCH-DONE

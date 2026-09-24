@@ -130,7 +130,7 @@ sgl-project/sglang, DeepGEMM, b12x, HuggingFace and the other public Spark recip
   `nvidia-smi -q -d CLOCK` on all four before trusting a benchmark.
 - tonyd2wild speed run 2: a lane that had served 15 h ran ~30 % slower on prefill than the same
   config fresh (cause open, a restart recovers it). Not measured here; before tuning anything on a
-  long-running fleet, run the prefill sweep and compare with the fresh-boot rows in the README.
+  long-running fleet, run the prefill sweep and compare with the fresh-boot rows in [history.md](history.md).
 - Mia #23: host buddy-allocator fragmentation after the weight load on GB10 (`NV_ERR_NO_MEMORY`
   with free memory, SSH dead, ICMP alive, power cycle). Reproduced on a 4x TP4/EP2 SGLang fleet at
   512k context; same signature as our 2026-09-18 Spark_02 wedge.
