@@ -19,6 +19,9 @@ raw results live under `docs/results/`.
 - **`adapter/router_live.py`, `DSV41_ROUTER_LIVE=1`, on.** The dead-row remap of the verify cap folded
   into the router kernel (dead rows load the anchor row's scores): 40 launches per step fewer, bit-identical.
   Step probe prose 36.76 -> 36.65 ms, code 43.55 -> 43.46 ms; 45 varied prompts +0.3 %.
+  Fresh clone of this state on all four nodes with the `.env.tp4.example` production line: in-image
+  tests pass, greedy outputs identical, sparkDash 1.8.8 prose c1 74.9 (74.93 / 74.93 / 74.81), code c1
+  108 / 113, qeval 72 of 75 (the usual three).
 - Measured and kept off: a dynamic shared-expert split between the EP groups (each rank holds half the
   shared expert, the group with fewer routed experts takes more columns per step, range-limited Triton
   kernels): step -1.7 % prose / -2.4 % code and +2-4 % on structured and sampled traffic, but not
