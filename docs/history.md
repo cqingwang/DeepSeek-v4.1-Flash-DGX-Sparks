@@ -4,6 +4,18 @@ Every dated table, note and rejected experiment that used to live in the README,
 
 All rows below were taken with sparkDash up to 1.8.6. sparkDash 1.8.7 replaced the code prompts (c1 and the concurrent waves), so the code columns here are not comparable with the README's current table; the prose, structured and prefill prompts are unchanged.
 
+## Production 2026-09-24 morning (EP2, FlashInfer MoE), sparkDash 1.8.8
+
+| prompt type | c1 | c2 | c4 | c8 | c16 |
+|---|---:|---:|---:|---:|---:|
+| prose | 74.8 | 101.9 (53.5) | 143.9 (37.4) | 192.9 (25.6) | 318.5 (20.8) |
+| code | 113.0 | 151.4 (75.7) | 212.6 (55.3) | 280.7 (37.3) | 391.8 (26.7) |
+| structured | 137.1 | 156.0 (88.1) | 196.1 (57.1) | 201.7 (35.7) | 517.2 (44.2) |
+| json | 105.6 | 164.8 (82.4) | 261.1 (65.6) | 398.2 (52.1) | 648.9 (41.8) |
+
+Prefill 4k / 16k / 32k / 64k / 128k / 262k: 3119 / 4001 / 4681 / 4675 / 4575 / 4206 tok/s. Raw output:
+[`results/sweep-20260924-types.txt`](results/sweep-20260924-types.txt), [`results/prodbench-20260924-current.txt`](results/prodbench-20260924-current.txt).
+
 ## Production stack as of 2026-09-24, with the full rationale per switch
 
 One image, one env file. Everything in the tables below labelled **production** is this stack. What changed when is in [CHANGELOG.md](../CHANGELOG.md):

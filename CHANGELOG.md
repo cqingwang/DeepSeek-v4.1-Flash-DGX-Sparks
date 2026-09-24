@@ -3,6 +3,31 @@
 Newest first. Each entry says what changed in the production stack and what was measured; the
 raw results live under `docs/results/`.
 
+## 2026-09-24 (evening)
+
+- **`EP_SIZE=1` with the routed MoE on b12x main, `DSV41_MOE_B12X_NEXT=1`, on.** Every rank holds a
+  576-wide slice of all 384 experts, so no expert group waits for the other at the MoE all-reduce
+  (all-reduce 5.9 -> ~2.6 ms per decode step at c1, the wait was ~3.5 ms of it). FlashInfer's MXFP4
+  MoE cannot run 576-wide experts; `adapter/moe_b12x_next.py` runs them on b12x main
+  (`runtime/b12x_next`, commit a7d7d29b, renamed beside the SG17 b12x that RoCEnante needs). Two plan
+  fixes were needed: `dynamic` instead of `micro` at <= 8 rows (523 -> 349 us per MoE call) and 64-row
+  tiles from 2048 rows at prefill (b12x pinned 576-wide experts to 16-row tiles; two-line patch,
+  output bit-identical to the 16-row path). `DSV41_MOE_B12X_NEXT_DETERMINISTIC=1`: fixed-order
+  reduction instead of atomics, no measurable cost, greedy output bit-identical run to run.
+  Fresh clone: sparkDash prose c1 74.8 -> 84.6, c4 143.9 -> 160.4, c16 319 -> 340; code c1 108 -> 121;
+  structured 133 -> 146; json 104 -> 119; prefill 32k-262k 4206-4681 -> 4264-4870; qeval 72/75.
+  Tested and not adopted: folding the fp8 shared expert into the b12x call (b12x has no fp8 weight
+  source; a byte-equivalent proxy was slower than the side stream), the CPU deep-idle states and
+  batched AIO Engram lookups (flat once warm), a warm-started Engram row cache (flat), and
+  `--enable-deepseek-v4-fp4-indexer` (a no-op on V4.1). `DSV41_VERIFY_CAP=conf:0.1` re-checked at EP1
+  against 0.05 / 0.15 / 0.2: kept.
+- **`adapter/fast_load.py`:** at EP1 each rank reads only its slice of every expert
+  (`DSV41_FAST_LOAD_TP_SLICE=auto`; 144.5 GiB read, 83 GB kept) into 256 MiB pinned slabs (330
+  allocations instead of ~94k), which gave back ~0.7M tokens of KV pool. Engine start ~170 s.
+- **`adapter/hc_fused.py`, `DSV41_HC_FUSED=1`:** prefill-size hyper-connection mix statistics in one
+  pass over K, bit-identical to the stock kernels (checked on the first live call): ~1.46 -> ~0.83 ms
+  per call at 4096 rows.
+
 ## 2026-09-24
 
 - README decode table: all four sparkDash prompt types at c1-c16 on one boot

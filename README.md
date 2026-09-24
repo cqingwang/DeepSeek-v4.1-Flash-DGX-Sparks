@@ -14,34 +14,33 @@ Other work this profile builds on:
 - **rhys101**, [DeepSeek-V4.1-Flash-vLLM-DGX-Spark-8](https://github.com/rhys101/DeepSeek-V4.1-Flash-vLLM-DGX-Spark-8): the SG17 SGLang overlay that routes small tensor-parallel all-reduces to RoCEnante (reused with a TP4 adaptation in `Dockerfile.canary-roce`) and the SG18 native prefill TP split (`adapter/spark_prefill_dense.py`, combined with the indexer backport in `adapter/indexer_chunked_v3.py`).
 - **local-inference-lab / Luke Alonso and Jason (original-el8)**, [b12x](https://github.com/local-inference-lab/b12x): RoCEnante, the one-shot RDMA all-reduce (`runtime/b12x`, Apache-2.0, frozen at the SG17 revision), and the fused MoE kernels that run the routed experts (`runtime/b12x_next`: b12x main at `a7d7d29b`, renamed so both revisions live in one image, with a two-line patch that admits 64-row tiles for 576-wide experts at prefill sizes).
 - **luxingcom (LuZ)**, [LuZ DGX Spark TP4 ring](https://github.com/luxingcom/LuZ-0.1.7-DeepSeek-v4.1-Flash-DGXspark-TP4-Ring): the first integration of b12x's fused MoE into SGLang on a four-Spark fleet, which showed the route.
+- **sumsliu**, [dgx-spark-deepseek-v41](https://github.com/sumsliu/dgx-spark-deepseek-v41): the eight-Spark measurement that moving to expert tensor parallelism removes most of the all-reduce wait.
 - **MiaAI-Lab/sparkDash**, the benchmark used for every number below.
 
 ## Current results
 
-Production stack (the last `EXTRA_CONTAINER_ENV` line of [`.env.tp4.example`](.env.tp4.example), `Dockerfile.canary-roce` image), sparkDash 1.8.8 decode and prefill benches, 256 new tokens, temperature 0, thinking off, idle fleet, measured 2026-09-24. Boot-to-boot spread is about ±2 % on c1.
+Production stack (the last `EXTRA_CONTAINER_ENV` line of [`.env.tp4.example`](.env.tp4.example) with `EP_SIZE=1`, `Dockerfile.canary-roce` image), built from a fresh clone of this repository on all four nodes and measured on that image with sparkDash 1.8.8: 256 new tokens, temperature 0, thinking off, idle fleet, 2026-09-24. Engine start to healthy 170 s; KV pool 6.56M tokens (1M context). Raw output: [`docs/results/validation-20260924-ep1.txt`](docs/results/validation-20260924-ep1.txt).
 
 **Decode, aggregate tok/s (per stream in brackets)**
 
 | prompt type | c1 | c2 | c4 | c8 | c16 |
 |---|---:|---:|---:|---:|---:|
-| prose | **74.8** | 101.9 (53.5) | 143.9 (37.4) | 192.9 (25.6) | 318.5 (20.8) |
-| code | 113.0 | 151.4 (75.7) | 212.6 (55.3) | 280.7 (37.3) | 391.8 (26.7) |
-| structured | 137.1 | 156.0 (88.1) | 196.1 (57.1) | 201.7 (35.7) | 517.2 (44.2) |
-| json | 105.6 | 164.8 (82.4) | 261.1 (65.6) | 398.2 (52.1) | 648.9 (41.8) |
+| prose | **84.6** | 118.0 (60.6) | 160.4 (40.5) | 231.6 (30.1) | 339.8 (22.1) |
+| code | 120.9 | 172.7 (87.2) | 241.6 (61.9) | 303.3 (40.6) | 436.9 (29.2) |
+| structured | 146.0 | 172.5 (100.6) | 232.8 (68.4) | 286.4 (42.9) | 565.5 (44.6) |
+| json | 119.2 | 168.5 (86.9) | 299.4 (75.7) | 461.3 (58.9) | 658.7 (42.7) |
 
-Prose c1 is the median of three runs (74.9 / 74.8 / 74.7) after two discarded warm-ups; the other cells are single runs. sparkDash uses a different set of prompts at each concurrency for the non-prose types, so per-stream values are not comparable across columns (structured c8 was re-run twice and reproduces). Raw output: [`docs/results/sweep-20260924-types.txt`](docs/results/sweep-20260924-types.txt). Sampled chat at the model card's T=1 / top_p=0.95 with thinking runs ~62 tok/s at c1 (sparkDash benches are greedy, where the draft temperature and block verification do not act).
+Prose c1 is the median of seven runs (84.2-85.2) after two discarded warm-ups; other boots of the same stack gave medians of 85.0-85.2. With the deterministic MoE reduction the greedy text is identical run to run, so the sparkDash numbers repeat within about ±1 tok/s. On 45 varied prompts (prose, structured and other catalogs, c1 greedy) the same image runs 57.4 / 92.9 / 70.8 tok/s. sparkDash uses a different set of prompts at each concurrency for the non-prose types, so per-stream values are not comparable across columns. Sampled chat at the model card's T=1 / top_p=0.95 with thinking runs ~62 tok/s at c1 (measured on the previous stack; sparkDash benches are greedy, where the draft temperature and block verification do not act).
 
-**Prefill, cold, tok/s by prompt length**
+**Prefill, cold, tok/s by prompt length** (two passes)
 
 | 4k | 16k | 32k | 64k | 128k | 262k |
 |---:|---:|---:|---:|---:|---:|
-| 3119 | 4001 | 4681 | 4675 | 4575 | 4206 |
+| 2449 / 3986 | 4784 / 4753 | 4870 / 4805 | 4815 / 4762 | 4721 / 4722 | 4264 / 4447 |
 
-Single cold pass, raw output in [`docs/results/prodbench-20260924-current.txt`](docs/results/prodbench-20260924-current.txt).
+The 4k point of the first pass is the first request after the benches. sparkDash's prefill filler is one repeated token, so every filler token hits the same Engram row and the row cache inflates these numbers (reported by koldfrontier in [MiaAI-Lab#21](https://github.com/MiaAI-Lab/DeepSeek-v4.1-Flash-DGX-Sparks/issues/21)); on real text (documentation and source code, a unique prefix per prompt so nothing comes from the prefix cache) the same image measured 4003-4077 / 4154-4255 / 4144-4258 / 4138-4189 / 4092-4093 tok/s at ~4k / ~15k / ~29k / ~60k / ~113k tokens. Needle retrieval (a list lookup): passes at 129k tokens; at 259k some keys pass and some miss on both this stack and the previous FlashInfer/EP2 stack (key 17777 misses on both, 20001 and 3333 pass on both), a limit of the model at that length rather than of either stack. Engine start to ready is ~3 minutes with the fast loader.
 
-sparkDash's prefill filler is one repeated token, so every filler token hits the same Engram row and the row cache inflates these numbers by 9–20 % at 16k–128k (reported by koldfrontier in [MiaAI-Lab#21](https://github.com/MiaAI-Lab/DeepSeek-v4.1-Flash-DGX-Sparks/issues/21)); on random text the 2026-09-18 production engine measured 2.9k / 3.6k / 3.8k / 4.0k / 3.1k tok/s at 12k / 24k / 47k / 94k / 189k. Needle retrieval passes at 131k, 262k and 985k tokens (985k cold prefill 585 s, head `MemAvailable` low-water 5.0 GiB). Engine start to ready is ~2 minutes with the fast loader.
-
-**Quality.** `scripts/qeval.py` runs 75 auto-scored tasks (code executed against hidden asserts, JSON schema-checked, numeric answers matched, format constraints enforced, prose checked for degeneration; no LLM judge), one request at a time, temperature 0. Current production scores 72 of 75; the three misses (`code_interval_intersect`, `json_escape`, `math_m9`) fail identically on the upstream example. Every speed change here is meant to be lossless: same weights, every draft token verified by the target, and each adapter either bit-identical to the stock path (checked at boot or in the in-image tests) or exact in distribution (draft temperature, block verification). RoCEnante sums in a different order than NCCL, so the numerics are not bit-identical to an NCCL run, which is why the profile is also scored. Run qeval from a worker, not from the head (it executes model-generated Python).
+**Quality.** `scripts/qeval.py` runs 75 auto-scored tasks (code executed against hidden asserts, JSON schema-checked, numeric answers matched, format constraints enforced, prose checked for degeneration; no LLM judge), one request at a time, temperature 0. The fresh-clone image scores 72 of 75 (the previous stack 71-72); the three misses (`code_interval_intersect`, `json_escape`, `math_m9`) fail identically on the upstream example. Every speed change here is meant to be lossless: same weights, every draft token verified by the target, and each adapter either bit-identical to the stock path (checked at boot or in the in-image tests) or exact in distribution (draft temperature, block verification). RoCEnante sums in a different order than NCCL, so the numerics are not bit-identical to an NCCL run, which is why the profile is also scored. Run qeval from a worker, not from the head (it executes model-generated Python).
 
 Every earlier measurement, the per-stage tables and the experiments that were tried and not adopted are in [docs/history.md](docs/history.md); what changed when is in [CHANGELOG.md](CHANGELOG.md).
 
