@@ -23,12 +23,6 @@ def test_twin_is_exact():
     assert torch.equal(back.to(torch.bfloat16), w)
 
 
-def test_view_accepts_tp3_groups():
-    # Padded TP3 is 4 local o_groups; the twin path must see [4, 1024, 4096].
-    w = torch.empty(4 * 1024, 4096, dtype=torch.bfloat16)
-    assert tuple(wo_a_w8._wo_a_view(w).shape) == (4, 1024, 4096)
-
-
 def test_non_representable_is_rejected():
     w = torch.randn(2, 1024, 4096).to(torch.bfloat16)      # bf16 mantissas e4m3 cannot hold
     assert wo_a_w8.make_twin(w) is None
@@ -58,7 +52,6 @@ def test_patch_and_drift_guard():
 
 if __name__ == "__main__":
     test_twin_is_exact()
-    test_view_accepts_tp3_groups()
     test_non_representable_is_rejected()
     test_patch_and_drift_guard()
     print("test_wo_a_w8: ok")

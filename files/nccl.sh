@@ -5,6 +5,10 @@
 # The underlying NCCL transport patch is from FujitsuPolycom/sparkring.
 # Sourced by start.sh; no probing or side effects at import time.
 
+switchless_ring_enabled() {
+  [[ "${NCCL_SWITCHLESS_RING_ONLY:-0}" == "1" ]]
+}
+
 nccl_library() {
   local dir="$1" name
   for name in libnccl.so.2.30.7 libnccl.so.2; do
@@ -41,8 +45,35 @@ nccl_mount_args() {
   fi
 }
 
+dual_pci_domain_args() {
+  [[ "${NCCL_IB_EXTENDED_IPV4_GIDS:-0}" == 1 ]] || return 0
+  local array_name="$1"
+  _nccl_array_append "$array_name" -e NCCL_IB_EXTENDED_IPV4_GIDS=1 \
+    -e "NCCL_IB_PRESERVE_PCI_DOMAIN=${NCCL_IB_PRESERVE_PCI_DOMAIN:-1}" \
+    -e "NCCL_IB_ROUTE_DIAGNOSTICS=${NCCL_IB_ROUTE_DIAGNOSTICS:-1}" \
+    -e "NCCL_IB_QPS_PER_CONNECTION=${NCCL_IB_QPS_PER_CONNECTION:-1}"
+}
+
+dual_pci_domain_env_string() {
+  [[ "${NCCL_IB_EXTENDED_IPV4_GIDS:-0}" == 1 ]] || return 0
+  printf -- '-e NCCL_IB_EXTENDED_IPV4_GIDS=1 -e %q -e %q -e %q' \
+    "NCCL_IB_PRESERVE_PCI_DOMAIN=${NCCL_IB_PRESERVE_PCI_DOMAIN:-1}" \
+    "NCCL_IB_ROUTE_DIAGNOSTICS=${NCCL_IB_ROUTE_DIAGNOSTICS:-1}" \
+    "NCCL_IB_QPS_PER_CONNECTION=${NCCL_IB_QPS_PER_CONNECTION:-1}"
+}
+
+nccl_gid_publication_check() {
+  switchless_ring_enabled || return 0
+  local -a hcas=()
+  IFS=, read -r -a hcas <<<"${IB_HCA#=}"
+  (( ${#hcas[@]} > 2 )) || return 0
+  [[ "${NCCL_IB_EXTENDED_IPV4_GIDS:-0}" == 1 ]] && return 0
+  echo "warning: IB_HCA lists ${#hcas[@]} devices (${hcas[*]}) but listener GID publication is capped at 2" >&2
+  echo "warning: set NCCL_IB_EXTENDED_IPV4_GIDS=1 with a dual-PCI-domain NCCL build" >&2
+}
+
 switchless_ring_args() {
-  [[ "${NCCL_SWITCHLESS_RING_ONLY:-0}" == 1 ]] || return 0
+  switchless_ring_enabled || return 0
   local array_name="$1"
   _nccl_array_append "$array_name" -e NCCL_SWITCHLESS_RING_ONLY=1 \
     -e "NCCL_ALGO=${NCCL_ALGO:-Ring}"
@@ -50,6 +81,20 @@ switchless_ring_args() {
     -e "NCCL_IB_SUBNET_PREFIX_LEN=${NCCL_IB_SUBNET_PREFIX_LEN:-24}" \
     -e "NCCL_MIN_NCHANNELS=${NCCL_MIN_NCHANNELS:-4}" \
     -e "NCCL_P2P_LEVEL=${NCCL_P2P_LEVEL:-SYS}"
+  dual_pci_domain_args "$array_name"
+}
+
+switchless_ring_env_string() {
+  switchless_ring_enabled || return 0
+  printf -- '-e NCCL_SWITCHLESS_RING_ONLY=1 -e %q -e %q -e %q -e %q -e %q' \
+    "NCCL_ALGO=${NCCL_ALGO:-Ring}" \
+    "NCCL_SKIP_TREE_CONNECT=${NCCL_SKIP_TREE_CONNECT:-1}" \
+    "NCCL_IB_SUBNET_PREFIX_LEN=${NCCL_IB_SUBNET_PREFIX_LEN:-24}" \
+    "NCCL_MIN_NCHANNELS=${NCCL_MIN_NCHANNELS:-4}" \
+    "NCCL_P2P_LEVEL=${NCCL_P2P_LEVEL:-SYS}"
+  local extra
+  extra=$(dual_pci_domain_env_string)
+  [[ -z "$extra" ]] || printf ' %s' "$extra"
 }
 
 nccl_validate_config() {
@@ -62,11 +107,11 @@ nccl_validate_config() {
     return 1
   fi
   [[ "${NCCL_SWITCHLESS_RING_ONLY:-0}" == 1 ]] || return 0
-  if [[ "$NNODES" != 4 || "$TP_SIZE" != 4 || "$EP_SIZE" != 4 ||
+  if [[ "$NNODES" != 4 || "$TP_SIZE" != 4 || ! "$EP_SIZE" =~ ^[1-9][0-9]*$ || "$EP_SIZE" -gt "$TP_SIZE" ||
         "$NCCL_OVERLAY_PIP" != 1 || "${NCCL_ALGO:-Ring}" != Ring ||
         "$NCCL_NET" != IB || "$NCCL_IB_DISABLE" != 0 ||
         "${NCCL_IB_SUBNET_AWARE_ROUTING:-1}" != 1 ]]; then
-    echo 'Ring requires NNODES=TP_SIZE=EP_SIZE=4, NCCL_OVERLAY_PIP=1, NCCL_ALGO=Ring, NCCL_NET=IB, NCCL_IB_DISABLE=0 and subnet-aware routing=1' >&2
+    echo 'Ring requires NNODES=TP_SIZE=4, 1 <= EP_SIZE <= TP_SIZE, NCCL_OVERLAY_PIP=1, NCCL_ALGO=Ring, NCCL_NET=IB, NCCL_IB_DISABLE=0 and subnet-aware routing=1' >&2
     return 1
   fi
   local minimum="${NCCL_MIN_NCHANNELS:-4}" maximum="${NCCL_MAX_NCHANNELS:-32}"
@@ -126,7 +171,10 @@ ring_gid_index() {
 
 nccl_preflight() {
   local library
-  if [[ "$NCCL_OVERLAY_PIP" == 1 || "${NCCL_SWITCHLESS_RING_ONLY:-0}" == 1 ]]; then
+  switchless_ring_enabled || {
+    [[ "${NCCL_OVERLAY_PIP:-0}" == 1 ]] || return 0
+  }
+  if [[ "${NCCL_OVERLAY_PIP:-0}" == 1 || "${NCCL_SWITCHLESS_RING_ONLY:-0}" == 1 ]]; then
     library=$(nccl_library "$NCCL_HOST_DIR") || {
       echo "NCCL: no readable library in $NCCL_HOST_DIR" >&2; return 1;
     }
@@ -142,7 +190,7 @@ nccl_preflight() {
       echo "NCCL: $IMAGE lacks the pip library at $NCCL_PIP_SO" >&2; return 1;
     }
   fi
-  if [[ "${NCCL_SWITCHLESS_RING_ONLY:-0}" == 1 ]]; then ring_gid_index || return 1; fi
+  if switchless_ring_enabled; then ring_gid_index || return 1; fi
   return 0
 }
 
@@ -160,5 +208,6 @@ nccl_worker_settings() {
   for key in NCCL_OVERLAY_PIP NCCL_PIP_SO NCCL_CONTAINER_DIR NCCL_SWITCHLESS_RING_ONLY IB_HCA IMAGE NCCL_IB_GID_INDEX; do
     printf '%s=%q\n' "$key" "${!key:-}"
   done
-  declare -f nccl_library nccl_mount_args ring_gid_index nccl_preflight
+  declare -f switchless_ring_enabled nccl_library nccl_mount_args ring_gid_index \
+    nccl_preflight dual_pci_domain_args dual_pci_domain_env_string nccl_gid_publication_check
 }

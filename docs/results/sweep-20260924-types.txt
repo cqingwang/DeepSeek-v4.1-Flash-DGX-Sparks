@@ -1,0 +1,28 @@
+# 2026-09-24 16:06 sparkDash media-showcase-149-g754f40a flags: --enable-deepseek-v4-fp4-indexer
+prose c1 per 74.94 agg 74.94
+prose c1 per 74.81 agg 74.81
+prose c1 per 74.65 agg 74.65
+prose c2 per 53.47 agg 101.92
+prose c4 per 37.39 agg 143.85
+prose c8 per 25.56 agg 192.87
+prose c16 per 20.82 agg 318.49
+code c1 per 113.02 agg 113.02
+code c2 per 75.7 agg 151.39
+code c4 per 55.33 agg 212.64
+code c8 per 37.3 agg 280.72
+code c16 per 26.73 agg 391.76
+structured c1 per 137.07 agg 137.07
+structured c2 per 88.1 agg 156.04
+structured c4 per 56.7 agg 194.17
+structured c8 per 33.83 agg 192.55
+structured c16 per 41.22 agg 483.72
+json c1 per 105.55 agg 105.55
+json c2 per 82.39 agg 164.77
+json c4 per 65.62 agg 261.09
+json c8 per 52.12 agg 398.23
+json c16 per 41.83 agg 648.93
+SWEEP-DONE
+structured c4 per 57.07 agg 196.07 min 
+structured c8 per 35.62 agg 201.68 min 
+structured c16 per 44.23 agg 517.2 min 
+structured c8 per 35.77 agg 201.7 min 

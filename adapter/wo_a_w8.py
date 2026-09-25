@@ -7,16 +7,11 @@ wo_a (e4m3 values plus one exponent per 32x32 block), built after load and kept 
 reconstructs the bf16 weight exactly, and runs a copy of `_wo_a_partial` that loads the e4m3 tile
 and its exponent and rebuilds the same bf16 tile in registers before the same `tl.dot`.
 
-Half the weight bytes for the same operand values. Measured on GB10 (TP4, G=2, 43 layers, M=6):
+Half the weight bytes for the same operand values. Measured on GB10 (TP4 shape, 43 layers, M=6):
 3.43 -> 2.20 ms; the MXFP8-epilogue path (what production runs) is bitwise identical to the stock
 kernel; the plain bf16 path differs only in the MMA's fp32 accumulation order (1 bf16 ulp on
 0.016 % of outputs). Only 2 <= M <= 8 rows take the new kernel (verify at bs=1, the draft block);
 every other shape and any layer whose twin is not exact stays on the stock path.
-
-The group count is the local o_groups shard: 2 at TP4, 4 at padded TP3 (o_groups 8→12). dev-dsv41
-has no wo_a_bf16 small-batch module; there the same kernels are dispatched from
-_apply_wo_a_bf16_matmul, and rows 9..192 run only while a decode or verify forward is on the stack
-so a short prefill stays on einsum.
 
 DSV41_WO_A_W8_MID=1 (with DSV41_WO_A_W8=1): verify/draft calls with 9..192 rows (c2..c32) also read
 the twin, in a second Triton kernel tuned on GB10 with DRAM-resident weights (bf16 bmm 84-134 us per
@@ -34,26 +29,11 @@ import triton
 import triton.language as tl
 
 ENABLED = os.environ.get("DSV41_WO_A_W8", "0").strip() not in ("0", "", "off", "false")
-_TWINS = {}          # bf16 weight data_ptr -> (e4m3 [G,1024,4096], exponent uint8 [G,32,128])
-_CTX = {"spec": False}   # True during decode / target-verify / draft-extend forwards
-
-
-def _wo_a_view(w):
-    """Local wo_a as [G, 1024, 4096]. G is 2 at TP4 and 4 when TP3 pads o_groups 8→12."""
-    if w is None or w.dtype != torch.bfloat16:
-        return None
-    if w.dim() == 3 and tuple(w.shape[1:]) == (1024, 4096) and 1 <= w.shape[0] <= 8:
-        return w if w.is_contiguous() else w.contiguous()
-    row = 1024 * 4096
-    if w.numel() % row == 0:
-        g = w.numel() // row
-        if 1 <= g <= 8:
-            return w.data.view(g, 1024, 4096)
-    return None
+_TWINS = {}          # bf16 weight data_ptr -> (e4m3 [2,1024,4096], exponent uint8 [2,32,128])
 
 
 @triton.jit
-def _wo_a_partial_w8(X, W8, S, P, M: tl.constexpr, SX: tl.constexpr, G: tl.constexpr):
+def _wo_a_partial_w8(X, W8, S, P, M: tl.constexpr, SX: tl.constexpr):
     tile, group, split = tl.program_id(0), tl.program_id(1), tl.program_id(2)
     m = tl.arange(0, 16)
     n = tile * 64 + tl.arange(0, 64)
@@ -69,7 +49,7 @@ def _wo_a_partial_w8(X, W8, S, P, M: tl.constexpr, SX: tl.constexpr, G: tl.const
         w = (w8.to(tl.float32) * tl.exp2(e.to(tl.float32) - 127.0)).to(tl.bfloat16)
         acc += tl.dot(x, w)
     tl.store(
-        P + ((split * M + m[:, None]) * G + group) * 1024 + n[None, :],
+        P + ((split * M + m[:, None]) * 2 + group) * 1024 + n[None, :],
         acc,
         m[:, None] < M,
     )
@@ -91,14 +71,9 @@ def make_twin(w: torch.Tensor):
 
 def _partial_w8(x, twin, m):
     w8, s = twin
-    g = w8.shape[0]
-    partial = torch.empty((8, m, g, 1024), dtype=torch.float32, device=x.device)
-    _wo_a_partial_w8[(16, g, 8)](x, w8, s, partial, m, x.stride(0), g, num_warps=4, num_stages=3)
+    partial = torch.empty((8, m, 2, 1024), dtype=torch.float32, device=x.device)
+    _wo_a_partial_w8[(16, 2, 8)](x, w8, s, partial, m, x.stride(0), num_warps=4, num_stages=3)
     return partial
-
-
-def _fp8_small(x, twin):
-    return _partial_w8(x, twin, x.shape[0]).sum(dim=0).to(torch.bfloat16)
 
 
 MID = os.environ.get("DSV41_WO_A_W8_MID", "0").strip() not in ("0", "", "off", "false")
@@ -109,7 +84,7 @@ _MID_CFG = ((16, (4, 16, 64, 8)), (32, (2, 32, 32, 4)), (64, (1, 64, 32, 4)), (1
 
 @triton.jit
 def _wo_a_mid_kernel(X, W8, S, Y, M, SXM, SPLIT_K: tl.constexpr, BM: tl.constexpr, BN: tl.constexpr,
-                     BK: tl.constexpr, G: tl.constexpr):
+                     BK: tl.constexpr):
     pid_n = tl.program_id(0)
     g = tl.program_id(1)
     pid_mk = tl.program_id(2)
@@ -126,27 +101,25 @@ def _wo_a_mid_kernel(X, W8, S, Y, M, SXM, SPLIT_K: tl.constexpr, BM: tl.constexp
         e = tl.load(S + g * 32 * 128 + (n[None, :] // 32) * 128 + k[:, None] // 32)
         w = (w8.to(tl.float32) * tl.exp2(e.to(tl.float32) - 127.0)).to(tl.bfloat16)
         acc += tl.dot(x, w)
-    row: tl.constexpr = G * 1024
     if SPLIT_K == 1:
-        tl.store(Y + m[:, None] * row + g * 1024 + n[None, :], acc.to(tl.bfloat16), m[:, None] < M)
+        tl.store(Y + m[:, None] * 2048 + g * 1024 + n[None, :], acc.to(tl.bfloat16), m[:, None] < M)
     else:
         # per-split partials, summed in a fixed order afterwards (atomics made the order random)
-        tl.store(Y + pid_k * M * row + m[:, None] * row + g * 1024 + n[None, :], acc, m[:, None] < M)
+        tl.store(Y + pid_k * M * 2048 + m[:, None] * 2048 + g * 1024 + n[None, :], acc, m[:, None] < M)
 
 
 def wo_a_mid(o, twin):
-    """o [M, G, 4096] (stride (>=G*4096, 4096, 1)) bf16, 9 <= M <= 192 -> bf16 [M, G, 1024]."""
+    """o [M, 2, 4096] (stride (>=8192, 4096, 1)) bf16, 9 <= M <= 192 -> bf16 [M, 2, 1024]."""
     w8, s = twin
     m = o.shape[0]
-    g = w8.shape[0]
     sk, bm, bn, warps = next(cfg for lim, cfg in _MID_CFG if m <= lim)
-    grid = (1024 // bn, g, triton.cdiv(m, bm) * sk)
+    grid = (1024 // bn, 2, triton.cdiv(m, bm) * sk)
     if sk == 1:
-        y = torch.empty((m, g, 1024), dtype=torch.bfloat16, device=o.device)
-        _wo_a_mid_kernel[grid](o, w8, s, y, m, o.stride(0), 1, bm, bn, 128, g, num_warps=warps, num_stages=3)
+        y = torch.empty((m, 2, 1024), dtype=torch.bfloat16, device=o.device)
+        _wo_a_mid_kernel[grid](o, w8, s, y, m, o.stride(0), 1, bm, bn, 128, num_warps=warps, num_stages=3)
         return y
-    y = torch.empty((sk, m, g, 1024), dtype=torch.float32, device=o.device)
-    _wo_a_mid_kernel[grid](o, w8, s, y, m, o.stride(0), sk, bm, bn, 128, g, num_warps=warps, num_stages=3)
+    y = torch.empty((sk, m, 2, 1024), dtype=torch.float32, device=o.device)
+    _wo_a_mid_kernel[grid](o, w8, s, y, m, o.stride(0), sk, bm, bn, 128, num_warps=warps, num_stages=3)
     return y.sum(dim=0).to(torch.bfloat16)
 
 
@@ -171,10 +144,8 @@ def _dequant_kernel(W8, S, OUT):
 def dequant_into_scratch(twin, device):
     # a fresh buffer per call: the caching allocator orders reuse per stream, so target and draft
     # work on different streams never share it (one shared scratch raced)
-    w8, s = twin
-    g, r, d = w8.shape
-    buf = torch.empty((g, r, d), dtype=torch.bfloat16, device=device)
-    _dequant_kernel[(g, r // 32, d // 32)](w8, s, buf)
+    buf = torch.empty((2, 1024, 4096), dtype=torch.bfloat16, device=device)
+    _dequant_kernel[(2, 32, 128)](twin[0], twin[1], buf)
     return buf
 
 
@@ -183,18 +154,16 @@ def drop_bf16(model):
     becomes a zero-stride view of a 1-element tag (unique data_ptr, correct shape), and every call
     is served from the twin by the wrapper in install_mid."""
     freed = mismatched = 0
-    freed_bytes = 0
     for mod in model.modules():
         wo_a = getattr(mod, "wo_a", None)
         w = getattr(wo_a, "weight", None)
-        w3 = _wo_a_view(w)
-        if w3 is None:
+        if w is None or w.dtype != torch.bfloat16 or w.numel() != 2 * 1024 * 4096:
             continue
-        old_ptr = w3.data_ptr()
+        old_ptr = w.data.view(2, 1024, 4096).data_ptr()
         twin = _TWINS.get(old_ptr)
         if twin is None:
             continue
-        if not torch.equal(dequant_into_scratch(twin, w.device), w3):
+        if not torch.equal(dequant_into_scratch(twin, w.device), w.data.view(2, 1024, 4096)):
             mismatched += 1
             continue                   # the stock path must see the identical bf16 weight
         del _TWINS[old_ptr]            # the freed address may be reused by another tensor
@@ -203,9 +172,8 @@ def drop_bf16(model):
         _TWINS[tag.data_ptr()] = twin
         _DROPPED.add(tag.data_ptr())
         freed += 1
-        freed_bytes += w3.numel() * w3.element_size()
     torch.cuda.empty_cache()
-    print(f"[wo_a_w8] released the bf16 copy of {freed} wo_a weights ({freed_bytes / 2**20:.0f} MB); "
+    print(f"[wo_a_w8] released the bf16 copy of {freed} wo_a weights ({freed * 16.8:.0f} MB); "
           f"{mismatched} kept (dequantized copy not bit-identical)", flush=True)
 
 
@@ -218,19 +186,15 @@ def install_mid(dsv4_module):
 
     swizzled = getattr(dsv4_module, "Mxfp8SwizzledInput", None)
 
-    def _shape_ok(o, twin):
-        g = twin[0].shape[0]
-        return (o.dtype == torch.bfloat16 and o.ndim == 3 and tuple(o.shape[1:]) == (g, 4096)
-                and o.stride(2) == 1 and o.stride(1) == 4096 and o.stride(0) >= g * 4096)
-
     def _dropped_path(o, wo_a, twin, m, a, kw):
-        std = _shape_ok(o, twin)
+        std = (o.dtype == torch.bfloat16 and o.shape[1:] == (2, 4096) and o.stride(2) == 1
+               and o.stride(1) == 4096 and o.stride(0) >= 8192)
         if std and 2 <= m <= 8:
             p = _partial_w8(o, twin, m)
             if kw.get("fuse_mxfp8_quant", False) and swizzled is not None:
                 return swizzled(*_REFS["quantize_partial"](p))
-            result = torch.empty((m, p.shape[2], 1024), dtype=o.dtype, device=o.device)
-            _REFS["reduce_k"][(triton.cdiv(m * p.shape[2] * 1024, 256),)](p, result, m * p.shape[2] * 1024, num_warps=4)
+            result = torch.empty((m, 2, 1024), dtype=o.dtype, device=o.device)
+            _REFS["reduce_k"][(triton.cdiv(m * 2048, 256),)](p, result, m * 2048, num_warps=4)
             return result
         if std and 9 <= m <= 192 and kw.get("is_target_verify", False) and not kw.get("is_prefill", False):
             return wo_a_mid(o, twin)
@@ -245,7 +209,8 @@ def install_mid(dsv4_module):
         # verify/draft graphs only: prefill keeps the stock kernel (identical prefill numerics)
         if 9 <= m <= 192 and kw.get("is_target_verify", False) and not kw.get("is_prefill", False):
             twin = _TWINS.get(wo_a.data_ptr())
-            if twin is not None and _shape_ok(o, twin):
+            if (twin is not None and o.dtype == torch.bfloat16 and o.shape[1:] == (2, 4096)
+                    and o.stride(2) == 1 and o.stride(1) == 4096 and o.stride(0) >= 8192):
                 return wo_a_mid(o, twin)
         return orig(o, wo_a, *a, **kw)
 
@@ -268,10 +233,8 @@ def _patch_kernels(dsv4_module, kernel_module):
         if twin is None:
             return orig_small(x, weight)
         m = x.shape[0]
-        partial = _partial_w8(x, twin, m)
-        g = partial.shape[2]
-        result = torch.empty((m, g, 1024), dtype=x.dtype, device=x.device)
-        reduce_k[(triton.cdiv(m * g * 1024, 256),)](partial, result, m * g * 1024, num_warps=4)
+        result = torch.empty((m, 2, 1024), dtype=x.dtype, device=x.device)
+        reduce_k[(triton.cdiv(m * 2048, 256),)](_partial_w8(x, twin, m), result, m * 2048, num_warps=4)
         return result
 
     def small_mx(x, weight):
@@ -294,9 +257,9 @@ def build_twins(model: torch.nn.Module) -> tuple[int, int]:
     made = kept = 0
     for mod in model.modules():
         w = getattr(getattr(mod, "wo_a", None), "weight", None)
-        w3 = _wo_a_view(w)
-        if w3 is None:
+        if w is None or w.dtype != torch.bfloat16 or w.numel() != 2 * 1024 * 4096:
             continue
+        w3 = w.data.view(2, 1024, 4096)
         twin = make_twin(w3)
         if twin is None:
             kept += 1
@@ -307,112 +270,20 @@ def build_twins(model: torch.nn.Module) -> tuple[int, int]:
     return made, kept
 
 
-def _wrap_load(cls, drop=None):
+def _wrap_load(cls):
     if getattr(cls, "_dsv41_wo_a_w8", False):
         return
     cls._dsv41_wo_a_w8 = True
     orig = cls.load_weights
-    do_drop = DROP if drop is None else drop
 
     def load_weights(self, *a, **kw):
         out = orig(self, *a, **kw)
         build_twins(self)
-        if do_drop:
+        if DROP:
             drop_bf16(self)
         return out
 
     cls.load_weights = load_weights
-
-
-def _spec_forward(orig):
-    def forward(self, input_ids, positions, forward_batch, *a, **kw):
-        mode = forward_batch.forward_mode
-        prev = _CTX["spec"]
-        _CTX["spec"] = bool(
-            mode.is_target_verify() or mode.is_decode() or mode.is_draft_extend_v2()
-        )
-        try:
-            return orig(self, input_ids, positions, forward_batch, *a, **kw)
-        finally:
-            _CTX["spec"] = prev
-    return forward
-
-
-def _std_activation(o, twin):
-    g = twin[0].shape[0]
-    return (o.dtype == torch.bfloat16 and o.ndim == 3 and tuple(o.shape[1:]) == (g, 4096)
-            and tuple(twin[0].shape) == (g, 1024, 4096)
-            and o.stride(2) == 1 and o.stride(1) == 4096 and o.stride(0) >= g * 4096)
-
-
-def _install_einsum_bridge(dsv4_module):
-    """dev-dsv41 dispatches wo_a from _apply_wo_a_bf16_matmul (gemv at M=1, einsum otherwise)."""
-    if getattr(dsv4_module, "_dsv41_wo_a_bridge", False):
-        return
-    dsv4_module._dsv41_wo_a_bridge = True
-    orig = dsv4_module._apply_wo_a_bf16_matmul
-
-    def _apply(o, wo_a, is_decode=False):
-        ptr = wo_a.data_ptr()
-        twin = _TWINS.get(ptr)
-        m = o.shape[0] if o.ndim == 3 else 0
-        if twin is not None and _std_activation(o, twin) and 2 <= m <= 8:
-            return _fp8_small(o, twin)
-        if twin is not None and MID and _CTX["spec"] and _std_activation(o, twin) and 9 <= m <= 192:
-            return wo_a_mid(o, twin)
-        if ptr in _DROPPED and twin is not None:
-            return orig(o, dequant_into_scratch(twin, o.device), is_decode)
-        return orig(o, wo_a, is_decode)
-
-    dsv4_module._apply_wo_a_bf16_matmul = _apply
-    cls = dsv4_module.DeepseekV4ForCausalLM
-    if not getattr(cls, "_dsv41_wo_a_spec", False) and hasattr(cls, "forward"):
-        cls._dsv41_wo_a_spec = True
-        cls.forward = _spec_forward(cls.forward)
-    print("[wo_a_w8] einsum bridge armed: fp8 twin for verify/draft rows, gemv left at M=1", flush=True)
-
-
-# DSV41_WO_A_W8_DRAFT=1 (bridge mode only): the draft's own wo_a einsum reads an fp8 twin as well
-# (its bf16 weight is kept; +16 MB per draft layer).
-DRAFT = os.environ.get("DSV41_WO_A_W8_DRAFT", "0").strip() not in ("0", "", "off", "false")
-
-
-def _install_draft_einsum(dspark_module):
-    """Route the draft attention's inline torch.einsum("bgd,grd->bgr", o, wo_a) through the twin.
-
-    The draft calls einsum through its module's global `torch`; that name is replaced by a proxy
-    module that forwards every attribute to torch and intercepts only this equation when the weight
-    has a twin and the activation has the standard layout (2..8 rows small kernel, 9..192 MID).
-    Anything else, including the fp32 fallback path, goes to torch.einsum unchanged."""
-    import types
-
-    real = dspark_module.torch
-    if getattr(real, "_dsv41_wo_a_proxy", False):
-        return
-
-    class _TorchProxy(types.ModuleType):
-        _dsv41_wo_a_proxy = True
-
-        def __getattr__(self, name):
-            return getattr(real, name)
-
-    proxy = _TorchProxy("torch")
-
-    def einsum(eq, *ops, **kw):
-        if eq == "bgd,grd->bgr" and len(ops) == 2 and not kw:
-            o, w = ops
-            twin = _TWINS.get(w.data_ptr()) if w.dtype == torch.bfloat16 else None
-            if twin is not None and _std_activation(o, twin):
-                m = o.shape[0]
-                if 2 <= m <= 8:
-                    return _fp8_small(o, twin)
-                if MID and 9 <= m <= 192:
-                    return wo_a_mid(o, twin)
-        return real.einsum(eq, *ops, **kw)
-
-    proxy.einsum = einsum
-    dspark_module.torch = proxy
-    print("[wo_a_w8] draft einsum routed to the fp8 twin (bf16 weight kept)", flush=True)
 
 
 def install_model(dsv4_module):
@@ -420,36 +291,12 @@ def install_model(dsv4_module):
     if not ENABLED:
         return
     import importlib
-    try:
-        kern = importlib.import_module("sglang.kernels.ops.attention.dsv4.wo_a_bf16")
-    except ModuleNotFoundError:
-        kern = None
-    if kern is not None and hasattr(kern, "wo_a_bf16_small_batch"):
-        _patch_kernels(dsv4_module, kern)
-        install_mid(dsv4_module)
-    else:
-        _install_einsum_bridge(dsv4_module)
-        _CTX["bridge"] = True
+    _patch_kernels(dsv4_module, importlib.import_module("sglang.kernels.ops.attention.dsv4.wo_a_bf16"))
+    install_mid(dsv4_module)
     _wrap_load(dsv4_module.DeepseekV4ForCausalLM)
 
 
 def install_dspark(dspark_module):
     """sglang.srt.models.deepseek_v4_dspark: twins for the draft's three wo_a as well."""
-    if not ENABLED:
-        return
-    if _CTX.get("bridge"):
-        # dev-dsv41's draft attention runs its own einsum on self.wo_a.weight and never reaches
-        # _apply_wo_a_bf16_matmul: DROP would feed it the 1-element tag (every draft garbage,
-        # acceptance 1.0 -- measured 2026-09-24 on TP3), so the draft is never dropped here.
-        if DRAFT:
-            _wrap_load(dspark_module.DeepseekV4ForCausalLMDSpark, drop=False)
-            _install_draft_einsum(dspark_module)
-        else:
-            print("[wo_a_w8] draft wo_a left on bf16 (this engine's draft does not use the shared dispatch)",
-                  flush=True)
-        return
-    cls = dspark_module.DeepseekV4ForCausalLMDSpark
-    _wrap_load(cls)
-    if not getattr(cls, "_dsv41_wo_a_spec", False) and hasattr(cls, "forward"):
-        cls._dsv41_wo_a_spec = True
-        cls.forward = _spec_forward(cls.forward)
+    if ENABLED:
+        _wrap_load(dspark_module.DeepseekV4ForCausalLMDSpark)

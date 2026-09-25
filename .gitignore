@@ -35,8 +35,6 @@ __pycache__/
 .idea/
 .vscode/
 
-# Per-run environment dumps (host/user/path details): keep local
-docs/results/*/envs/
-docs/results/*/env-*.txt
-docs/results/*/dot-env.snapshot
-docs/results/*/mounts-*.json
+# staged by scripts/fetch-sglang-canary.sh (pinned, never tracked -- the script also
+# writes REF and src.tgz, and any of them left out here shows up as untracked noise)
+runtime/sglang-canary/

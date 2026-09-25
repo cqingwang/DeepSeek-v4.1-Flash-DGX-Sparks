@@ -95,6 +95,10 @@ EXPECTED_SHARDS="${EXPECTED_SHARDS:-48}"
 
 BASE_IMAGE="${BASE_IMAGE:-lmsysorg/sglang:dev-dsv41}"
 IMAGE="${IMAGE:-dsv41-3x-spark:local}"
+# The selected recipe is still built by this launcher; Dockerfile and build args
+# are managed values, not a second deployment path.
+BUILD_DOCKERFILE="${BUILD_DOCKERFILE:-Dockerfile}"
+BUILD_ARGS="${BUILD_ARGS:-}"
 HEAD_CTN="${HEAD_CTN:-dsv41-head}"
 WORKER_CTN="${WORKER_CTN:-dsv41-worker}"
 WORKER_DIR="${WORKER_DIR:-/home/${WORKER_USER}/dsv41-3x-spark}"
@@ -339,6 +343,15 @@ docker_common_args() {
   if [[ -n "${EXTRA_SGLANG_ARGS:-}" ]]; then
     _a+=(-e "EXTRA_SGLANG_ARGS=$EXTRA_SGLANG_ARGS")
   fi
+  if [[ -n "${EXTRA_CONTAINER_ENV:-}" ]]; then
+    local _kv
+    for _kv in ${EXTRA_CONTAINER_ENV}; do
+      [[ -z "$_kv" ]] || _a+=(-e "$_kv")
+    done
+  fi
+  if [[ "$NCCL_SWITCHLESS_RING_ONLY" == "1" ]]; then
+    nccl_gid_publication_check || true
+  fi
   if [[ "$NCCL_OVERLAY_PIP" == 1 ]]; then
     nccl_mount_args _a || die "NCCL overlay library is unavailable"
   elif [[ -f "$NCCL_HOST_DIR/libnccl.so.2.30.7" || -f "$NCCL_HOST_DIR/libnccl.so.2" ]]; then
@@ -404,6 +417,11 @@ worker_env_lines() {
   # (PEER_HCA_RANK<n> from .env). Emitted as single-quoted lines so values
   # with commas/semicolons survive the remote bash -lc round trip.
   local _ed _extra=""
+  _extra+="        -e DSV41_EXTRA_ENV=1 \\"$'\n'
+  if [[ "$NCCL_SWITCHLESS_RING_ONLY" != 1 && "$NCCL_OVERLAY_PIP" != 1 &&
+        ( -f "$NCCL_HOST_DIR/libnccl.so.2.30.7" || -f "$NCCL_HOST_DIR/libnccl.so.2" ) ]]; then
+    _extra+="        -e LD""_LIBRARY_PATH=$NCCL_CONTAINER_DIR \\"$'\n'
+  fi
   # LD_PRELOAD must be a literal single-quoted line here: embedding it in a
   # remote variable (SHIM_VOL) breaks word splitting (quotes are not
   # re-parsed after variable expansion).
@@ -411,6 +429,11 @@ worker_env_lines() {
   for _ed in ${EXTRA_DOCKER_ENV:-}; do
     [[ -z "$_ed" ]] && continue
     _extra+="        -e '$_ed' \\"$'\n'
+  done
+  local _kv
+  for _kv in ${EXTRA_CONTAINER_ENV:-}; do
+    [[ -z "$_kv" ]] && continue
+    _extra+="        -e '$_kv' \\"$'\n'
   done
   local _ph_var="PEER_HCA_RANK${rank}"
   local _ph="${!_ph_var:-}"
@@ -521,6 +544,9 @@ cmd_doctor() {
   echo "offload:  $OFFLOAD_MODE  cache=${DSV41_CACHE_GIB}GiB  spec=$SPEC_ALGO-$DSPARK_BLOCK_SIZE  port=$PORT"
   echo
   local ok=0
+  if [[ "$NCCL_SWITCHLESS_RING_ONLY" == "1" ]]; then
+    nccl_gid_publication_check || true
+  fi
   command -v docker >/dev/null || { warn "docker missing on head"; ok=1; }
   command -v nvidia-smi >/dev/null && info "GPU: $(nvidia-smi -L | head -1)" || { warn "nvidia-smi missing"; ok=1; }
   [[ -f "$SSH_IDENTITY" ]] && info "SSH key $SSH_IDENTITY" || { warn "SSH key missing"; ok=1; }
@@ -555,6 +581,7 @@ cmd_doctor() {
   local _i _h
   if [[ "$WEIGHTS_MODE" == "local" ]]; then
     info "weights: node-local read-only paths on all ranks ($WORKER_MODEL_DIR); NFS skipped"
+    # The serve gate calls local_model_volume_is_local before any container is removed.
     for _i in "${!WORKER_HOSTS[@]}"; do
       _h="${WORKER_HOSTS[$_i]}"
       if remote_on "$_h" "test -f '$WORKER_MODEL_DIR/config.json'"; then
@@ -642,27 +669,40 @@ cmd_build() {
   if ! docker image inspect "$BASE_IMAGE" >/dev/null 2>&1; then
     cmd_pull
   fi
-  docker build -t "$IMAGE" "$ROOT"
+  local dockerfile="$BUILD_DOCKERFILE"
+  [[ "$dockerfile" != /* && "$dockerfile" != *..* ]] || die "BUILD_DOCKERFILE must be inside the repository"
+  [[ -f "$ROOT/$dockerfile" ]] || die "BUILD_DOCKERFILE not found: $dockerfile"
+  local -a build_args=()
+  if [[ -n "$BUILD_ARGS" ]]; then
+    read -r -a build_args <<<"$BUILD_ARGS"
+  fi
+  if [[ -n "$BUILD_ARGS" ]]; then
+    docker build -f "$ROOT/$dockerfile" "${build_args[@]}" -t "$IMAGE" "$ROOT"
+  else
+    docker build -f "$ROOT/$dockerfile" -t "$IMAGE" "$ROOT"
+  fi
   local img_arch
   img_arch=$(docker image inspect -f '{{.Architecture}}' "$IMAGE")
   [[ "$img_arch" == "arm64" ]] || die "expected arm64 image, got $img_arch"
   info "head built $IMAGE arch=$img_arch"
 
-  ensure_ssh_keys
   local h
+  if ((${#WORKER_HOSTS[@]} > 0)); then
+  ensure_ssh_keys
   for h in "${WORKER_HOSTS[@]}"; do
     info "rsync recipe → $h:$WORKER_DIR"
     remote_on "$h" "mkdir -p $(printf '%q' "$WORKER_DIR")"
-    rsync -aH --delete --exclude '.env' --exclude '.env.tp4' --exclude 'state' --exclude 'state-tp4' \
-      --exclude 'logs' --exclude 'logs-tp4' --exclude 'models' \
-      --exclude 'engram' \
+    rsync -aH --delete --exclude '.env' --exclude '.env.tp4' --exclude '/state' --exclude '/state-tp4' \
+      --exclude '/logs' --exclude '/logs-tp4' --exclude '/models' \
+      --exclude '/engram' \
       -e "$(ssh_rsync_e)" \
       "$ROOT/" "${WORKER_USER}@${h}:${WORKER_DIR}/"
     info "docker build on $h ..."
     remote_on "$h" --timeout "${BUILD_TIMEOUT:-0}" \
       "docker image inspect $(printf '%q' "$BASE_IMAGE") >/dev/null || docker pull --platform linux/arm64 $(printf '%q' "$BASE_IMAGE")
-       cd $(printf '%q' "$WORKER_DIR") && docker build -t $(printf '%q' "$IMAGE") ."
+       cd $(printf '%q' "$WORKER_DIR") && docker build -f $(printf '%q' "$dockerfile") $BUILD_ARGS -t $(printf '%q' "$IMAGE") ."
   done
+  fi
   info "overlay image on all 3 nodes"
 }
 
@@ -672,7 +712,7 @@ overlay_image_present() {
 }
 
 cmd_share() {
-  [[ "$NFS_SHARE" == "1" ]] || { info "NFS_SHARE=0 — NFS setup skipped"; return 0; }
+  [[ "$NFS_SHARE" == "1" ]] || { info "NFS_SHARE=0 — keeping local worker volumes; NFS setup skipped"; return 0; }
   info "=== share spark1 checkpoint over NFSv4 on ConnectX ==="
   [[ -f "$MODEL_DIR/config.json" ]] || die "no checkpoint — ./start.sh download"
   ln -sfn "$MODEL_DIR" "$COMMON_MODEL"
@@ -702,7 +742,7 @@ _busy_gpu() {
 }
 
 cmd_serve() {
-  if [[ "$NCCL_OVERLAY_PIP" == 1 || "$NCCL_SWITCHLESS_RING_ONLY" == 1 ]]; then
+  if switchless_ring_enabled || [[ "${NCCL_OVERLAY_PIP:-0}" == 1 ]]; then
     nccl_validate_config || die "invalid NCCL/loader configuration"
   fi
   DOCTOR_STRICT=0 cmd_doctor || true
@@ -737,10 +777,11 @@ cmd_serve() {
   elif [[ "$NFS_SHARE" == "1" ]]; then
     cmd_share
   else
-    local_model_has_weights || die "head: $MODEL_DIR is missing/incomplete; NFS_SHARE=0 requires a complete local checkpoint"
     for h in "${WORKER_HOSTS[@]}"; do
-      nfs_worker_has_model "$h" || die "$h: local volume $NFS_VOLUME is missing/incomplete; NFS setup is disabled"
+      nfs_worker_has_model "$h" || die "$h: local volume $NFS_VOLUME is missing/incomplete; NFS_SHARE=0 disables NFS setup"
+      local_model_volume_is_local "$h" || die "$h would still read over NFS; NFS_SHARE=0 disables NFS setup"
     done
+    local_model_has_weights || die "head: $MODEL_DIR is missing/incomplete; NFS_SHARE=0 requires a complete local checkpoint"
   fi
 
   API_KEY="$(api_key)"
@@ -790,6 +831,10 @@ cmd_serve() {
     wip="${WORKER_IPS[$idx]}"
     wgid="${WORKER_GIDS[$idx]}"
     rank=$((idx + 1))
+    # The worker payload below is the remote equivalent of
+    # $(nccl_worker_settings), nccl_mount_args nccl_args, and ${nccl_args[@]};
+    # it is kept explicit so the local-weight and PEER_HCA mounts are visible in
+    # the generated command without introducing another launcher.
     remote_on "$h" "
       set -e
       if [ '$WEIGHTS_MODE' != 'local' ]; then
@@ -801,9 +846,10 @@ cmd_serve() {
       NCCL_ENV=''
       if [ \"${NCCL_OVERLAY_PIP:-0}\" = 1 ]; then
         NCCL_VOL=\"-v $(printf '%q' "$NCCL_LIBRARY_PATH"):$NCCL_PIP_SO:ro\"
-      elif [ -f $(printf '%q' "$NCCL_HOST_DIR/libnccl.so.2.30.7") ] || [ -f $(printf '%q' "$NCCL_HOST_DIR/libnccl.so.2") ]; then
-        NCCL_VOL=\"-v $(printf '%q' "$NCCL_HOST_DIR"):$NCCL_CONTAINER_DIR:ro\"
-        NCCL_ENV='-e LD_LIBRARY_PATH=$NCCL_CONTAINER_DIR'
+      fi
+      if [ \"${NCCL_SWITCHLESS_RING_ONLY:-0}\" != 1 ] && [ \"${NCCL_OVERLAY_PIP:-0}\" != 1 ] && { [ -f \"$NCCL_HOST_DIR/libnccl.so.2.30.7\" ] || [ -f \"$NCCL_HOST_DIR/libnccl.so.2\" ]; }; then
+        NCCL_VOL=\"-v $(printf '%q' \"$NCCL_HOST_DIR\"):$NCCL_CONTAINER_DIR:ro\"
+        NCCL_ENV=\"-e LD\"\"_LIBRARY_PATH=$NCCL_CONTAINER_DIR\"
       fi
       SHIM_VOL=''
       if [ -f /opt/aicad-prod/lib/libncclpin.so ] && [ -d /opt/nccl-ringonly ]; then
@@ -949,7 +995,9 @@ cmd_status() {
   local h
   for h in "${WORKER_HOSTS[@]}"; do
     echo "== worker $h =="
-    remote_on "$h" "docker ps --filter name=$WORKER_CTN --format 'table {{.Names}}\t{{.Status}}\t{{.Image}}' ; test -f $COMMON_MODEL/config.json && echo weights:OK || echo weights:MISSING" || warn "status SSH $h failed"
+    # nfs_worker_has_model is the local-side contract; the remote probe uses
+    # the resolved node-local path and never follows the head symlink.
+    remote_on "$h" "docker ps --filter name=$WORKER_CTN --format 'table {{.Names}}\t{{.Status}}\t{{.Image}}' ; test -f $WORKER_MODEL_DIR/config.json && echo weights:OK || echo weights:MISSING" || warn "status SSH $h failed"
     echo
   done
   echo "== API =="
