@@ -874,11 +874,12 @@ def _arm8(m, lens, *, fp8, exact, debug=False, seed=9):
     return out, info
 
 
-def test_fp8_emulate():
+def test_fp8_emulate(only_debug=False):
     sp._agree_min = lambda p, local: bool(min(int(v) for v in p.group._exchange(
         torch.tensor([1 if local else 0], device=DEV))))
     same = lambda a, b: _eq(a[0], b[0]) and _eq(a[1], b[1]) and _eq(tuple(a[2]), tuple(b[2]))  # noqa: E731
-    for m, lens in ((4096, [1000, 50, 2046, 1000]), (3152, [3152]), (2052, [513, 1, 1025, 513])):
+    for m, lens in () if only_debug else ((4096, [1000, 50, 2046, 1000]), (3152, [3152]),
+                                          (2052, [513, 1, 1025, 513])):
         for exact in (True, False):
             s1, _ = _arm8(m, lens, fp8=False, exact=exact)
             s2, info = _arm8(m, lens, fp8=True, exact=exact)
@@ -887,7 +888,8 @@ def test_fp8_emulate():
                   f"x_quant calls per layer (x4 ranks) {info[0]}; check {info[1]}", flush=True)
             assert all(ok), ok
             assert info[0] == [W, 0, 0] and all(v[0] for v in info[1].values()), info
-    res, info = _arm8(4096, [1000, 50, 2046, 1000], fp8=True, exact=True, debug=True)
+    # debug gathers a full [M, 4, 5120] reference per compared op on 4 ranks: 2052 rows fit 2 GB
+    res, info = _arm8(2052, [513, 1, 1025, 513], fp8=True, exact=True, debug=True)
     dbg = [r[3] for r in res]
     assert all(c > 0 and not bad for c, bad in dbg), dbg
     print(f"  fp8 debug compare: {[c for c, _ in dbg]} ops checked per rank (incl. attn x mxfp8 "
@@ -905,6 +907,8 @@ if __name__ == "__main__":
         test_emulate()
     if "debug" in which:
         test_debug()
+    if "fp8debug" in which:
+        test_fp8_emulate(only_debug=True)
     if "fp8" in which:
         test_fp8_quant()
         test_fp8_emulate()
