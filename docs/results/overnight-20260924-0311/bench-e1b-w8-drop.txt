@@ -1,0 +1,9 @@
+c1-prose         decode 14.53 tok/s (min 14.50 max 14.54 sd 0.01) ttft 0.298s toks [512, 512, 512, 512, 512] distinct 4 err 0  2026-09-24T01:27:50.644892Z..2026-09-24T01:30:48.033711Z
+c1-code          decode 14.29 tok/s (min 14.25 max 14.32 sd 0.02) ttft 0.301s toks [512, 512, 512, 512, 512] distinct 2 err 0  2026-09-24T01:30:48.034053Z..2026-09-24T01:33:48.373670Z
+c1-chat_sampled  decode 14.29 tok/s (min 14.25 max 14.40 sd 0.06) ttft 0.277s toks [512, 512, 512, 512, 512] distinct 5 err 0  2026-09-24T01:33:48.373919Z..2026-09-24T01:36:48.226769Z
+c4               agg 26.60 tok/s (min 26.17 max 26.74) per-stream 6.70  2026-09-24T01:36:48.227020Z..2026-09-24T01:43:13.987521Z
+c1-prose         accept_len 1.02  step 71.3 ms  (n=63 intervals, bs=1)
+c1-code          accept_len 1.00  step 70.6 ms  (n=64 intervals, bs=1.0)
+c1-chat_sampled  accept_len 1.00  step 71.1 ms  (n=63 intervals, bs=1)
+c4               accept_len 1.02  step 153.2 ms  (n=64 intervals, bs=4.0)
+head full-stall us during bench: 15829

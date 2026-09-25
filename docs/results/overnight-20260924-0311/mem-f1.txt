@@ -1,0 +1,3 @@
+spark1 avail 2G some avg10=0.26 avg60=0.09 avg300=0.16 total=194470147
+spark2 avail 7G some avg10=0.00 avg60=0.00 avg300=0.00 total=65835850
+spark3 avail 3G some avg10=0.00 avg60=0.02 avg300=0.02 total=51554437

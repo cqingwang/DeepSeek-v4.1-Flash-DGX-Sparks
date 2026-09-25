@@ -34,3 +34,9 @@ __pycache__/
 .DS_Store
 .idea/
 .vscode/
+
+# Per-run environment dumps (host/user/path details): keep local
+docs/results/*/envs/
+docs/results/*/env-*.txt
+docs/results/*/dot-env.snapshot
+docs/results/*/mounts-*.json

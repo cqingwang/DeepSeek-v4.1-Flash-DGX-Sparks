@@ -1,0 +1,24 @@
+ M .env.example
+ M Dockerfile
+ M adapter/sitecustomize.py
+ M start.sh
+?? ablit/
+?? adapter/block_verify.py
+?? adapter/draft_head_fp8.py
+?? adapter/draft_tau.py
+?? adapter/engram_prefetch.py
+?? adapter/folded_result_fence.py
+?? adapter/verify_cap.py
+?? adapter/wo_a_w8.py
+?? docs/astra-new.md
+?? docs/fable-new.md
+?? docs/merged-new.md
+?? docs/overnight-goal.md
+?? docs/results/merged-review-20260924.json
+?? docs/results/overnight-20260924-0311/
+?? tests/test_block_verify.py
+?? tests/test_draft_head_fp8.py
+?? tests/test_draft_tau.py
+?? tests/test_folded_fence.py
+?? tests/test_verify_cap.py
+?? tests/test_wo_a_w8.py

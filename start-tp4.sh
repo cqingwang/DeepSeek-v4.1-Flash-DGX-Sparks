@@ -8,6 +8,8 @@
 # The 3-Spark profile (.env, state/, logs/) is untouched, so one checkout can drive
 # either fleet. Every TP4-specific runtime choice (context, KV pool, concurrency,
 # prefill chunk, memory fraction, no head padding) lives in .env.tp4.example.
+# Serving knobs shared with TP3 (DSpark k, max_tokens cap, loop abort, thinking
+# alias) are in start.sh + the overlay image; .env.tp4.example defaults match.
 #
 # Usage: ./start-tp4.sh doctor | build | share | pack | serve | stop | status | logs | smoke
 set -euo pipefail

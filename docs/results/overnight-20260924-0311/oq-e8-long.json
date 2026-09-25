@@ -1,0 +1,124 @@
+{
+ "tasks": {
+  "mul": {
+   "ok": true,
+   "text": "391",
+   "sha": "a934c244755c66ae"
+  },
+  "speed": {
+   "ok": true,
+   "text": "80",
+   "sha": "48449a14a4ff7d79"
+  },
+  "capital": {
+   "ok": true,
+   "text": "Canberra",
+   "sha": "b36f06bee2e4f548"
+  },
+  "json": {
+   "ok": true,
+   "text": "{\"name\":\"Ada\",\"age\":36,\"skills\":[\"mathematics\",\"programming\",\"analysis\"]}",
+   "sha": "ad0b741acce88897"
+  },
+  "code": {
+   "ok": true,
+   "text": "```python\ndef is_prime(n: int) -> bool:\n    if n < 2:\n        return False\n    if n < 4:\n        return True\n    if n % 2 == 0 or n % 3 == 0:\n        return False\n    i = 5\n    while i * i <= n:\n        if n % i == 0 or n % (i + 2) == 0:\n            return False\n        i += 6\n    return True\n```",
+   "sha": "72e0ab61f8da019f"
+  },
+  "order": {
+   "ok": true,
+   "text": "apple, banana, fig, mango, pear",
+   "sha": "91b21952834dd97b"
+  },
+  "count": {
+   "ok": true,
+   "text": "3",
+   "sha": "4e07408562bedb8b"
+  },
+  "sum": {
+   "ok": true,
+   "text": "5913",
+   "sha": "12e092eef5220a2d"
+  }
+ },
+ "concurrent": {
+  "speed": {
+   "ok": true,
+   "same_as_c1": true
+  },
+  "mul": {
+   "ok": true,
+   "same_as_c1": true
+  },
+  "capital": {
+   "ok": true,
+   "same_as_c1": true
+  },
+  "count": {
+   "ok": true,
+   "same_as_c1": true
+  },
+  "order": {
+   "ok": true,
+   "same_as_c1": true
+  },
+  "sum": {
+   "ok": true,
+   "same_as_c1": true
+  },
+  "json": {
+   "ok": true,
+   "same_as_c1": false
+  },
+  "code": {
+   "ok": true,
+   "same_as_c1": true
+  }
+ },
+ "repeat": {
+  "shas": [
+   "2e4e2d0685ced909",
+   "885dccdabcaaf831",
+   "73b4f66d0934a6e7"
+  ],
+  "distinct": 3
+ },
+ "needles": [
+  {
+   "k": 100,
+   "prompt_tokens": 95541,
+   "ok": true,
+   "answer": "R58VJ5HS",
+   "secs": 58.51103048099321,
+   "error": null
+  },
+  {
+   "k": 200,
+   "prompt_tokens": 190886,
+   "ok": true,
+   "answer": "QLBYK9FD",
+   "secs": 136.94874059600988,
+   "error": null
+  }
+ ],
+ "summary": {
+  "tasks_ok": "8/8",
+  "concurrent_ok": "8/8",
+  "concurrent_same_as_c1": 7,
+  "greedy_repeat_distinct": 3,
+  "needles": [
+   [
+    100,
+    95541,
+    true,
+    58.5
+   ],
+   [
+    200,
+    190886,
+    true,
+    136.9
+   ]
+  ]
+ }
+}

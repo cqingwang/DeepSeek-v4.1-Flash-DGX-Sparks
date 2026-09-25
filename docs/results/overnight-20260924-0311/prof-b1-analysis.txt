@@ -1,0 +1,47 @@
+decode steps analysed: 42
+step wall ms: mean=71.7 median=71.3 min=67.6 max=81.9
+GPU busy per step: mean=67.6 ms
+
+== per-step GPU time by category (ms): mean / median / max ; kernels per step ==
+  bf16_gemm             29.3 /    29.1 /    35.5   n=420
+  moe_grouped_gemm      21.0 /    20.8 /    23.6   n=86
+  nccl                  12.7 /    12.6 /    15.7   n=100
+  hyperconn              2.2 /     2.1 /     3.2   n=344
+  attention              2.1 /     2.1 /     2.8   n=346
+  moe_aux                1.6 /     1.6 /     1.9   n=221
+  other                  1.3 /     1.3 /     1.6   n=612
+  router_tiny_gemm       0.9 /     0.9 /     1.0   n=43
+  quant                  0.8 /     0.8 /     1.0   n=234
+  norm                   0.4 /     0.4 /     0.5   n=140
+  memcpy                 0.3 /     0.2 /     0.4   n=60
+  fp8_triton_gemm        0.1 /     0.1 /     0.2   n=1
+  engram                 0.0 /     0.0 /     0.0   n=6
+  SUM                   72.6
+
+NCCL per step ms: mean=12.7 median=12.6 min=10.6 max=15.7
+NCCL kernel duration percentiles us: p10=27 p25=29 p50=37 p75=155 p90=379 p95=513 p99=749
+NCCL kernels <150us: 75%  time share of >300us kernels: 55%
+prof-b1-rank0.trace.json.gz: engram-following NCCL: n=90 total=31.0 ms mean=345us median=284us max=1794us | other NCCL n=4395 total=555.3 ms | engram share 5%
+steps 44
+  23.76 ms/step  n/step=  87.8  _ZN7cutlass13device_kernelINS_4gemm6kernel13GemmUniversalINS1_17GroupProblemShapeIN4cute5tupleIJlllEEEEENS1_10
+  16.98 ms/step  n/step= 233.8  kernel_cutlass_kernel_flashinfergemmkernelsdense_blockscaled_gemm_sm120_b12xDenseGemmKernel_object_at__CopyAto
+  12.94 ms/step  n/step=  91.9  ncclDevKernel_AllReduce_Sum_bf16_RING_LL(ncclDevKernelArgsStorage<4096ul>)
+  11.48 ms/step  n/step=  46.0  void cutlass::Kernel2<cutlass_80_wmma_tensorop_bf16_s161616gemm_bf16_16x16_128x2_tn_align8>(cutlass_80_wmma_te
+   1.34 ms/step  n/step=  87.8  _hc_mix_stats_partial_kernel
+   1.30 ms/step  n/step=  40.9  void flashinfer::sparse_mla_sm120::sparse_mla_decode_dsv4_kernel<(ModelType)1, 64, 128, 64>(__nv_bfloat16 cons
+   0.87 ms/step  n/step=  40.0  void sglang::tiny_n_gemm_kernel<sglang::GEMMTraitN<384u, 5120u, 8u, 32u>, 4u, float, true>(sglang::TinyGEMMPar
+   0.78 ms/step  n/step= 233.8  kernel_cutlass_kernel_flashinferquantizationkernelsmxfp8_quantizeMXFP8QuantizeSwizzledKernel_object_at__tensor
+   0.59 ms/step  n/step=  87.8  _hc_mix_reduce_sinkhorn_kernel
+   0.41 ms/step  n/step=  43.9  _router_triton_kernel
+   0.39 ms/step  n/step=  43.9  void tensorrt_llm::kernels::cutlass_kernels::expandInputRowsKernel<__nv_fp8_e4m3, __nv_fp8_e4m3, (tensorrt_llm
+   0.35 ms/step  n/step=   4.0  ncclDevKernel_AllGather_RING_LL(ncclDevKernelArgsStorage<4096ul>)
+   0.34 ms/step  n/step=  43.9  void tensorrt_llm::kernels::quantize_with_block_size<(tensorrt_llm::BlockScaleQuantizationType)2, __nv_bfloat1
+   0.34 ms/step  n/step=  43.9  void sglang::silu_mul_clamp_kernel<__nv_bfloat16, true>(sglang::SiluAndMulClampParams)
+   0.27 ms/step  n/step=  90.9  kernel_cutlass_kernel_flashinfernormkernelsrmsnormRMSNormKernel_object_at__tensorptrbf16gmemalign128oi64512051
+   0.27 ms/step  n/step=  43.9  void tensorrt_llm::kernels::cutlass_kernels::finalizeMoeRoutingKernel<__nv_bfloat16, __nv_bfloat16, __nv_bfloa
+   0.25 ms/step  n/step=  43.9  void tensorrt_llm::kernels::cutlass_kernels::doActivationKernel<__nv_fp8_e4m3, __nv_bfloat16, __nv_bfloat16, t
+   0.22 ms/step  n/step=   3.0  void cutlass::Kernel2<cutlass_80_wmma_tensorop_bf16_s161616gemm_bf16_16x16_128x1_tn_align8>(cutlass_80_wmma_te
+   0.22 ms/step  n/step=  97.0  void at::native::elementwise_kernel<128, 4, at::native::gpu_kernel_impl_nocast<at::native::direct_copy_kernel_
+   0.22 ms/step  n/step=  40.0  void tensorrt_llm::kernels::cutlass_kernels::fusedBuildExpertMapsSortFirstTokenKernel<32, 6, 8>(int const*, in
+   0.21 ms/step  n/step=  43.9  _page_split_kernel
+   0.21 ms/step  n/step=  87.8  _mhc_post_split_h_kernel

@@ -1,0 +1,218 @@
+diff --git a/.env.example b/.env.example
+index c777fb4..4c30834 100644
+--- a/.env.example
++++ b/.env.example
+@@ -84,13 +84,9 @@ DSV41_STATS_SECONDS=60
+ # single prompts to 208k and 4 concurrent 46k prompts are verified; a 256k prompt
+ # missed the 1.5 GB guard by 20 MB. Keep long prompts guarded (scripts/verify/memguard.py).
+ CONTEXT_LENGTH=262144
++# Lowering the fraction does not free RAM; it only starves the KV pool.
++# 0.95 is the working value.
+ MEM_FRACTION_STATIC=0.95
+-# Rank 0 pays ~1.3 GiB the workers do not (HTTP server + tokenizer +
+-# detokenizer) and also serves the checkpoint over NFS. The knob exists to tune
+-# it separately, but note LOWERING it does not give the head headroom: weights
+-# cost the same either way, so a smaller fraction only starves the KV pool.
+-# Measured on this box: 0.9436 is where KV goes negative, and 0.945 still leaves
+-# only 0.12 GB -- less than the 0.34 GB DSV4 SWA cap. 0.95 is the working value.
+ HEAD_MEM_FRACTION_STATIC=0.95
+ MAX_RUNNING_REQUESTS=4
+ # 1024: with the prefill empty_cache hook the per-chunk indexer buffers ([chunk, prefix]
+@@ -140,6 +136,20 @@ EXTRA_SGLANG_ARGS="--fp8-gemm-backend flashinfer_cutlass --watchdog-timeout 1800
+ # SM120 kernel at decode M); cudnn is the alternative; cutlass restores SGLang's
+ # default, which measured no faster than Triton (both ~50 ms of a decode step).
+ DSV41_MXFP8_BACKEND=b12x
++
++# Present in the image, off on TP3. The autotune pass is a target-verify
++# forward and rank 2 is the padded shard; wo_a DROP plus the prefetch/remap
++# hooks inside that forward unloaded spark3. Enable one at a time after a
++# clean boot.
++DSV41_WO_A_W8=0
++DSV41_WO_A_W8_MID=0
++DSV41_WO_A_W8_DROP=0
++DSV41_DRAFT_HEAD_FP8=0
++DSV41_VERIFY_CAP=0
++DSV41_DRAFT_TAU=1
++DSV41_BLOCK_VERIFY=0
++DSV41_ENGRAM_PREFETCH=0
++DSV41_FOLDED_FENCE=0
+ # FlashInfer's fused MoE finalize sums the top-k expert outputs with atomic bf16
+ # adds. The autotuner picks it for the 32-token bucket (17-32 token prefills,
+ # decode at concurrency 3-4), which made greedy outputs nondeterministic by up to
+diff --git a/Dockerfile b/Dockerfile
+index 8beaba4..96bd0d5 100644
+--- a/Dockerfile
++++ b/Dockerfile
+@@ -12,7 +12,11 @@ COPY tests /opt/dsv41/tests
+ COPY benchmarks /opt/dsv41/benchmarks
+ RUN PYTHONPATH=/opt/dsv41/adapter python3 /opt/dsv41/tests/test_thinking_alias.py \
+  && PYTHONPATH=/opt/dsv41/adapter python3 /opt/dsv41/tests/test_max_new_tokens.py \
+- && PYTHONPATH=/opt/dsv41/adapter python3 /opt/dsv41/tests/test_loop_abort.py
++ && PYTHONPATH=/opt/dsv41/adapter python3 /opt/dsv41/tests/test_loop_abort.py \
++ && PYTHONPATH=/opt/dsv41/adapter python3 /opt/dsv41/tests/test_wo_a_w8.py \
++ && PYTHONPATH=/opt/dsv41/adapter python3 /opt/dsv41/tests/test_draft_head_fp8.py \
++ && PYTHONPATH=/opt/dsv41/adapter python3 /opt/dsv41/tests/test_draft_tau.py \
++ && PYTHONPATH=/opt/dsv41/adapter python3 /opt/dsv41/tests/test_folded_fence.py
+ ENV PYTHONPATH=/opt/dsv41/adapter \
+     MODEL_PATH=/models/DeepSeek-V4.1-Flash \
+     STATE_PATH=/state OFFLOAD_MODE=nvme DSV41_CACHE_GIB=16
+diff --git a/adapter/sitecustomize.py b/adapter/sitecustomize.py
+index 2d717e2..b1d85bb 100644
+--- a/adapter/sitecustomize.py
++++ b/adapter/sitecustomize.py
+@@ -16,6 +16,10 @@ class EngramLoader(importlib.abc.Loader):
+         if module.__name__ == 'sglang.srt.layers.engram':
+             from engram_backend import install
+             install(module)
++            # After engram_backend: row lookups on a side stream after the hasher.
++            # Gated on DSV41_ENGRAM_PREFETCH.
++            from engram_prefetch import install as install_engram_prefetch
++            install_engram_prefetch(module)
+         elif module.__name__ == 'sglang.srt.model_loader.utils':
+             if os.environ.get('DSV41_SERIAL_WEIGHT_LOAD', '0') == '1':
+                 # On GB10 the CPU shard pages and CUDA allocations share RAM.
+@@ -46,6 +50,52 @@ class EngramLoader(importlib.abc.Loader):
+         elif module.__name__ == 'sglang.srt.managers.schedule_batch':
+             from loop_abort import install as install_loop_abort
+             install_loop_abort(module)
++        elif module.__name__ == 'sglang.srt.models.deepseek_v4':
++            if os.environ.get('DSV41_WO_A_W8', '0').strip() not in ('0', 'off', 'false', ''):
++                from wo_a_w8 import install_model as install_wo_a_w8
++                install_wo_a_w8(module)
++            if os.environ.get('DSV41_VERIFY_CAP', '').strip() not in ('', '0', 'off'):
++                from verify_cap import install_model as install_verify_cap_model
++                install_verify_cap_model(module)
++        elif module.__name__ == 'sglang.srt.models.deepseek_v4_dspark':
++            # conf:T needs the draft confidence head, which the engine only builds
++            # for ragged verify. install_dspark builds it in static mode too.
++            if os.environ.get('DSV41_VERIFY_CAP', '').strip().startswith('conf:'):
++                from verify_cap import install_dspark as install_verify_cap_dspark
++                install_verify_cap_dspark(module)
++            if os.environ.get('DSV41_WO_A_W8', '0').strip() not in ('0', 'off', 'false', ''):
++                from wo_a_w8 import install_dspark as install_wo_a_w8_dspark
++                install_wo_a_w8_dspark(module)
++            if os.environ.get('DSV41_DRAFT_HEAD_FP8', '0').strip() not in ('0', 'off', 'false', ''):
++                from draft_head_fp8 import install as install_draft_head_fp8
++                install_draft_head_fp8(module)
++        elif module.__name__ == 'sglang.srt.speculative.dspark_components.dspark_draft_sampler':
++            if os.environ.get('DSV41_DRAFT_TAU', '1').strip() not in ('', '1', '1.0'):
++                from draft_tau import install as install_draft_tau
++                install_draft_tau(module)
++        elif module.__name__ == 'sglang.kernels.ops.speculative.dspark.dspark_accept':
++            if os.environ.get('DSV41_BLOCK_VERIFY', '0').strip() not in ('0', 'off', 'false', ''):
++                from block_verify import install as install_block_verify
++                install_block_verify(module)
++        elif module.__name__ == 'sglang.srt.speculative.dspark_components.dspark_verify':
++            if os.environ.get('DSV41_FOLDED_FENCE', '0').strip() not in ('0', 'off', 'false', ''):
++                from folded_result_fence import install as install_folded_fence
++                install_folded_fence(module)
++            if os.environ.get('DSV41_VERIFY_CAP', '').strip() not in ('', '0', 'off'):
++                from verify_cap import install_verify as install_verify_cap_verify
++                install_verify_cap_verify(module)
++        elif module.__name__ == 'sglang.kernels.ops.moe.moe_fused_gate':
++            if os.environ.get('DSV41_VERIFY_CAP', '').strip() not in ('', '0', 'off'):
++                from verify_cap import install_gate as install_verify_cap_gate
++                install_verify_cap_gate(module)
++        elif module.__name__ == 'sglang.srt.speculative.dspark_components.dspark_draft':
++            if os.environ.get('DSV41_VERIFY_CAP', '').strip() not in ('', '0', 'off'):
++                from verify_cap import install_draft as install_verify_cap_draft
++                install_verify_cap_draft(module)
++        elif module.__name__ == 'sglang.srt.speculative.dspark_components.dspark_planner':
++            if os.environ.get('DSV41_VERIFY_CAP', '').strip() not in ('', '0', 'off'):
++                from verify_cap import install_planner as install_verify_cap_planner
++                install_verify_cap_planner(module)
+         else:
+             # V4.1 ratio-1/2 indexers always call the FP4 DeepGEMM kernel.
+             # SM120 needs its split-128 planner even when the legacy FP8
+@@ -73,6 +123,14 @@ class EngramFinder(importlib.abc.MetaPathFinder):
+                             'sglang.srt.entrypoints.openai.encoding_dsv41',
+                             'sglang.srt.entrypoints.openai.serving_chat',
+                             'sglang.srt.managers.schedule_batch',
++                            'sglang.srt.models.deepseek_v4',
++                            'sglang.srt.models.deepseek_v4_dspark',
++                            'sglang.srt.speculative.dspark_components.dspark_draft_sampler',
++                            'sglang.kernels.ops.speculative.dspark.dspark_accept',
++                            'sglang.srt.speculative.dspark_components.dspark_verify',
++                            'sglang.kernels.ops.moe.moe_fused_gate',
++                            'sglang.srt.speculative.dspark_components.dspark_draft',
++                            'sglang.srt.speculative.dspark_components.dspark_planner',
+                             'sglang.srt.layers.attention.dsv4.metadata'):
+             return None
+         spec = importlib.machinery.PathFinder.find_spec(fullname, path)
+diff --git a/start.sh b/start.sh
+index dc7a79d..46bdb67 100755
+--- a/start.sh
++++ b/start.sh
+@@ -135,6 +135,32 @@ CHUNKED_PREFILL_SIZE="${CHUNKED_PREFILL_SIZE:-2048}"
+ MAX_TOTAL_TOKENS="${MAX_TOTAL_TOKENS:-320000}"
+ SPEC_ALGO="${SPEC_ALGO:-DSPARK}"
+ DSPARK_BLOCK_SIZE="${DSPARK_BLOCK_SIZE:-3}"
++# The TP4 decode adapters are loaded in the image but off. Turning them on
++# made spark3 drop its weights at FlashInfer autotune: that pass is a
++# target-verify forward, rank 2 is the padded shard, and wo_a DROP has already
++# replaced those parameters with a 1-element stand-in while Engram prefetch
++# and the verify remap run inside the profiled forward.
++if [[ "$TP_SIZE" == "3" ]]; then
++  DSV41_WO_A_W8="${DSV41_WO_A_W8:-0}"
++  DSV41_WO_A_W8_MID="${DSV41_WO_A_W8_MID:-0}"
++  DSV41_WO_A_W8_DROP="${DSV41_WO_A_W8_DROP:-0}"
++  DSV41_DRAFT_HEAD_FP8="${DSV41_DRAFT_HEAD_FP8:-0}"
++  DSV41_VERIFY_CAP="${DSV41_VERIFY_CAP:-0}"
++  DSV41_DRAFT_TAU="${DSV41_DRAFT_TAU:-1}"
++  DSV41_BLOCK_VERIFY="${DSV41_BLOCK_VERIFY:-0}"
++  DSV41_ENGRAM_PREFETCH="${DSV41_ENGRAM_PREFETCH:-0}"
++  DSV41_FOLDED_FENCE="${DSV41_FOLDED_FENCE:-0}"
++else
++  DSV41_WO_A_W8="${DSV41_WO_A_W8:-0}"
++  DSV41_WO_A_W8_MID="${DSV41_WO_A_W8_MID:-0}"
++  DSV41_WO_A_W8_DROP="${DSV41_WO_A_W8_DROP:-0}"
++  DSV41_DRAFT_HEAD_FP8="${DSV41_DRAFT_HEAD_FP8:-0}"
++  DSV41_VERIFY_CAP="${DSV41_VERIFY_CAP:-0}"
++  DSV41_DRAFT_TAU="${DSV41_DRAFT_TAU:-1}"
++  DSV41_BLOCK_VERIFY="${DSV41_BLOCK_VERIFY:-0}"
++  DSV41_ENGRAM_PREFETCH="${DSV41_ENGRAM_PREFETCH:-0}"
++  DSV41_FOLDED_FENCE="${DSV41_FOLDED_FENCE:-0}"
++fi
+ SERVED_MODEL_NAME="${SERVED_MODEL_NAME:-deepseek-v4.1-flash}"
+ SKIP_PREPARE="${SKIP_PREPARE:-1}"
+ SKIP_VERIFY="${SKIP_VERIFY:-1}"
+@@ -288,6 +314,15 @@ docker_common_args() {
+     -e "CUDA_GRAPH_MAX_BS_DECODE=$MAX_RUNNING_REQUESTS"
+     -e "SPEC_ALGO=$SPEC_ALGO"
+     -e "DSPARK_BLOCK_SIZE=$DSPARK_BLOCK_SIZE"
++    -e "DSV41_WO_A_W8=$DSV41_WO_A_W8"
++    -e "DSV41_WO_A_W8_MID=$DSV41_WO_A_W8_MID"
++    -e "DSV41_WO_A_W8_DROP=$DSV41_WO_A_W8_DROP"
++    -e "DSV41_DRAFT_HEAD_FP8=$DSV41_DRAFT_HEAD_FP8"
++    -e "DSV41_VERIFY_CAP=$DSV41_VERIFY_CAP"
++    -e "DSV41_DRAFT_TAU=$DSV41_DRAFT_TAU"
++    -e "DSV41_BLOCK_VERIFY=$DSV41_BLOCK_VERIFY"
++    -e "DSV41_ENGRAM_PREFETCH=$DSV41_ENGRAM_PREFETCH"
++    -e "DSV41_FOLDED_FENCE=$DSV41_FOLDED_FENCE"
+     -e "SERVED_MODEL_NAME=$SERVED_MODEL_NAME"
+     -e "SKIP_PREPARE=$SKIP_PREPARE"
+     -e "SKIP_VERIFY=$SKIP_VERIFY"
+@@ -393,6 +428,15 @@ worker_env_lines() {
+     -e "CUDA_GRAPH_MAX_BS_DECODE=$MAX_RUNNING_REQUESTS"
+     -e "SPEC_ALGO=$SPEC_ALGO"
+     -e "DSPARK_BLOCK_SIZE=$DSPARK_BLOCK_SIZE"
++    -e "DSV41_WO_A_W8=$DSV41_WO_A_W8"
++    -e "DSV41_WO_A_W8_MID=$DSV41_WO_A_W8_MID"
++    -e "DSV41_WO_A_W8_DROP=$DSV41_WO_A_W8_DROP"
++    -e "DSV41_DRAFT_HEAD_FP8=$DSV41_DRAFT_HEAD_FP8"
++    -e "DSV41_VERIFY_CAP=$DSV41_VERIFY_CAP"
++    -e "DSV41_DRAFT_TAU=$DSV41_DRAFT_TAU"
++    -e "DSV41_BLOCK_VERIFY=$DSV41_BLOCK_VERIFY"
++    -e "DSV41_ENGRAM_PREFETCH=$DSV41_ENGRAM_PREFETCH"
++    -e "DSV41_FOLDED_FENCE=$DSV41_FOLDED_FENCE"
+     -e "SERVED_MODEL_NAME=$SERVED_MODEL_NAME"
+     -e "SKIP_PREPARE=1"
+     -e "SKIP_VERIFY=1"
+@@ -475,6 +519,7 @@ cmd_doctor() {
+   echo "model:    $MODEL_DIR"
+   echo "parallel: nnodes=$NNODES TP=$TP_SIZE EP=$EP_SIZE  ctx=$CONTEXT_LENGTH  util=$MEM_FRACTION_STATIC (head $HEAD_MEM_FRACTION_STATIC)"
+   echo "offload:  $OFFLOAD_MODE  cache=${DSV41_CACHE_GIB}GiB  spec=$SPEC_ALGO-$DSPARK_BLOCK_SIZE  port=$PORT"
++  echo "decode:   wo_a_w8=$DSV41_WO_A_W8 mid=$DSV41_WO_A_W8_MID drop=$DSV41_WO_A_W8_DROP  draft_head_fp8=$DSV41_DRAFT_HEAD_FP8  verify_cap=$DSV41_VERIFY_CAP  draft_tau=$DSV41_DRAFT_TAU  block_verify=$DSV41_BLOCK_VERIFY  engram_prefetch=$DSV41_ENGRAM_PREFETCH  folded_fence=$DSV41_FOLDED_FENCE"
+   echo
+   local ok=0
+   command -v docker >/dev/null || { warn "docker missing on head"; ok=1; }

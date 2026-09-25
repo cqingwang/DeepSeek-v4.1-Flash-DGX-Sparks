@@ -1,0 +1,28 @@
+decode steps analysed: 42
+step wall ms: mean=56.8 median=56.1 min=47.2 max=72.7
+GPU busy per step: mean=54.7 ms
+
+== per-step GPU time by category (ms): mean / median / max ; kernels per step ==
+  bf16_gemm             20.7 /    20.6 /    23.7   n=381
+  moe_grouped_gemm      18.0 /    17.4 /    27.2   n=86
+  other                  6.4 /     6.3 /     8.4   n=766
+  nccl                   5.6 /     5.1 /    10.6   n=105
+  hyperconn              2.3 /     2.2 /     3.1   n=344
+  attention              2.1 /     2.1 /     2.9   n=343
+  moe_aux                1.6 /     1.6 /     1.8   n=221
+  router_tiny_gemm       1.0 /     1.0 /     1.1   n=43
+  quant                  0.7 /     0.7 /     0.9   n=234
+  memcpy                 0.4 /     0.4 /     0.5   n=58
+  norm                   0.4 /     0.4 /     0.5   n=140
+  fp8_triton_gemm        0.1 /     0.1 /     0.3   n=1
+  engram                 0.0 /     0.0 /     0.0   n=6
+  SUM                   59.4
+
+  21.10 ms/step  n/step=  87.8  _ZN7cutlass13device_kernelINS_4gemm6kernel13GemmUniversalINS1_17GroupProblemShapeIN4cute5t
+  17.40 ms/step  n/step= 233.8  kernel_cutlass_kernel_flashinfergemmkernelsdense_blockscaled_gemm_sm120_b12xDenseGemmKerne
+   5.59 ms/step  n/step=  91.9  ncclDevKernel_AllReduce_Sum_bf16_RING_LL(ncclDevKernelArgsStorage<4096ul>)
+   3.52 ms/step  n/step=  40.0  _wo_a_partial_w8
+   2.43 ms/step  n/step=   5.0  void cutlass::Kernel2<cutlass_80_wmma_tensorop_bf16_s161616gemm_bf16_16x16_128x2_tn_align8
+   1.40 ms/step  n/step=  87.8  _hc_mix_stats_partial_kernel
+   1.33 ms/step  n/step=  40.9  void flashinfer::sparse_mla_sm120::sparse_mla_decode_dsv4_kernel<(ModelType)1, 64, 128, 64
+   0.98 ms/step  n/step=   1.0  _head_fp8_kernel

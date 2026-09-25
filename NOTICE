@@ -15,6 +15,12 @@ Third-party components and their licences:
   MIT License, Copyright (c) 2026 0xSero. The MIT notice is retained in
   LICENSE.upstream-MIT as that licence requires; the combined work is offered
   under the AGPL-3.0-or-later.
+- adapter/verify_cap.py, block_verify.py, draft_head_fp8.py, engram_prefetch.py,
+  draft_tau.py, folded_result_fence.py, autotune_keep.py and wo_a_w8.py (with their
+  tests) originate from knapcio/DeepSeek-V4.1-Flash-4x-DGX-Spark-TP4 (commit 4d8f4c0),
+  AGPL-3.0-or-later. wo_a_w8.py and autotune_keep.py were modified here (TP3 group
+  count, dev-dsv41 bridge, draft/DROP fix, autotune cache fixes); see README.md,
+  Attribution.
 - runtime/flash_mla_sm120.py is derived from SGLang and remains under the Apache
   License 2.0 (LICENSE.sglang); the page-split changes are distributed under the
   same terms.

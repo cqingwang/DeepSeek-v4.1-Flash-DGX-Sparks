@@ -1,0 +1,86 @@
+{
+  "review_date": "2026-09-24",
+  "scope": "Read-only fleet cross-check; no restarts, configuration changes, or inference benchmarks.",
+  "probes": [
+    {
+      "name": "fleet_0",
+      "result": {
+        "status": "fulfilled",
+        "value": {
+          "chunk_id": "28e173",
+          "wall_time_seconds": 0.000007664,
+          "exit_code": 0,
+          "original_token_count": 167,
+          "output": "dsv41-head\nvllm-fn-nfs\nportainer\n# /etc/systemd/system/nvidia-clock-lock.service\n[Unit]\nDescription=Lock NVIDIA GPU clocks (0-2200 MHz)\nAfter=nvidia-persistenced.service systemd-modules-load.service\nWants=nvidia-persistenced.service\n\n[Service]\nType=oneshot\nExecStart=/usr/bin/nvidia-smi -lgc 0,2200\nRemainAfterExit=yes\n\n[Install]\nWantedBy=multi-user.target\nmulti-user.target\ninactive\nMemAvailable:    3223040 kB\ntotal 8\ndrwxrwxr-x  2 mia mia 4096 Sep 17 22:09 .\ndrwxrwxr-x 59 mia mia 4096 Sep 24 02:24 ..\nFilesystem         1B-blocks          Used    Available Use% Mounted on\n/dev/nvme0n1p2 3936289308672 3330271993856 405988179968  90% /\n2026-09-24T02:55:13+03:00\n"
+        }
+      }
+    },
+    {
+      "name": "fleet_1",
+      "result": {
+        "status": "fulfilled",
+        "value": {
+          "chunk_id": "a94ef4",
+          "wall_time_seconds": 0.390555144,
+          "exit_code": 0,
+          "original_token_count": 178,
+          "output": "2026-09-24T02:55:14+03:00\ntotal 99003664\n-rw-r--r-- 1 root root 50689173088 Sep 12 10:56 engram-l1-r1of2.bin\n-rw-r--r-- 1 root root 50690555920 Sep 12 10:58 engram-l14-r1of2.bin\nFilesystem        1B-blocks         Used   Available Use% Mounted on\n/dev/nvme0n1p2 982819848192 867913211904 64906600448  94% /\ndsv41-worker\nportainer\n# /etc/systemd/system/nvidia-clock-lock.service\n[Unit]\nDescription=Lock NVIDIA GPU clocks (0-2200 MHz)\nAfter=nvidia-persistenced.service systemd-modules-load.service\nWants=nvidia-persistenced.service\n\n[Service]\nType=oneshot\nExecStart=/usr/bin/nvidia-smi -lgc 0,2200\nRemainAfterExit=yes\n\n[Install]\nWantedBy=multi-user.target\nmulti-user.target\ninactive\nMemAvailable:    7911628 kB\n"
+        }
+      }
+    },
+    {
+      "name": "fleet_2",
+      "result": {
+        "status": "fulfilled",
+        "value": {
+          "chunk_id": "8f9491",
+          "wall_time_seconds": 0.481051305,
+          "exit_code": 0,
+          "original_token_count": 218,
+          "output": "2026-09-24T02:55:14+03:00\nls: cannot access '/home/zurih/dsv41-engram': No such file or directory\nFilesystem        1B-blocks         Used    Available Use% Mounted on\n/dev/nvme0n1p2 982819848192 512957808640 419862003712  55% /\ndsv41-worker\nsparkDash\nautoclip-frontend\nautoclip-celery-worker\nautoclip-app\nautoclip-celery-beat\nautoclip-flower\nautoclip-redis\ncompass-pg\nslate\nnexusui\nlocal-llm\nmodel-trader-webui\nmodel-trader-backend\nmetube\npromptwiki\nnewsdesk\nsig\nsig-stocktalk\nsig-wallstreet\n# /etc/systemd/system/nvidia-clock-lock.service\n[Unit]\nDescription=Lock NVIDIA GPU clocks (0-2200 MHz)\nAfter=nvidia-persistenced.service systemd-modules-load.service\nWants=nvidia-persistenced.service\n\n[Service]\nType=oneshot\nExecStart=/usr/bin/nvidia-smi -lgc 0,2200\nRemainAfterExit=yes\n\n[Install]\nWantedBy=multi-user.target\ngraphical.target\nactive\nMemAvailable:    4328280 kB\n"
+        }
+      }
+    }
+  ],
+  "checks": [
+    {
+      "name": "compatibility_0",
+      "result": {
+        "status": "fulfilled",
+        "value": {
+          "chunk_id": "b7d03e",
+          "wall_time_seconds": 0.000015296,
+          "exit_code": 0,
+          "original_token_count": 1501,
+          "output": "autotune_file_exists True\n{'_autotune_cache_digest': True, 'flashinfer_autotune_context': True, 'flashinfer_autotune_cache_path': True}\n{'SGLANG_DSPARK_FOLDED_SAMPLING': None, 'DSV41_PACKED_DIR': '/engram', 'MEM_FRACTION_STATIC': '0.95', 'DSPARK_BLOCK_SIZE': '3'}\n/home/mia/dsv41-engram -> /engram\n66:# \"minimum viable\" mem-fraction from ~0.940 to 0.9569 and left no KV cache.\n72:# Native envelope. 0.95 is the working value; 0.98 was only for the borrowed\n73:# decode adapters, which are off again (they unloaded spark3 at autotune).\n75:MEM_FRACTION_STATIC=0.95\n76:HEAD_MEM_FRACTION_STATIC=0.95\n77:# Off: these run inside the autotune target-verify forward. wo_a DROP replaces\n147:# bf16: the autotuner picked it for the 32-token bucket (17-32 token prefills and\n    assert weight['shape'][1] == WEIGHT_BYTES and scale['shape'][1] == SCALE_BYTES\n    base = 8 + length\n    return (path, weight['shape'][0],\n            base + weight['data_offsets'][0], base + scale['data_offsets'][0])\n\n\ndef pack_layer(root: Path, out_dir: Path, layer_id: int, rank: int, tp: int,\n               chunk_rows: int) -> Path:\n    path, rows, weight_off, scale_off = tensor_span(root, layer_id)\n    lo, hi = rows * rank // tp, rows * (rank + 1) // tp\n    count = hi - lo\n    target = out_dir / f'engram-l{layer_id}-r{rank}of{tp}.bin'\n    partial = target.with_suffix('.partial')\n    expected = HEADER_BYTES + count * ROW_BYTES\n\n    if target.exists() and target.stat().st_size == expected:\n        print(f'layer {layer_id}: {target} already complete ({expected/2**30:.1f} GiB)',\n              flush=True)\n        return target\n\n    header = bytearray(HEADER_BYTES)\n    struct.pack_into('<6Q', header, 0, MAGIC, layer_id, lo, hi, rows, ROW_BYTES)\n\n    started = time.monotonic()\n    written = 0\n    with open(path, 'rb', buffering=0) as src, open(partial, 'wb', buffering=0) as dst:\n        dst.write(header)\n        for start in range(lo, hi, chunk_rows):\n            stop = min(start + chunk_rows, hi)\n            n = stop - start\n            src.seek(weight_off + start * WEIGHT_BYTES)\n            weights = src.read(n * WEIGHT_BYTES)\n            src.seek(scale_off + start * SCALE_BYTES)\n            scales = src.read(n * SCALE_BYTES)\n            if len(weights) != n * WEIGHT_BYTES or len(scales) != n * SCALE_BYTES:\n                raise SystemExit(f'short read from {path} at row {start}')\n            block = numpy.empty((n, ROW_BYTES), dtype=numpy.uint8)\n            block[:, :WEIGHT_BYTES] = numpy.frombuffer(\n                weights, dtype=numpy.uint8).reshape(n, WEIGHT_BYTES)\n            block[:, WEIGHT_BYTES:] = numpy.frombuffer(\n                scales, dtype=numpy.uint8).reshape(n, SCALE_BYTES)\n            dst.write(block.tobytes())\n            written += n\n            elapsed = time.monotonic() - started\n            rate = written * ROW_BYTES / max(elapsed, 1e-6)\n            print(f'layer {layer_id}: {written}/{count} rows '\n                  f'({100.0*written/count:5.1f}%) {rate/2**20:.0f} MiB/s', flush=True)\n        dst.flush()\n        os.fsync(dst.fileno())\n    partial.rename(target)\n    print(f'layer {layer_id}: wrote {target} ({expected/2**30:.1f} GiB) in '\n          f'{time.monotonic()-started:.0f}s', flush=True)\n    return target\n\n\ndef main() -> int:\n    parser = argparse.ArgumentParser()\n    parser.add_argument('--model', default=os.environ.get('DSV41_SOURCE', '/models/DeepSeek-V4.1-Flash'))\n    parser.add_argument('--out', default=os.environ.get('DSV41_PACKED_DIR', '/engram'))\n    parser.add_argument('--rank', type=int, default=int(os.environ.get('NODE_RANK', '0')))\n    parser.add_argument('--tp', type=int, default=int(os.environ.get('TP_SIZE', '3')))\n    \"${auth[@]}\" -H 'Content-Type: application/json' \\\n    -d \"{\\\"model\\\":\\\"$SERVED_MODEL_NAME\\\",\\\"temperature\\\":0,\\\"max_tokens\\\":32,\\\"chat_template_kwargs\\\":{\\\"thinking\\\":false},\\\"messages\\\":[{\\\"role\\\":\\\"user\\\",\\\"content\\\":\\\"What is 19 + 23? Reply only with the number.\\\"}]}\"\n  echo\n}\n\nusage() {\n  sed -n '2,24p' \"$0\" | tr -d '#'\n}\n\nCMD=\"${1:-serve}\"\nshift || true\n# Repack each rank's owned Engram rows onto node-local NVMe (~68 GiB/node).\n# A miss then costs one local read instead of two, and on a worker it stops\n# being an NFS round trip to the head. Idempotent: complete shards are skipped.\ncmd_pack() {\n  local src\n  src=$(model_src)\n  info \"packing Engram shards: head $ENGRAM_DIR, workers $WORKER_ENGRAM_DIR\"\n  mkdir -p \"$ENGRAM_DIR\"\n  docker run --rm --network host \\\n    -v \"$src:/models/DeepSeek-V4.1-Flash:ro\" \\\n    -v \"$ENGRAM_DIR:/engram\" \\\n    -e DSV41_SOURCE=/models/DeepSeek-V4.1-Flash \\\n    --entrypoint python3 \"$IMAGE\" \\\n    /opt/dsv41/scripts/pack_engram.py --rank 0 --tp \"$TP_SIZE\" --out /engram \\\n    || die \"pack failed on head\"\n  local idx=1 host\n  for host in \"${WORKER_IPS[@]}\"; do\n    info \"packing rank $idx on $host...\"\n    remote_on \"$host\" \"mkdir -p $WORKER_ENGRAM_DIR && docker run --rm --network host \\\n      -v $NFS_VOLUME:/models/DeepSeek-V4.1-Flash:ro \\\n      -v $WORKER_ENGRAM_DIR:/engram \\\n      -e DSV41_SOURCE=/models/DeepSeek-V4.1-Flash \\\n      --entrypoint python3 $IMAGE \\\n      /opt/dsv41/scripts/pack_engram.py --rank $idx --tp $TP_SIZE --out /engram\" \\\n      || die \"pack failed on $host\"\n    idx=$((idx + 1))\n  done\n  info \"Engram shards packed on all 3 nodes\"\n}\n\ncase \"$CMD\" in\n  serve|start|\"\") cmd_serve \"$@\" ;;\n  doctor) cmd_doctor strict ;;\n  pull) cmd_pull ;;\n  build) cmd_build ;;\n  pack) cmd_pack ;;\n## Enable\n\n```\nEXTRA_CONTAINER_ENV=\"... DSV41_ENGRAM_DRM_NODE=/dev/dri/card0\"\n# optional: DSV41_ENGRAM_DRM_MIB=1792 (multiple of 16, at most 2032), DSV41_ENGRAM_DRM_LAYER=<engram layer id>\n```\n\nThe containers already run `--privileged`, so the device node is visible. Look for\n`Engram: row cache of ... bytes on the display reservation (/dev/dri/card0)` in the boot log. If the\nnode is missing or the buffer cannot be created, the store falls back to ordinary memory and logs why.\nQualified on driver 580.173.02 only; the technique is reported not to work on 595.84.\n"
+        }
+      }
+    },
+    {
+      "name": "compatibility_1",
+      "result": {
+        "status": "fulfilled",
+        "value": {
+          "chunk_id": "de1c58",
+          "wall_time_seconds": 0.189034132,
+          "exit_code": 0,
+          "original_token_count": 83,
+          "output": "/home/zurih/dsv41-3x-spark/engram -> /engram\n[2026-09-23 23:55:29 TP1 EP1] Engram layer=1 lookups=80 hit_rate=0.0% reads=160 cache=0.0GiB(4-way) scales=0.0GiB threads=96 packed=False\n[2026-09-23 23:55:29 TP1 EP1] Engram layer=14 lookups=80 hit_rate=0.0% reads=160 cache=0.0GiB(4-way) scales=0.0GiB threads=96 packed=False\nactive\n"
+        }
+      }
+    },
+    {
+      "name": "compatibility_2",
+      "result": {
+        "status": "fulfilled",
+        "value": {
+          "chunk_id": "c0afee",
+          "wall_time_seconds": 0.211294096,
+          "exit_code": 0,
+          "original_token_count": 530,
+          "output": "/home/zurih/dsv41-3x-spark/engram -> /engram\n[2026-09-23 23:55:29 TP2 EP2] Engram layer=1 lookups=80 hit_rate=0.0% reads=160 cache=0.0GiB(4-way) scales=0.0GiB threads=96 packed=False\n[2026-09-23 23:55:29 TP2 EP2] Engram layer=14 lookups=80 hit_rate=0.0% reads=160 cache=0.0GiB(4-way) scales=0.0GiB threads=96 packed=False\nSep 24 01:33:54 spark3 kernel: NVRM: nvCheckOkFailedNoLog: Check failed: Out of memory [NV_ERR_NO_MEMORY] (0x00000051) returned from _memdescAllocInternal(pMemDesc) @ mem_desc.c:1359\nSep 24 01:33:54 spark3 kernel: NVRM: nvAssertOkFailedNoLog: Assertion failed: Out of memory [NV_ERR_NO_MEMORY] (0x00000051) returned from status @ kernel_graphics_context.c:1178\nSep 24 01:33:54 spark3 kernel: NVRM: nvCheckOkFailedNoLog: Check failed: Out of memory [NV_ERR_NO_MEMORY] (0x00000051) returned from kgrctxAllocMainCtxBuffer(pGpu, pKernelGraphicsContext, pKernelGraphics, pKernelChannel) @ kernel_graphics_context.c:1387\nSep 24 01:33:54 spark3 kernel: NVRM: nvCheckOkFailedNoLog: Check failed: Out of memory [NV_ERR_NO_MEMORY] (0x00000051) returned from kgrctxAllocCtxBuffers(pGpu, pKernelGraphicsObject->pKernelGraphicsContext, pKernelGraphics, pKernelGraphicsObject) @ kernel_graphics_object.c:215\nSep 24 01:33:54 spark3 kernel: NVRM: nvCheckOkFailedNoLog: Check failed: Out of memory [NV_ERR_NO_MEMORY] (0x00000051) returned from _memdescAllocInternal(pMemDesc) @ mem_desc.c:1359\nSep 24 01:33:54 spark3 kernel: NVRM: nvAssertOkFailedNoLog: Assertion failed: Out of memory [NV_ERR_NO_MEMORY] (0x00000051) returned from status @ kernel_graphics_context.c:1178\nSep 24 01:33:54 spark3 kernel: NVRM: nvCheckOkFailedNoLog: Check failed: Out of memory [NV_ERR_NO_MEMORY] (0x00000051) returned from kgrctxAllocMainCtxBuffer(pGpu, pKernelGraphicsContext, pKernelGraphics, pKernelChannel) @ kernel_graphics_context.c:1387\nSep 24 01:33:54 spark3 kernel: NVRM: nvCheckOkFailedNoLog: Check failed: Out of memory [NV_ERR_NO_MEMORY] (0x00000051) returned from kgrctxAllocCtxBuffers(pGpu, pKernelGraphicsObject->pKernelGraphicsContext, pKernelGraphics, pKernelGraphicsObject) @ kernel_graphics_object.c:215\nactive\n"
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,2 @@
+c1-chat_sampled  decode 32.94 tok/s (min 31.81 max 34.34 sd 0.78) ttft 0.262s toks [512, 512, 512, 512, 512, 512, 512, 512, 512, 512] distinct 10 err 0  2026-09-24T04:17:23.954295Z..2026-09-24T04:20:00.953811Z
+c1-chat_sampled  accept_len 2.17  step 65.8 ms  (n=59 intervals, bs=1)

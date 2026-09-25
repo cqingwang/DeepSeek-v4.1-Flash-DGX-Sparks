@@ -1,0 +1,110 @@
+{
+ "tasks": {
+  "mul": {
+   "ok": true,
+   "text": "391",
+   "sha": "a934c244755c66ae"
+  },
+  "speed": {
+   "ok": true,
+   "text": "80",
+   "sha": "48449a14a4ff7d79"
+  },
+  "capital": {
+   "ok": true,
+   "text": "Canberra",
+   "sha": "b36f06bee2e4f548"
+  },
+  "json": {
+   "ok": true,
+   "text": "{\"name\":\"Ada\",\"age\":36,\"skills\":[\"mathematics\",\"programming\",\"analytical reasoning\"]}",
+   "sha": "ab67ddc3e5e6f1ed"
+  },
+  "code": {
+   "ok": true,
+   "text": "```python\ndef is_prime(n: int) -> bool:\n    if n < 2:\n        return False\n    if n < 4:\n        return True\n    if n % 2 == 0 or n % 3 == 0:\n        return False\n    i = 5\n    while i * i <= n:\n        if n % i == 0 or n % (i + 2) == 0:\n            return False\n        i += 6\n    return True\n```",
+   "sha": "72e0ab61f8da019f"
+  },
+  "order": {
+   "ok": true,
+   "text": "apple, banana, fig, mango, pear",
+   "sha": "91b21952834dd97b"
+  },
+  "count": {
+   "ok": true,
+   "text": "3",
+   "sha": "4e07408562bedb8b"
+  },
+  "sum": {
+   "ok": true,
+   "text": "5913",
+   "sha": "12e092eef5220a2d"
+  }
+ },
+ "concurrent": {
+  "capital": {
+   "ok": true,
+   "same_as_c1": true
+  },
+  "mul": {
+   "ok": true,
+   "same_as_c1": true
+  },
+  "speed": {
+   "ok": true,
+   "same_as_c1": true
+  },
+  "count": {
+   "ok": true,
+   "same_as_c1": true
+  },
+  "order": {
+   "ok": true,
+   "same_as_c1": true
+  },
+  "sum": {
+   "ok": true,
+   "same_as_c1": true
+  },
+  "json": {
+   "ok": true,
+   "same_as_c1": true
+  },
+  "code": {
+   "ok": true,
+   "same_as_c1": true
+  }
+ },
+ "repeat": {
+  "shas": [
+   "f2f5afd5842a7512",
+   "f2f5afd5842a7512",
+   "f2f5afd5842a7512"
+  ],
+  "distinct": 1
+ },
+ "needles": [
+  {
+   "k": 30,
+   "prompt_tokens": 28721,
+   "ok": true,
+   "answer": "FCZ6G7U2",
+   "secs": 16.5820872640179,
+   "error": null
+  }
+ ],
+ "summary": {
+  "tasks_ok": "8/8",
+  "concurrent_ok": "8/8",
+  "concurrent_same_as_c1": 8,
+  "greedy_repeat_distinct": 1,
+  "needles": [
+   [
+    30,
+    28721,
+    true,
+    16.6
+   ]
+  ]
+ }
+}

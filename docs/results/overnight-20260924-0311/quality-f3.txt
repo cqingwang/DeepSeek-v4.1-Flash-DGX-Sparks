@@ -1,0 +1,1 @@
+{"tasks_ok": "8/8", "concurrent_ok": "8/8", "concurrent_same_as_c1": 7, "greedy_repeat_distinct": 1, "needles": [[30, 28721, true, 15.6]]}

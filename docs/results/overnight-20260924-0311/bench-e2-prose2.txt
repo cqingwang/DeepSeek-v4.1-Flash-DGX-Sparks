@@ -1,0 +1,2 @@
+c1-prose2        decode 29.56 tok/s (min 29.50 max 29.94 sd 0.18) ttft 0.272s toks [512, 512, 512, 512, 512] distinct 5 err 0  2026-09-24T02:32:54.259312Z..2026-09-24T02:34:21.752190Z
+c1-prose2        accept_len 2.00  step 66.5 ms  (n=33 intervals, bs=1)

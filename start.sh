@@ -81,6 +81,11 @@ NCCL_SHM_DISABLE="${NCCL_SHM_DISABLE:-1}"
 NCCL_DEBUG="${NCCL_DEBUG:-WARN}"
 NCCL_HOST_DIR="${NCCL_HOST_DIR:-$HOME/nccl-2.30.7}"
 NCCL_CONTAINER_DIR="${NCCL_CONTAINER_DIR:-/nccl}"
+# Optional switchless-ring overlay. The production TP4/EP2 profile keeps this
+# disabled and uses the local ring-only library injection below.
+NCCL_PIP_SO="${NCCL_PIP_SO:-/opt/sglang/lib/python3.12/site-packages/nvidia/nccl/lib/libnccl.so.2}"
+NCCL_SWITCHLESS_RING_ONLY="${NCCL_SWITCHLESS_RING_ONLY:-0}"
+NCCL_OVERLAY_PIP="${NCCL_OVERLAY_PIP:-$NCCL_SWITCHLESS_RING_ONLY}"
 
 MODEL_DIR="${MODEL_DIR:-$HOME/NewModels/DeepSeek-V4.1-Flash}"
 COMMON_MODEL="${COMMON_MODEL:-/var/tmp/DeepSeek-V4.1-Flash}"
@@ -162,6 +167,8 @@ mkdir -p "$LOG_DIR" "$STATE_DIR"
 
 # shellcheck source=files/nfs-share.sh
 source "$ROOT/files/nfs-share.sh"
+# shellcheck source=files/nccl.sh
+source "$ROOT/files/nccl.sh"
 
 remote_on() {
   local host="$1"; shift
@@ -214,7 +221,7 @@ model_src() {
 api_key() {
   # Empty / dummy / off → no --api-key (Spark 1 / Pi probe /v1/models without auth).
   local v="${API_KEY:-}"
-  case "${v,,}" in
+  case "$(printf '%s' "$v" | tr '[:upper:]' '[:lower:]')" in
     ''|none|off|dummy|0) echo "" ;;
     *) echo "$v" ;;
   esac
@@ -250,13 +257,14 @@ gid_index_remote() {
 }
 
 docker_common_args() {
-  local -n _a=$1
+  local array_name="$1"
   local src hip gid
+  local -a _a=()
   src=$(model_src)
   hip="$2"
   gid="$3"
   [[ -d "$src" ]] || die "model mount src missing: $src"
-  _a+=(
+  _a=(
     --network host --ipc host --privileged --cap-add IPC_LOCK --gpus all
     --shm-size "${SHM_SIZE:-32g}"
     --ulimit "memlock=-1:-1" --ulimit stack=67108864
@@ -291,6 +299,9 @@ docker_common_args() {
     -e "SPEC_ALGO=$SPEC_ALGO"
     -e "DSPARK_BLOCK_SIZE=$DSPARK_BLOCK_SIZE"
     -e "SERVED_MODEL_NAME=$SERVED_MODEL_NAME"
+    -e "SGLANG_DSV41_REASONING_EFFORT=${SGLANG_DSV41_REASONING_EFFORT:-75}"
+    -e "DSV41_MAX_NEW_TOKENS=${DSV41_MAX_NEW_TOKENS:-32768}"
+    -e "DSV41_LOOP_ABORT=${DSV41_LOOP_ABORT:-1}"
     -e "SKIP_PREPARE=$SKIP_PREPARE"
     -e "SKIP_VERIFY=$SKIP_VERIFY"
     -e "WARMUP=${WARMUP:-1}"
@@ -328,16 +339,18 @@ docker_common_args() {
   if [[ -n "${EXTRA_SGLANG_ARGS:-}" ]]; then
     _a+=(-e "EXTRA_SGLANG_ARGS=$EXTRA_SGLANG_ARGS")
   fi
-  if [[ -f "$NCCL_HOST_DIR/libnccl.so.2.30.7" || -f "$NCCL_HOST_DIR/libnccl.so.2" ]]; then
+  if [[ "$NCCL_OVERLAY_PIP" == 1 ]]; then
+    nccl_mount_args _a || die "NCCL overlay library is unavailable"
+  elif [[ -f "$NCCL_HOST_DIR/libnccl.so.2.30.7" || -f "$NCCL_HOST_DIR/libnccl.so.2" ]]; then
     _a+=(-v "$NCCL_HOST_DIR:$NCCL_CONTAINER_DIR:ro" -e "LD_LIBRARY_PATH=$NCCL_CONTAINER_DIR")
   fi
   # Ring adaptation: host ring-only NCCL + core-pinning shim (same LD_PRELOAD
   # pair as the vLLM production stack), and the NCCL debug-log取证 mount.
   if [[ -f /opt/aicad-prod/lib/libncclpin.so && -d /opt/nccl-ringonly ]]; then
     mkdir -p "$HOME/nccl-debug"
-    _a+=(-v "/opt/aicad-prod/lib/libncclpin.so:/opt/libncclpin.so:ro"
-         -v "/opt/nccl-ringonly:/opt/nccl-ringonly:ro"
-         -v "$HOME/nccl-debug:/nccl-debug:rw"
+    _a+=(-v "/opt/aicad-prod/lib/libncclpin.so:/opt/libncclpin.so:ro" \
+         -v "/opt/nccl-ringonly:/opt/nccl-ringonly:ro" \
+         -v "$HOME/nccl-debug:/nccl-debug:rw" \
          -e 'LD_PRELOAD=/opt/libncclpin.so /opt/nccl-ringonly/libnccl.so.2')
   fi
   # Ring adaptation: per-rank PEER_HCA for rank 0 (workers get theirs in
@@ -354,6 +367,8 @@ docker_common_args() {
       _a+=(-e "$_ed")
     done
   fi
+  switchless_ring_args _a
+  _nccl_array_append "$array_name" "${_a[@]}"
 }
 
 # Every rank builds its own planner, so the SPS/STS calibration has to exist on
@@ -402,6 +417,14 @@ worker_env_lines() {
   if [[ -n "$_ph" ]]; then
     _extra+="        -e 'NCCL_IB_PEER_HCA=$_ph' \\"$'\n'
   fi
+  if [[ "$NCCL_SWITCHLESS_RING_ONLY" == 1 ]]; then
+    _extra+="        -e 'NCCL_SWITCHLESS_RING_ONLY=1' \\"$'\n'
+    _extra+="        -e 'NCCL_ALGO=${NCCL_ALGO:-Ring}' \\"$'\n'
+    _extra+="        -e 'NCCL_SKIP_TREE_CONNECT=${NCCL_SKIP_TREE_CONNECT:-1}' \\"$'\n'
+    _extra+="        -e 'NCCL_IB_SUBNET_PREFIX_LEN=${NCCL_IB_SUBNET_PREFIX_LEN:-24}' \\"$'\n'
+    _extra+="        -e 'NCCL_MIN_NCHANNELS=${NCCL_MIN_NCHANNELS:-4}' \\"$'\n'
+    _extra+="        -e 'NCCL_P2P_LEVEL=${NCCL_P2P_LEVEL:-SYS}' \\"$'\n'
+  fi
   cat <<EOF
         -e NODE_RANK=$rank -e NNODES=$NNODES \\
         -e TP_SIZE=$TP_SIZE -e EP_SIZE=$EP_SIZE \\
@@ -425,7 +448,10 @@ worker_env_lines() {
         -e MAX_TOTAL_TOKENS=$MAX_TOTAL_TOKENS \\
         -e CUDA_GRAPH_MAX_BS_DECODE=$MAX_RUNNING_REQUESTS \\
         -e SPEC_ALGO=$SPEC_ALGO -e DSPARK_BLOCK_SIZE=$DSPARK_BLOCK_SIZE \\
-        -e SERVED_MODEL_NAME=$SERVED_MODEL_NAME \\
+        -e SERVED_MODEL_NAME=$(printf '%q' "$SERVED_MODEL_NAME") \\
+        -e SGLANG_DSV41_REASONING_EFFORT=${SGLANG_DSV41_REASONING_EFFORT:-75} \\
+        -e DSV41_MAX_NEW_TOKENS=${DSV41_MAX_NEW_TOKENS:-32768} \\
+        -e DSV41_LOOP_ABORT=${DSV41_LOOP_ABORT:-1} \\
         -e SKIP_PREPARE=1 -e SKIP_VERIFY=1 -e SKIP_SMOKE=1 \\
         -e NCCL_NET=$NCCL_NET -e NCCL_IB_DISABLE=$NCCL_IB_DISABLE \\
         -e NCCL_IB_HCA=$IB_HCA -e NCCL_SOCKET_IFNAME=$NCCL_SOCKET_IFNAME \\
@@ -448,6 +474,41 @@ worker_env_lines() {
         -e HOST_IP=$wip -e VLLM_HOST_IP=$wip \\
 ${_extra}
 EOF
+}
+
+# Validate every rank before any existing container is removed. This path is
+# opt-in; the local production profile uses the established TP4/EP2 ring path.
+preflight_all_nodes() {
+  [[ "$NCCL_OVERLAY_PIP" == 1 || "$NCCL_SWITCHLESS_RING_ONLY" == 1 ]] || return 0
+  nccl_validate_config || return 1
+  local h gid failed=0
+  RING_WORKER_GIDS=()
+  if RING_GID_HEAD=$(nccl_preflight); then
+    info "NCCL preflight head OK${RING_GID_HEAD:+ (RoCEv2 GID: $RING_GID_HEAD)}"
+  else
+    warn "NCCL preflight failed on head"
+    failed=1
+  fi
+  for h in "${WORKER_HOSTS[@]}"; do
+    if gid=$(remote_on "$h" "set -e
+$(nccl_worker_settings)
+nccl_preflight"); then
+      gid="${gid//$'\r'/}"
+      gid="${gid#"${gid%%[![:space:]]*}"}"
+      gid="${gid%"${gid##*[![:space:]]}"}"
+      if [[ "$NCCL_SWITCHLESS_RING_ONLY" == 1 && ! "$gid" =~ ^[0-9]+$ ]]; then
+        warn "NCCL preflight $h returned an invalid GID index"
+        failed=1
+        continue
+      fi
+      RING_WORKER_GIDS+=("$gid")
+      info "NCCL preflight $h OK${gid:+ (RoCEv2 GID: $gid)}"
+    else
+      warn "NCCL preflight failed on $h"
+      failed=1
+    fi
+  done
+  return "$failed"
 }
 
 cmd_doctor() {
@@ -611,6 +672,7 @@ overlay_image_present() {
 }
 
 cmd_share() {
+  [[ "$NFS_SHARE" == "1" ]] || { info "NFS_SHARE=0 — NFS setup skipped"; return 0; }
   info "=== share spark1 checkpoint over NFSv4 on ConnectX ==="
   [[ -f "$MODEL_DIR/config.json" ]] || die "no checkpoint — ./start.sh download"
   ln -sfn "$MODEL_DIR" "$COMMON_MODEL"
@@ -640,6 +702,9 @@ _busy_gpu() {
 }
 
 cmd_serve() {
+  if [[ "$NCCL_OVERLAY_PIP" == 1 || "$NCCL_SWITCHLESS_RING_ONLY" == 1 ]]; then
+    nccl_validate_config || die "invalid NCCL/loader configuration"
+  fi
   DOCTOR_STRICT=0 cmd_doctor || true
   [[ -f "$MODEL_DIR/config.json" ]] || cmd_download
   ln -sfn "$MODEL_DIR" "$COMMON_MODEL"
@@ -653,20 +718,7 @@ cmd_serve() {
     cmd_build
   fi
 
-  local h need_share=0
-  if [[ "$WEIGHTS_MODE" == "local" ]]; then
-    info "WEIGHTS_MODE=local — workers read node-local weights, NFS skipped"
-    for h in "${WORKER_HOSTS[@]}"; do
-      remote_ok_on "$h" "test -f $WORKER_MODEL_DIR/config.json" \
-        || die "missing local weights on $h: $WORKER_MODEL_DIR"
-    done
-  else
-    for h in "${WORKER_HOSTS[@]}"; do
-      if ! nfs_worker_has_model "$h"; then
-        need_share=1
-      fi
-    done
-  fi
+  local h
   for h in "${WORKER_HOSTS[@]}"; do
     if ! remote_ok_on "$h" "docker image inspect $(printf '%q' "$IMAGE") --format '{{index .Config.Labels \"com.spark.dsv41.overlay\"}}' 2>/dev/null | grep -qx 1"; then
       info "image missing on $h — building"
@@ -674,8 +726,21 @@ cmd_serve() {
       break
     fi
   done
-  if [[ "$WEIGHTS_MODE" != "local" && ( "$need_share" -eq 1 || "$NFS_SHARE" == "1" ) ]]; then
+  preflight_all_nodes || die "NCCL preflight failed; see files/nccl.sh"
+  if [[ "$WEIGHTS_MODE" == "local" ]]; then
+    info "WEIGHTS_MODE=local — workers read node-local weights, NFS skipped"
+    local_model_has_weights || die "head: $MODEL_DIR is missing/incomplete; local weights are required"
+    for h in "${WORKER_HOSTS[@]}"; do
+      remote_ok_on "$h" "test -f $WORKER_MODEL_DIR/config.json" \
+        || die "$h: local weights $WORKER_MODEL_DIR are missing/incomplete"
+    done
+  elif [[ "$NFS_SHARE" == "1" ]]; then
     cmd_share
+  else
+    local_model_has_weights || die "head: $MODEL_DIR is missing/incomplete; NFS_SHARE=0 requires a complete local checkpoint"
+    for h in "${WORKER_HOSTS[@]}"; do
+      nfs_worker_has_model "$h" || die "$h: local volume $NFS_VOLUME is missing/incomplete; NFS setup is disabled"
+    done
   fi
 
   API_KEY="$(api_key)"
@@ -691,7 +756,11 @@ cmd_serve() {
   local -a WORKER_GIDS=()
   # Ring adaptation: kernel-1031 GID-table reorder makes auto-detection
   # untrustworthy here; the fleet runs NCCL_IB_GID_INDEX=-1 as a hard rule.
-  if [[ -n "${NCCL_IB_GID_INDEX_FORCE:-}" ]]; then
+  if [[ "$NCCL_SWITCHLESS_RING_ONLY" == 1 ]]; then
+    GID_HEAD="$RING_GID_HEAD"
+    WORKER_GIDS=("${RING_WORKER_GIDS[@]}")
+    info "RoCEv2 GID indexes: preflight head=$GID_HEAD workers=${WORKER_GIDS[*]}"
+  elif [[ -n "${NCCL_IB_GID_INDEX_FORCE:-}" ]]; then
     GID_HEAD="$NCCL_IB_GID_INDEX_FORCE"
     for gi in "${!WORKER_IPS[@]}"; do WORKER_GIDS+=("$NCCL_IB_GID_INDEX_FORCE"); done
     info "RoCEv2 GID indexes: FORCED head=$GID_HEAD workers=${WORKER_GIDS[*]} (NCCL_IB_GID_INDEX_FORCE)"
@@ -713,6 +782,10 @@ cmd_serve() {
   push_spec_tables
   info "Starting workers (ranks 1..${#WORKER_IPS[@]}) first..."
   local idx=0 wip wgid rank
+  local NCCL_LIBRARY_PATH="$NCCL_HOST_DIR/libnccl.so.2"
+  if [[ -f "$NCCL_HOST_DIR/libnccl.so.2.30.7" ]]; then
+    NCCL_LIBRARY_PATH="$NCCL_HOST_DIR/libnccl.so.2.30.7"
+  fi
   for h in "${WORKER_HOSTS[@]}"; do
     wip="${WORKER_IPS[$idx]}"
     wgid="${WORKER_GIDS[$idx]}"
@@ -726,8 +799,10 @@ cmd_serve() {
       mkdir -p $WORKER_DIR/state $WORKER_DIR/logs
       NCCL_VOL=''
       NCCL_ENV=''
-      if [ -f $NCCL_HOST_DIR/libnccl.so.2.30.7 ] || [ -f $NCCL_HOST_DIR/libnccl.so.2 ]; then
-        NCCL_VOL=\"-v $NCCL_HOST_DIR:$NCCL_CONTAINER_DIR:ro\"
+      if [ \"${NCCL_OVERLAY_PIP:-0}\" = 1 ]; then
+        NCCL_VOL=\"-v $(printf '%q' "$NCCL_LIBRARY_PATH"):$NCCL_PIP_SO:ro\"
+      elif [ -f $(printf '%q' "$NCCL_HOST_DIR/libnccl.so.2.30.7") ] || [ -f $(printf '%q' "$NCCL_HOST_DIR/libnccl.so.2") ]; then
+        NCCL_VOL=\"-v $(printf '%q' "$NCCL_HOST_DIR"):$NCCL_CONTAINER_DIR:ro\"
         NCCL_ENV='-e LD_LIBRARY_PATH=$NCCL_CONTAINER_DIR'
       fi
       SHIM_VOL=''

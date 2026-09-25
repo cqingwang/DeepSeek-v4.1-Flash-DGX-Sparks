@@ -131,7 +131,7 @@ def request(path, payload=None, timeout=10):
 
 def smoke():
     result = request('/v1/chat/completions', dict(
-        model=PRIMARY_MODEL, temperature=0,
+        model=PRIMARY_MODEL, temperature=0, max_tokens=32,
         chat_template_kwargs={'thinking': False},
         messages=[dict(role='user', content='What is 19 + 23? Reply only with the number.')]),
         timeout=300)
@@ -141,7 +141,7 @@ def smoke():
     print('Fresh inference passed: 19 + 23 = 42', flush=True)
     if os.environ.get('SMOKE_QUICK', '0') == '1':
         return
-    common = dict(model=PRIMARY_MODEL, temperature=0,
+    common = dict(model=PRIMARY_MODEL, temperature=0, max_tokens=256,
                   chat_template_kwargs={'thinking': False})
     structured = request('/v1/chat/completions', dict(common,
         messages=[dict(role='user', content='Return an object whose answer is the integer 42.')],
@@ -306,6 +306,7 @@ def serve():
         '--cuda-graph-max-bs-decode', graph_bs,
         '--random-seed', '0',
         '--enable-decoder-swa-bounded-replay',
+        '--enable-cache-report',
         '--tool-call-parser', os.environ.get('TOOL_CALL_PARSER', 'deepseekv41'),
         '--reasoning-parser', os.environ.get('REASONING_PARSER', 'deepseek-v41'),
         '--host', os.environ.get('HOST', '0.0.0.0'),
