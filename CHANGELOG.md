@@ -5,6 +5,10 @@ raw results live under `docs/results/`.
 
 ## 2026-09-25
 
+- **`DSV41_PREFILL_SP_FP8=1`, on:** the prefill attention-input gather of 17 of the 21 full-row layers carries
+  the MXFP8 bytes and scales `wqkv_a` computes itself (about half the bytes; checked bit-identical per chunk
+  size on every rank at runtime). Fresh clone: prefill 16k-262k 5214-5818 -> 5355-5936 (+2-2.6 %), real text
+  +1-2 %; qeval 72/75; 1,011,084-token needle PASS (325 s).
 - **`adapter/prefill_sp.py`, `DSV41_PREFILL_SP=1`, on.** Prefill sequence parallel: at chunks of >= 2048 rows the
   per-layer all-reduces become reduce-scatter + all-gather and the per-row work between them (hyper-connection
   mixing and norms, Engram `wkv` + gate) runs on each rank's quarter of the rows. sparkDash prefill 16k-262k
