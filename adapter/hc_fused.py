@@ -152,9 +152,17 @@ def fused_mix_stats_sinkhorn(mod, x_flat, hc_fn, hc_scale, hc_base, hc_mult, sin
     return pre, post, comb
 
 
+try:  # prefill sequence parallel: row gates key on the full chunk row count (prefill_sp.py)
+    from prefill_sp import sp_logical_rows as _logical_rows
+except ImportError:  # pragma: no cover
+    def _logical_rows(x):
+        return x.shape[0]
+
+
 def eligible(x_flat, hc_fn, hc_mult, min_rows=None):
     return (
-        x_flat.dim() == 2 and x_flat.shape[0] >= (MIN_ROWS if min_rows is None else min_rows)
+        x_flat.dim() == 2
+        and _logical_rows(x_flat) >= (MIN_ROWS if min_rows is None else min_rows)
         and x_flat.shape[1] == _K and x_flat.dtype == torch.bfloat16 and x_flat.stride(1) == 1
         and x_flat.is_cuda and hc_mult == _HC
         and hc_fn.shape == (_MIX, _K) and hc_fn.dtype == torch.float32 and hc_fn.stride(1) == 1

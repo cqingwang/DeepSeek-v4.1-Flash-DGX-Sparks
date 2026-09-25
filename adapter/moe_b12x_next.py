@@ -46,7 +46,9 @@ the <= 8 row plan then uses the internal route planner, the Triton one refuses d
 and nothing is raced: b12x's race cannot compile the deterministic top-k sum kernel),
 _MEMSTATS (0: 1 logs load-time peak transients, resetting torch's peak counters),
 _SMALL_PLAN ("triton:48:16": route planner, max active clusters, tile rows of the dynamic plan pinned
-at <= 8 rows for compact N64), _M64_MIN_CAP (2048: compact-N64 ladder capacities >= this run the
+at <= 8 rows for compact N64), _PLAN_TABLE ("1-8=<_SMALL_PLAN>": per-capacity compact-N64 plans,
+``lo-hi[@k<top-k>]=<planner>:<mac|none>:<tile>`` or ``=heur``, first match wins; replaces the whole
+table, unlisted capacities run b12x's heuristic), _M64_MIN_CAP (2048: compact-N64 ladder capacities >= this run the
 M64 tile; 0 = off; needs the runtime patch scripts/b12x_next-compact-n64-m64.patch, else M16 with a
 warning),
 _DIRECT_IDS (1: at EP_SIZE=1 the router's int32 ids / fp32 weights go straight to b12x, no remap
@@ -114,11 +116,62 @@ LADDER = _ints(_env("DSV41_MOE_B12X_NEXT_LADDER", "128,256,512,1024,2048,4096"))
 # Prefill capacities of the compact N64 geometry (EP1, N=576) on the M64 tile instead of b12x's M16 pin.
 M64_MIN_CAP = int(_env("DSV41_MOE_B12X_NEXT_M64_MIN_CAP", "2048") or 0)
 # Decode plan pinned for compact N64 at <= 8 rows: planner:max_active_clusters:tile_m (dynamic, grouped).
-_SMALL = _env("DSV41_MOE_B12X_NEXT_SMALL_PLAN", "triton:48:16").split(":")
+_SMALL_SPEC = _env("DSV41_MOE_B12X_NEXT_SMALL_PLAN", "triton:48:16")
+_SMALL = _SMALL_SPEC.split(":")
 SMALL_PLANNER, SMALL_MAC, SMALL_TILE = _SMALL[0], (int(_SMALL[1]) if _SMALL[1] != "none" else None), int(_SMALL[2])
 if DETERMINISTIC and SMALL_PLANNER == "triton":
     # b12x's Triton route planner refuses deterministic compact queries (_tuning validation)
     SMALL_PLANNER = "internal"
+
+
+def parse_plan_table(text, deterministic):
+    """``lo-hi[@k<top-k>]=<planner>:<mac|none>:<tile>`` or ``...=heur``, comma-separated; first match wins.
+
+    Returns [(lo, hi, top-k or None, (planner, mac, tile) or None)]. ``heur`` = no override (b12x's
+    heuristic plan). Under determinism a ``triton`` planner becomes ``internal`` (b12x refuses it)."""
+    table = []
+    for item in text.replace(" ", "").split(","):
+        if not item:
+            continue
+        try:
+            rng, spec = item.split("=")
+            topk = None
+            if "@k" in rng:
+                rng, k = rng.split("@k")
+                topk = int(k)
+            lo, hi = (int(v) for v in rng.split("-")) if "-" in rng else (int(rng), int(rng))
+            if spec == "heur":
+                plan = None
+            else:
+                planner, mac, tile = spec.split(":")
+                if planner not in ("internal", "triton"):
+                    raise ValueError(planner)
+                if deterministic and planner == "triton":
+                    planner = "internal"
+                plan = (planner, None if mac == "none" else int(mac), int(tile))
+        except ValueError as exc:
+            raise RuntimeError(f"DSV41_MOE_B12X_NEXT_PLAN_TABLE: bad entry {item!r} ({exc})") from exc
+        if lo < 1 or hi < lo:
+            raise RuntimeError(f"DSV41_MOE_B12X_NEXT_PLAN_TABLE: bad range in {item!r}")
+        table.append((lo, hi, topk, plan))
+    return table
+
+
+# Per-capacity decode plans of the compact N64 geometry (EP1, N=576). The default is the <= 8 row pin
+# above; every other capacity runs b12x's heuristic (dynamic, internal planner, mac none, M16, grouped).
+# Measured 2026-09-25 on the engine's path under determinism (diagnostics/dsv41-moe-plan-table): at
+# M = 10..96 (target top-6) and 10..80 (draft top-3) no max_active_clusters / tile choice beat the
+# heuristic beyond noise; every candidate was bit-identical to it; the calls run at the ~214 GB/s MoE
+# read ceiling, so the per-call cost is set by the distinct experts' bytes, not the plan.
+PLAN_TABLE = parse_plan_table(_env("DSV41_MOE_B12X_NEXT_PLAN_TABLE", f"1-8={_SMALL_SPEC}"), DETERMINISTIC)
+
+
+def table_plan(cap, topk):
+    """(planner, mac, tile) pinned for this capacity / top-k, or None (b12x heuristic)."""
+    for lo, hi, k, plan in PLAN_TABLE:
+        if lo <= cap <= hi and (k is None or k == topk):
+            return plan
+    return None
 _CHUNK_ENV = int(_env("CHUNKED_PREFILL_SIZE", "0") or 0)
 if _CHUNK_ENV > max(LADDER):
     LADDER.append(_CHUNK_ENV)
@@ -341,14 +394,17 @@ class _Geometry:
         for cap in self.capacities():
             routing = fm.RoutingSpec(deterministic_output=True) if DETERMINISTIC else None
             kw = {}
-            if cap <= 8 and self.N % 128 == 64:
-                # b12x's heuristic (and a race on uniform routing) picks the `micro` plan here, which
-                # streams one expert slice per (token, top-k slot): 36 at a c1 verify step, where
-                # `dynamic` streams each distinct expert once (~16 in real decode, fewer with dead
-                # verify rows). Measured on the engine's path: 523 -> 349 us per call at EP1, M=6.
+            pinned = table_plan(cap, self.topk) if self.N % 128 == 64 else None
+            if pinned is not None:
+                # <= 8 rows (default table): b12x's heuristic (and a race on uniform routing) picks the
+                # `micro` plan, which streams one expert slice per (token, top-k slot): 36 at a c1
+                # verify step, where `dynamic` streams each distinct expert once (~16 in real decode,
+                # fewer with dead verify rows). Measured on the engine's path: 523 -> 349 us per call
+                # at EP1, M=6. Other capacities: DSV41_MOE_B12X_NEXT_PLAN_TABLE.
+                planner, mac, tile = pinned
                 kw["override"] = fm.MoeDecodeConfig(
-                    backend="dynamic", route_planner=SMALL_PLANNER, max_active_clusters=SMALL_MAC,
-                    dynamic_tile_m=SMALL_TILE, dynamic_route_mode="grouped")
+                    backend="dynamic", route_planner=planner, max_active_clusters=mac,
+                    dynamic_tile_m=tile, dynamic_route_mode="grouped")
             elif M64_MIN_CAP and cap >= M64_MIN_CAP and cap > EXACT_MAX and self.N % 128 == 64 \
                     and _m64_admitted():
                 # b12x pins compact N64 to M16 tiles at every capacity: each 16-row tile re-stages the
@@ -598,8 +654,8 @@ def install_method(module):
     print(f"{_TAG} armed: routed MoE on b12x_next {PINNED_COMMIT[:8]} (W4A8, in-place repack); "
           f"graph bs {GRAPH_BS}, rows {BLOCK}/{BLOCK + 1}, ladder {LADDER}, tune={TUNE}", flush=True)
     if DETERMINISTIC:
-        print(f"{_TAG} deterministic reduction: <= 8 row plan on the {SMALL_PLANNER} route planner, no autotune "
-              f"race (heuristic plans)", flush=True)
+        print(f"{_TAG} deterministic reduction: plan table {PLAN_TABLE} (triton planner -> internal), no "
+              f"autotune race (heuristic plans elsewhere)", flush=True)
     rows = uncovered_rows()
     if rows:
         print(f"{_TAG} WARNING: CUDA_GRAPH_MAX_BS_DECODE={_MAX_BS} exceeds the adapter's graph bs list (max "

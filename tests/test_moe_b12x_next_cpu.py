@@ -261,11 +261,44 @@ def check_graph_bs_and_planner():
           f"none at 16 or with a covering list; DETERMINISTIC=1 -> internal route planner, no race")
 
 
+TABLE = """
+import moe_b12x_next as ad
+print("RESULT " + __import__("json").dumps(dict(
+    table=ad.PLAN_TABLE, p6=[ad.table_plan(c, 6) for c in (1, 6, 8, 9, 96, 4096)],
+    p3=[ad.table_plan(c, 3) for c in (5, 40, 80)])))
+"""
+
+
+def table(env):
+    return json.loads(run(TABLE, env=env).split("RESULT ", 1)[1])
+
+
+def check_plan_table():
+    d = table({})
+    assert d["p6"] == [["triton", 48, 16]] * 3 + [None] * 3 and d["p3"] == [["triton", 48, 16], None, None], d
+    det = table({"DSV41_MOE_B12X_NEXT_DETERMINISTIC": "1"})
+    assert det["p6"][:3] == [["internal", 48, 16]] * 3 and det["p6"][3:] == [None] * 3, det
+    assert table({"DSV41_MOE_B12X_NEXT_SMALL_PLAN": "internal:none:16"})["p6"][0] == ["internal", None, 16]
+    t = table({"DSV41_MOE_B12X_NEXT_DETERMINISTIC": "1",
+               "DSV41_MOE_B12X_NEXT_PLAN_TABLE": "1-8=triton:48:16, 40-80@k3=internal:32:16, 96=heur, 9-96=internal:none:16"})
+    assert t["p6"] == [["internal", 48, 16]] * 3 + [["internal", None, 16], None, None], t
+    assert t["p3"] == [["internal", 48, 16], ["internal", 32, 16], ["internal", 32, 16]], t
+    for bad in ("1-8=cutlass:48:16", "8-1=internal:48:16", "x=heur", "1-8=internal:48"):
+        try:
+            run(TABLE, env={"DSV41_MOE_B12X_NEXT_PLAN_TABLE": bad})
+            raise RuntimeError(f"{bad!r} was accepted")
+        except AssertionError as exc:
+            assert "DSV41_MOE_B12X_NEXT_PLAN_TABLE: bad" in str(exc), (bad, str(exc)[-300:])
+    print("plan table: default = <= 8 row pin only (unchanged plans), SMALL_PLAN still honoured, top-k scoping, "
+          "first match wins, heur entries, deterministic triton -> internal, malformed entries refuse to load")
+
+
 def main():
     check_hook_order()
     check_unconverted_layer()
     check_chunk_selection()
     check_graph_bs_and_planner()
+    check_plan_table()
     print("moe_b12x_next CPU OK")
 
 

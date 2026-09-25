@@ -27,6 +27,11 @@ class EngramLoader(importlib.abc.Loader):
             # Gated on DSV41_SHARED_PAD_K, inactive by default.
             from shared_pad_k import install as install_shared_pad
             install_shared_pad(module)
+            # Gated on DSV41_L2_PREFETCH: record which MXFP8 weights follow each RoCE collective
+            # (adapter/l2_prefetch.py). Outermost wrapper; it only records the weight pointer.
+            if os.environ.get('DSV41_L2_PREFETCH', '0').strip() not in ('0', 'off', 'false', ''):
+                from l2_prefetch import install_fp8_utils as install_l2_prefetch_fp8
+                install_l2_prefetch_fp8(module)
         elif module.__name__ == 'sglang.srt.layers.quantization.fp8':
             from mxfp8_b12x import install_fp8
             install_fp8(module)
@@ -70,6 +75,17 @@ class EngramLoader(importlib.abc.Loader):
             if os.environ.get('DSV41_VERIFY_CAP', '').strip() not in ('', '0', 'off'):
                 from verify_cap import install_model as install_verify_cap_model
                 install_verify_cap_model(module)
+            # Gated on DSV41_PREFILL_SP=comm|1: prefill sequence parallel (adapter/prefill_sp.py).
+            # DSV41_PREFILL_SP_DEBUG alone (fingerprints on an otherwise stock boot) also installs it.
+            if (os.environ.get('DSV41_PREFILL_SP', '0').strip() not in ('0', 'off', 'false', '')
+                    or os.environ.get('DSV41_PREFILL_SP_DEBUG', '').strip()):
+                from prefill_sp import install as install_prefill_sp
+                install_prefill_sp(module)
+            # Gated on DSV41_L2_PREFETCH: brackets decode/verify forwards so each RoCE collective
+            # forks an L2 prefetch of the weights that follow it (adapter/l2_prefetch.py).
+            if os.environ.get('DSV41_L2_PREFETCH', '0').strip() not in ('0', 'off', 'false', ''):
+                from l2_prefetch import install_model as install_l2_prefetch_model
+                install_l2_prefetch_model(module)
         elif module.__name__ == 'sglang.srt.models.deepseek_v4_dspark':
             # DSV41_VERIFY_CAP=conf:T needs the draft confidence head, which the engine only builds
             # in the ragged-verify modes.
@@ -162,6 +178,18 @@ class EngramLoader(importlib.abc.Loader):
             if os.environ.get('DSV41_HC_FUSED', '0').strip() not in ('0', 'off', 'false', ''):
                 from hc_fused import install as install_hc_fused
                 install_hc_fused(module)
+        elif module.__name__ == 'sglang.srt.models.deepseek_v2':
+            # Gated on DSV41_L2_PREFETCH: the bf16 router (tiny_gemm_bf16) is recorded too.
+            if os.environ.get('DSV41_L2_PREFETCH', '0').strip() not in ('0', 'off', 'false', ''):
+                from l2_prefetch import install_router as install_l2_prefetch_router
+                install_l2_prefetch_router(module)
+        elif module.__name__ == 'b12x.comm.roce.roce_oneshot':
+            # Gated on DSV41_L2_PREFETCH: RoCEnante all-reduce/all-gather fork the prefetch branch.
+            # Outside sglang; the finder sees its first import whichever package imports it first,
+            # and install_model re-checks sys.modules in case it was imported before the finder.
+            if os.environ.get('DSV41_L2_PREFETCH', '0').strip() not in ('0', 'off', 'false', ''):
+                from l2_prefetch import install_roce as install_l2_prefetch_roce
+                install_l2_prefetch_roce(module)
         elif module.__name__ == 'sglang.srt.managers.schedule_batch':
             from loop_abort import install as install_loop_abort
             install_loop_abort(module)
@@ -204,6 +232,8 @@ class EngramFinder(importlib.abc.MetaPathFinder):
                             'sglang.srt.layers.quantization.mxfp4_flashinfer_cutlass_moe',
                             'sglang.srt.layers.moe.moe_runner.flashinfer_cutlass',
                             'sglang.kernels.ops.layernorm.mhc',
+                            'sglang.srt.models.deepseek_v2',
+                            'b12x.comm.roce.roce_oneshot',
                             'sglang.srt.layers.attention.dsv4.metadata'):
             return None
         spec = importlib.machinery.PathFinder.find_spec(fullname, path)

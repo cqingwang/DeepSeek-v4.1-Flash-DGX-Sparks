@@ -12,17 +12,27 @@ import triton
 import triton.language as tl
 
 ENABLED = os.environ.get("DSV41_DRAFT_HEAD_FP8", "0").strip() not in ("0", "", "off", "false")
-MAX_M = 64
+# Draft head rows = DSPARK_BLOCK_SIZE (5) x decode bs: 5..80 on the bs <= 16 graph list. Row tiles cover
+# the whole batch so the fp8 head is streamed once per call (16-row tiles re-read it per tile, which
+# made M >= 40 slower than the bf16 head). Measured on Spark_04 (real head shard 32320 x 5120, us per
+# call, CUDA graph; diagnostics/dsv41-moe-plan-table): M=5 721 (bf16 1374); M=40 16-row 2087 -> 794
+# (bf16 1627); M=60 2824 -> 797 (bf16 1559); M=80 16-row 3593 -> 1138 (bf16 1566, today's fallback).
+# Every tiling gives bit-identical fp32 logits per row (same K order, one tl.dot chain per row).
+# Rows above 64 (bs 14 and 16) stay on the bf16 head as before: moving them to the fp8 copy changes the
+# draft proposals there, and a fleet A/B showed no gain at c16 (the gain is at c4-c12, where the retiled
+# kernel is bit-identical to the old one). DSV41_DRAFT_HEAD_FP8_MAX_M raises it (<= 128).
+MAX_M = min(128, int(os.environ.get("DSV41_DRAFT_HEAD_FP8_MAX_M", "64")))
+_TILES = ((16, 16, 256, 4, 3), (64, 64, 128, 4, 3), (128, 128, 64, 8, 3))   # max M, BM, BK, warps, stages
 _TWIN = {}          # lm_head weight data_ptr -> (e4m3, exponent)
 
 
 @triton.jit
-def _head_fp8_kernel(X, W8, S, Y, M, N, K: tl.constexpr, BN: tl.constexpr, BK: tl.constexpr):
+def _head_fp8_kernel(X, W8, S, Y, M, N, K: tl.constexpr, BM: tl.constexpr, BN: tl.constexpr, BK: tl.constexpr):
     pid = tl.program_id(0)
-    m = tl.program_id(1) * 16 + tl.arange(0, 16)
+    m = tl.program_id(1) * BM + tl.arange(0, BM)
     n = pid * BN + tl.arange(0, BN)
     nmask = n < N
-    acc = tl.zeros((16, BN), tl.float32)
+    acc = tl.zeros((BM, BN), tl.float32)
     for k0 in range(0, K, BK):
         k = k0 + tl.arange(0, BK)
         x = tl.load(X + m[:, None] * K + k[None, :], m[:, None] < M, 0.0)
@@ -45,14 +55,15 @@ def make_twin(w: torch.Tensor):
 
 
 def head_fp8(x: torch.Tensor, twin) -> torch.Tensor:
-    """x [M, K] bf16 (M <= 16) -> fp32 logits [M, N]."""
+    """x [M, K] bf16 (M <= MAX_M) -> fp32 logits [M, N]."""
     w8, s = twin
     m, k = x.shape
     n = w8.shape[0]
     y = torch.empty((m, n), dtype=torch.float32, device=x.device)
-    # tuned on GB10 at M=5: BN 32 / BK 256 / 4 warps / 3 stages = 230 GB/s of fp8 (bf16 cuBLAS: 1405 us -> 721 us)
-    _head_fp8_kernel[(triton.cdiv(n, 32), triton.cdiv(m, 16))](x.contiguous(), w8, s, y, m, n, k, 32, 256,
-                                                              num_warps=4, num_stages=3)
+    # BN 32; M <= 16 keeps the M=5 tuning (BK 256, 4 warps, 3 stages = 230 GB/s of fp8)
+    _, bm, bk, warps, stages = next(t for t in _TILES if m <= t[0])
+    _head_fp8_kernel[(triton.cdiv(n, 32), triton.cdiv(m, bm))](x.contiguous(), w8, s, y, m, n, k, bm, 32, bk,
+                                                              num_warps=warps, num_stages=stages)
     return y
 
 

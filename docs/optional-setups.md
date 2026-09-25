@@ -87,6 +87,14 @@ Cabling, addressing, the `NFS_SHARE=0` migration, pitfalls and the full benchmar
 (prefill 1k-64k, decode prose and code at 1-8 streams, with the sparkDash filler caveat)
 are in [`docs/switchless-ring.md`](switchless-ring.md).
 
+**The production line on a ring.** RoCEnante's one-shot all-reduce and all-gather write directly into every
+peer's buffers, and a four-node ring has no direct link between opposite nodes (RoCE queue pairs do not
+follow IP routing), so on a ring run the production line with `SGLANG_ROCE_ALLREDUCE=0` and without
+`DSV41_ROCE_GATHER`: the tensor-parallel collectives then go through the patched NCCL. Expect a slower decode
+step than the switched numbers in the README (NCCL's small-message floor is ~56 us against ~16 us per
+all-reduce, ~90 all-reduces per decode step), and lower prefill from the ring's one-link bisection. Everything
+else in the production line is fabric-independent.
+
 Before listing more than two devices in `IB_HCA`, read the same document's
 ["Devices past the second are never advertised"](switchless-ring.md#devices-past-the-second-are-never-advertised):
 NCCL accepts the extra devices, publishes listener GIDs for only the first two, and
