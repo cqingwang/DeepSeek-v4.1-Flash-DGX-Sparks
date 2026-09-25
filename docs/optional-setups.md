@@ -93,11 +93,11 @@ follow IP routing), so out of the box a ring runs the production line with `SGLA
 `DSV41_ROCE_GATHER`: the tensor-parallel collectives then go through the patched NCCL (NCCL's small-message
 floor is ~56 us against ~16 us per all-reduce, ~90 all-reduces per decode step). rsync got RoCEnante running
 on a four-node ring by adding the opposite-node path from
-[FujitsuPolycom/sparkring](https://github.com/FujitsuPolycom/sparkring) (commit `f16b5f4`): the neighbours'
+[FujitsuPolycom/sparkring](https://github.com/FujitsuPolycom/sparkring) (commit `f16b5f4`, research-only): the neighbours'
 ConnectX-7 forward the opposite-node traffic in hardware, and `DSV41_ROCE_RING=1` loads sparkring's path-aware
 RoCEnante (`runtime/b12x/b12x/comm/roce_ring`). Setup, the planner (`scripts/ring_mesh/`) and measurements are in
 [switchless-ring.md](switchless-ring.md#rocenante-on-the-ring-hardware-forwarded-opposite-node-paths): with the
-v2 production line the ring measured qeval 84.7 tok/s median (72/75) and a decode step within a few percent of
+v2 production line the ring measured qeval 81.8 / 84.7 / 85.9 tok/s over three runs (71-72/75) and a decode step within a few percent of
 the switched numbers; prefill stays ~5 % lower from the ring's one-link bisection. Everything else in the
 production line is fabric-independent.
 

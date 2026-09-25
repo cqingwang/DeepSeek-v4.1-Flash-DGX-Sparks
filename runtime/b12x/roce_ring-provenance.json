@@ -21,5 +21,6 @@
     "_path_config.py: B12X_ROCE_PEER_HCA_MAPS (four ';'-separated peer maps selected by rank) so one launcher env line serves every rank; B12X_ROCE_PEER_HCA_MAP still wins when set",
     "_roce_proxy.c: ROCE_IDLE_SPINS 200000 -> 20000000 (the value of the SG17 proxy in runtime/b12x); at 200000 the proxy napped between the decode step's collectives",
     "line endings normalized to LF"
-  ]
+  ],
+  "source_note": "sparkring keeps two copies of this package; this is the frozen release copy (bundle-source, last changed 2026-09-06), which is what was measured. The maintained third_party/b12x_roce copy has three later fixes not included here: timeout detection across sequence wrap (f91b5c8), atomic proxy counters (2d83bb6), memory-scope and polling fixes (e4d0921)."
 }

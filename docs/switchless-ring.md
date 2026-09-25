@@ -418,6 +418,9 @@ NCCL_DEBUG_SUBSYS=INIT,ENV,NET    # add NET while validating; drop it afterwards
 
 ## RoCEnante on the ring: hardware-forwarded opposite-node paths
 
+**Status: research-only**, as sparkring labels its hardware-forwarded mesh (`plan.py` writes `"status": "research-only"`).
+It is off by default, and nothing in this section changes a switched setup.
+
 RoCEnante's one-shot all-reduce and all-gather write every rank's payload straight into every
 peer's buffers, and a four-node ring has no link between opposite nodes, so out of the box a ring
 runs the production line with `SGLANG_ROCE_ALLREDUCE=0` and the collectives go through the patched
@@ -457,11 +460,11 @@ step time = the engine's `spec_verify_ct`, time to first token subtracted):
 The switched README's production line (v2, `7ac7123`) with the ring additions, built from this
 repository (`Dockerfile.canary-roce`), measured on the four-Spark ring the same day, against the
 README's v2 numbers (v2.1's `DSV41_PREFILL_SP_FP8` came later; it is fabric-independent and was not in
-this run). Raw output: [`docs/results/ring-mesh-20260925.txt`](results/ring-mesh-20260925.txt).
+this run; the switched README now shows v2.1: prose c1 87.7, prefill ~5.8-5.9k tok/s at 16k-128k). Raw output: [`docs/results/ring-mesh-20260925.txt`](results/ring-mesh-20260925.txt).
 
 | | Ring (this) | Switched (README at v2) |
 |---|---:|---:|
-| qeval median tok/s (75 tasks), pass | 84.7 (median of 3 runs), 72/75 | 83.5, 72/75 |
+| qeval median tok/s (75 tasks), pass | 81.8 / 84.7 / 85.9 (3 runs), 71-72/75 | 83.5, 72/75 |
 | decode step, prose-type prompts | 33.3 ms (2.0 tok/step) | 33.0 ms (2.27 tok/step) |
 | decode step, code-type prompts | 38.1 ms (3.74 tok/step) | 39.2 ms (3.87 tok/step) |
 | sparkDash 1.8.8 prose c1 / c16 | 80.9 / 345.1 | 86.5 / 342.7 |
@@ -521,6 +524,9 @@ the two before it (the fast loader's boot-to-boot spread).
    `dsv41-mesh.service` runs at every boot: it waits for the fabric links, sets `hairpin_queue_size`
    (a `driverinit` parameter that resets at boot) and applies the routes, rules and markers; `mesh-up.sh`
    refuses a rule that did not land in hardware. Start the engine after it is active.
+   On a first install, re-run `plan.py` once the unit is active. `plan.py` takes the RoCE size cap from the
+   hairpin queue size it finds, so a plan made before the unit set 8192 emits the safe 80 KB cap (81920)
+   instead of 262144.
 5. **Verify the path** before booting the engine: every rule shows `in_hw` (`tc -s filter show dev
    <netdev> ingress`), and an RDMA write to the opposite node goes through the neighbour's rule, not its
    kernel (`ib_write_lat -d <dev> -x 3 --flow_label=16383` against the opposite node's port: ~10 us at

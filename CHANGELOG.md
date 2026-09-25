@@ -5,7 +5,7 @@ raw results live under `docs/results/`.
 
 ## 2026-09-25 (ring)
 
-- **RoCEnante on a switchless ring, `DSV41_ROCE_RING=1`, off by default.** A four-node ring has no link between
+- **RoCEnante on a switchless ring, `DSV41_ROCE_RING=1`, off by default, research-only.** A four-node ring has no link between
   opposite nodes, so RoCEnante could not run there and the production line's collectives went through NCCL. The
   opposite-node path is now built in the neighbours' ConnectX-7 hardware with FujitsuPolycom/sparkring's
   `cx7_hairpin_diagonal` (commit `f16b5f4`: an RDMA-TX marker re-tags the opposite-node queue pairs' packets, a
@@ -16,7 +16,7 @@ raw results live under `docs/results/`.
   runs sparkring's planner and writes the per-node routes / rules / markers, the boot unit and the
   `EXTRA_CONTAINER_ENV` line with per-rank peer maps (`B12X_ROCE_PEER_HCA_MAPS`) for the TP rank order. On
   the ring, same day, one change at a time: NCCL -> RoCEnante decode step -5.2 % (51 qeval tasks, faster on 50),
-  qeval 76.3 -> 79.5; with v2 on top qeval 84.7 (median of 3, 72/75), decode step within a few percent of the
+  qeval 76.3 -> 79.5; with v2 on top qeval 81.8 / 84.7 / 85.9 over three runs (71-72/75), decode step within a few percent of the
   switched README, prefill 5-5.5k, phrase needle PASS at 1,030,651 tokens. Details:
   [switchless-ring.md](docs/switchless-ring.md#rocenante-on-the-ring-hardware-forwarded-opposite-node-paths),
   raw output: [`docs/results/ring-mesh-20260925.txt`](docs/results/ring-mesh-20260925.txt).
