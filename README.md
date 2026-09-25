@@ -19,26 +19,26 @@ Other work this profile builds on:
 
 ## Current results
 
-Production stack (the last `EXTRA_CONTAINER_ENV` line of [`.env.tp4.example`](.env.tp4.example) with `EP_SIZE=1`, `Dockerfile.canary-roce` image), built from a fresh clone of this repository on all four nodes and measured on that image with sparkDash 1.8.8: 256 new tokens, temperature 0, thinking off, idle fleet, 2026-09-24. Engine start to healthy 170 s; KV pool 6.56M tokens (1M context). Raw output: [`docs/results/validation-20260924-ep1.txt`](docs/results/validation-20260924-ep1.txt).
+Production stack (the last `EXTRA_CONTAINER_ENV` line of [`.env.tp4.example`](.env.tp4.example) with `EP_SIZE=1`, `Dockerfile.canary-roce` image), built from a fresh clone of this repository on all four nodes and measured on that image with sparkDash 1.8.8: 256 new tokens, temperature 0, thinking off, idle fleet, 2026-09-25. Engine start to healthy 160-170 s; KV pool 6.0-6.6M tokens (1M context). Raw output: [`docs/results/validation-20260925-v2.txt`](docs/results/validation-20260925-v2.txt).
 
 **Decode, aggregate tok/s (per stream in brackets)**
 
 | prompt type | c1 | c2 | c4 | c8 | c16 |
 |---|---:|---:|---:|---:|---:|
-| prose | **84.6** | 118.0 (60.6) | 160.4 (40.5) | 231.6 (30.1) | 339.8 (22.1) |
-| code | 120.9 | 172.7 (87.2) | 241.6 (61.9) | 303.3 (40.6) | 436.9 (29.2) |
-| structured | 146.0 | 172.5 (100.6) | 232.8 (68.4) | 286.4 (42.9) | 565.5 (44.6) |
-| json | 119.2 | 168.5 (86.9) | 299.4 (75.7) | 461.3 (58.9) | 658.7 (42.7) |
+| prose | **86.5** | 120.4 (61.9) | 163.6 (41.4) | 237.6 (30.8) | 342.7 (22.2) |
+| code | 122.6 | 175.0 (88.4) | 246.8 (63.2) | 309.8 (41.4) | 438.3 (29.3) |
+| structured | 152.4 | 177.6 (103.3) | 240.4 (70.4) | 295.5 (44.2) | 572.2 (44.4) |
+| json | 118.9 | 174.2 (89.8) | 301.7 (76.2) | 471.5 (60.2) | 659.9 (42.7) |
 
-Prose c1 is the median of seven runs (84.2-85.2) after two discarded warm-ups; other boots of the same stack gave medians of 85.0-85.2. With the deterministic MoE reduction the greedy text is identical run to run, so the sparkDash numbers repeat within about ±1 tok/s. On 45 varied prompts (prose, structured and other catalogs, c1 greedy) the same image runs 57.4 / 92.9 / 70.8 tok/s. sparkDash uses a different set of prompts at each concurrency for the non-prose types, so per-stream values are not comparable across columns. Sampled chat at the model card's T=1 / top_p=0.95 with thinking (c1, 18 requests x 800 tokens on two prompt sets) runs 67.2 / 65.9 tok/s (the previous stack 62.3 / 59.8); sparkDash benches are greedy, where the draft temperature and block verification do not act.
+Prose c1 is the median of seven runs (85.8-87.2) after two discarded warm-ups. With the deterministic MoE reduction the greedy text is identical run to run, so the sparkDash numbers repeat within about ±1 tok/s; sparkDash's prose c1 is one prompt, and a stack that sums in a different order (another fabric, another all-reduce) follows a different greedy text there, so compare step time or a many-prompt benchmark across stacks. On 45 varied prompts (prose, structured and other catalogs, c1 greedy) the same image runs 58.4 / 94.3 / 71.8 tok/s; decode step 32.4-33.6 ms on prose and 38.9-39.4 ms on code at c1. sparkDash uses a different set of prompts at each concurrency for the non-prose types, so per-stream values are not comparable across columns. Sampled chat at the model card's T=1 / top_p=0.95 with thinking (c1, 18 requests x 800 tokens on two prompt sets) runs 67.2 / 65.9 tok/s (measured on the 2026-09-24 stack; sparkDash benches are greedy, where the draft temperature and block verification do not act).
 
 **Prefill, cold, tok/s by prompt length** (two passes)
 
 | 4k | 16k | 32k | 64k | 128k | 262k |
 |---:|---:|---:|---:|---:|---:|
-| 2449 / 3986 | 4784 / 4753 | 4870 / 4805 | 4815 / 4762 | 4721 / 4722 | 4264 / 4447 |
+| 4029 / 4760 | 5768 / 5709 | 5797 / 5767 | 5818 / 5774 | 5644 / 5623 | 5214 / 5225 |
 
-The 4k point of the first pass is the first request after the benches. sparkDash's prefill filler is one repeated token, so every filler token hits the same Engram row and the row cache inflates these numbers (reported by koldfrontier in [MiaAI-Lab#21](https://github.com/MiaAI-Lab/DeepSeek-v4.1-Flash-DGX-Sparks/issues/21)); on real text (documentation and source code, a unique prefix per prompt so nothing comes from the prefix cache) the same image measured 4003-4077 / 4154-4255 / 4144-4258 / 4138-4189 / 4092-4093 tok/s at ~4k / ~15k / ~29k / ~60k / ~113k tokens. Needle retrieval (a list lookup): passes at 129k tokens; at 259k some keys pass and some miss on both this stack and the previous FlashInfer/EP2 stack (key 17777 misses on both, 20001 and 3333 pass on both), a limit of the model at that length rather than of either stack. Engine start to ready is ~3 minutes with the fast loader.
+sparkDash's prefill filler is one repeated token, so every filler token hits the same Engram row and the row cache inflates these numbers (reported by koldfrontier in [MiaAI-Lab#21](https://github.com/MiaAI-Lab/DeepSeek-v4.1-Flash-DGX-Sparks/issues/21)); on real text (documentation and source code, a unique prefix per prompt so nothing comes from the prefix cache) the same image measured 4011-4204 / 4740-4820 / 4808-4870 / 4835-4856 / 4746-4759 tok/s at ~4k / ~14k / ~28k / ~58k / ~121k tokens. Needle retrieval (a single phrase in varied filler at 37 % depth): PASS at 99k, 198k, 746k and 1,011,084 tokens (the last one in 322 s, head `MemAvailable` low-water 7 GiB). A harder list-lookup needle ("value of item N" in a list of up to 197,000 items) passes for about half the keys at 129k and 259k on this stack and on the previous one alike, a limit of the model rather than of either stack.
 
 **Quality.** `scripts/qeval.py` runs 75 auto-scored tasks (code executed against hidden asserts, JSON schema-checked, numeric answers matched, format constraints enforced, prose checked for degeneration; no LLM judge), one request at a time, temperature 0. The fresh-clone image scores 72 of 75 (the previous stack 71-72); the three misses (`code_interval_intersect`, `json_escape`, `math_m9`) fail identically on the upstream example. Every speed change here is meant to be lossless: same weights, every draft token verified by the target, and each adapter either bit-identical to the stock path (checked at boot or in the in-image tests) or exact in distribution (draft temperature, block verification). RoCEnante sums in a different order than NCCL, so the numerics are not bit-identical to an NCCL run, which is why the profile is also scored. Run qeval from a worker, not from the head (it executes model-generated Python).
 

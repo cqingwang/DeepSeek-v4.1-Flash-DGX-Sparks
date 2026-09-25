@@ -3,6 +3,33 @@
 Newest first. Each entry says what changed in the production stack and what was measured; the
 raw results live under `docs/results/`.
 
+## 2026-09-25
+
+- **`adapter/prefill_sp.py`, `DSV41_PREFILL_SP=1`, on.** Prefill sequence parallel: at chunks of >= 2048 rows the
+  per-layer all-reduces become reduce-scatter + all-gather and the per-row work between them (hyper-connection
+  mixing and norms, Engram `wkv` + gate) runs on each rank's quarter of the rows. sparkDash prefill 16k-262k
+  4447-4870 -> 5214-5818 (+18-21 %), real text +15 %; decode untouched. The reduce-scatter adds the partials in
+  a different order than the all-reduce (the same kind of change as RoCEnante); `DSV41_PREFILL_SP_EXACT=1`
+  keeps the all-reduce and was checked bit-identical to the unsharded path op by op on the fleet (174 ops per
+  4096-row chunk, 0 differing) for ~+10 %.
+- **`adapter/l2_prefetch.py`, `DSV41_L2_PREFETCH=1`, on.** During each RoCE all-reduce / all-gather of a decode
+  step a side-stream kernel prefetches the first 6 MB of the following weights into L2 (plans learned from the
+  warm-up forwards, captured in the CUDA graphs; data untouched). ABAB on the fleet: decode step -1 ms at c1,
+  sparkDash prose c1 84.5 -> 87.6, varied prompts +3 %, c8 +2 %, c16 flat.
+- `adapter/draft_head_fp8.py`: 16/64-row tiles so the fp8 draft head is streamed once per call (it was re-read
+  per 16-row tile and slower than bf16 from ~20 rows): +1-2 % at c4-c8, bit-identical logits; rows above 64 stay
+  on the bf16 head as before.
+- `adapter/moe_b12x_next.py`: `DSV41_MOE_B12X_NEXT_PLAN_TABLE` (per-capacity plan overrides); the default keeps
+  today's plans: every alternative at 10-96 rows was measured and none beat b12x's default (the MoE already
+  reads at the GB10 limit).
+- Fresh clone of this state: prose c1 86.5, c16 342.7, code c1 122.6, structured 152.4; prefill 16k-262k
+  5214-5818; qeval 72/75; phrase needle PASS up to 1,011,084 tokens (322 s, head low-water 7 GiB).
+- Docs: the production line on a switchless ring (RoCEnante needs a path to every peer; rsync ran it on a ring
+  with sparkring's opposite-node path).
+- Tested and not adopted: batch-size-dependent verify threshold, locked GPU clocks, PDL on the dense GEMMs,
+  a fused hc post/combine/stats prefill kernel (bit-identical but slower than the current kernels), MoE plan
+  alternatives at 10-96 rows.
+
 ## 2026-09-24 (evening)
 
 - **`EP_SIZE=1` with the routed MoE on b12x main, `DSV41_MOE_B12X_NEXT=1`, on.** Every rank holds a

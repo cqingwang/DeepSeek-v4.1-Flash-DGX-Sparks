@@ -4,6 +4,29 @@ Every dated table, note and rejected experiment that used to live in the README,
 
 All rows below were taken with sparkDash up to 1.8.6. sparkDash 1.8.7 replaced the code prompts (c1 and the concurrent waves), so the code columns here are not comparable with the README's current table; the prose, structured and prefill prompts are unchanged.
 
+## Production 2026-09-24 evening (EP1 release), sparkDash 1.8.8
+
+Production stack (the last `EXTRA_CONTAINER_ENV` line of [`.env.tp4.example`](../.env.tp4.example) with `EP_SIZE=1`, `Dockerfile.canary-roce` image), built from a fresh clone of this repository on all four nodes and measured on that image with sparkDash 1.8.8: 256 new tokens, temperature 0, thinking off, idle fleet, 2026-09-24. Engine start to healthy 170 s; KV pool 6.56M tokens (1M context). Raw output: [`docs/results/validation-20260924-ep1.txt`](results/validation-20260924-ep1.txt).
+
+**Decode, aggregate tok/s (per stream in brackets)**
+
+| prompt type | c1 | c2 | c4 | c8 | c16 |
+|---|---:|---:|---:|---:|---:|
+| prose | **84.6** | 118.0 (60.6) | 160.4 (40.5) | 231.6 (30.1) | 339.8 (22.1) |
+| code | 120.9 | 172.7 (87.2) | 241.6 (61.9) | 303.3 (40.6) | 436.9 (29.2) |
+| structured | 146.0 | 172.5 (100.6) | 232.8 (68.4) | 286.4 (42.9) | 565.5 (44.6) |
+| json | 119.2 | 168.5 (86.9) | 299.4 (75.7) | 461.3 (58.9) | 658.7 (42.7) |
+
+Prose c1 is the median of seven runs (84.2-85.2) after two discarded warm-ups; other boots of the same stack gave medians of 85.0-85.2. With the deterministic MoE reduction the greedy text is identical run to run, so the sparkDash numbers repeat within about ±1 tok/s. On 45 varied prompts (prose, structured and other catalogs, c1 greedy) the same image runs 57.4 / 92.9 / 70.8 tok/s. sparkDash uses a different set of prompts at each concurrency for the non-prose types, so per-stream values are not comparable across columns. Sampled chat at the model card's T=1 / top_p=0.95 with thinking (c1, 18 requests x 800 tokens on two prompt sets) runs 67.2 / 65.9 tok/s (the previous stack 62.3 / 59.8); sparkDash benches are greedy, where the draft temperature and block verification do not act.
+
+**Prefill, cold, tok/s by prompt length** (two passes)
+
+| 4k | 16k | 32k | 64k | 128k | 262k |
+|---:|---:|---:|---:|---:|---:|
+| 2449 / 3986 | 4784 / 4753 | 4870 / 4805 | 4815 / 4762 | 4721 / 4722 | 4264 / 4447 |
+
+The 4k point of the first pass is the first request after the benches. sparkDash's prefill filler is one repeated token, so every filler token hits the same Engram row and the row cache inflates these numbers (reported by koldfrontier in [MiaAI-Lab#21](https://github.com/MiaAI-Lab/DeepSeek-v4.1-Flash-DGX-Sparks/issues/21)); on real text (documentation and source code, a unique prefix per prompt so nothing comes from the prefix cache) the same image measured 4003-4077 / 4154-4255 / 4144-4258 / 4138-4189 / 4092-4093 tok/s at ~4k / ~15k / ~29k / ~60k / ~113k tokens. Needle retrieval (a list lookup): passes at 129k tokens; at 259k some keys pass and some miss on both this stack and the previous FlashInfer/EP2 stack (key 17777 misses on both, 20001 and 3333 pass on both), a limit of the model at that length rather than of either stack. Engine start to ready is ~3 minutes with the fast loader.
+
 ## Production 2026-09-24 morning (EP2, FlashInfer MoE), sparkDash 1.8.8
 
 | prompt type | c1 | c2 | c4 | c8 | c16 |
