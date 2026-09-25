@@ -66,6 +66,14 @@ def rsync(source, destination):
 class BuildTargetTests(unittest.TestCase):
     """`IMAGE` is whatever the profile names, so `build` must compile that recipe."""
 
+    def test_worker_ring_mounts_use_argument_arrays(self):
+        source = (ROOT / "start.sh").read_text()
+        self.assertIn("NCCL_ARGS=()", source)
+        self.assertIn("SHIM_ARGS=()", source)
+        self.assertIn(r'\"\${NCCL_ARGS[@]}\" \"\${SHIM_ARGS[@]}\"', source)
+        self.assertNotIn("NCCL_VOL=", source)
+        self.assertNotIn("SHIM_VOL=", source)
+
     def test_build_compiles_the_configured_dockerfile(self):
         with tempfile.TemporaryDirectory() as tmp:
             Path(tmp, "SSH_IDENTITY.pub").write_text("ssh-ed25519 AAAA test\n")

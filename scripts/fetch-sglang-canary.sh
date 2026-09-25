@@ -11,7 +11,12 @@ cd "$DST"
 rm -rf python src.tgz
 echo "fetching sgl-project/sglang @ $REF ..."
 curl -fsSL -m 600 "https://github.com/sgl-project/sglang/archive/${REF}.tar.gz" -o src.tgz
-tar -xzf src.tgz --strip-components=1 --wildcards "sglang-*/python"
+ARCHIVE_ROOT="$(tar -tzf src.tgz | sed -n '1s#^\([^/]*\)/.*#\1#p')"
+if [[ -z "$ARCHIVE_ROOT" ]]; then
+  echo "cannot determine SGLang archive root" >&2
+  exit 1
+fi
+tar -xzf src.tgz --strip-components=1 "$ARCHIVE_ROOT/python"
 rm -f src.tgz
 echo "$REF" > REF
 du -sh python

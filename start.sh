@@ -842,19 +842,19 @@ cmd_serve() {
       fi
       test -d /dev/infiniband || { echo 'MISSING /dev/infiniband on $h'; exit 1; }
       mkdir -p $WORKER_DIR/state $WORKER_DIR/logs
-      NCCL_VOL=''
-      NCCL_ENV=''
+      NCCL_ARGS=()
       if [ \"${NCCL_OVERLAY_PIP:-0}\" = 1 ]; then
-        NCCL_VOL=\"-v $(printf '%q' "$NCCL_LIBRARY_PATH"):$NCCL_PIP_SO:ro\"
+        NCCL_ARGS+=(-v \"$NCCL_LIBRARY_PATH:$NCCL_PIP_SO:ro\")
       fi
       if [ \"${NCCL_SWITCHLESS_RING_ONLY:-0}\" != 1 ] && [ \"${NCCL_OVERLAY_PIP:-0}\" != 1 ] && { [ -f \"$NCCL_HOST_DIR/libnccl.so.2.30.7\" ] || [ -f \"$NCCL_HOST_DIR/libnccl.so.2\" ]; }; then
-        NCCL_VOL=\"-v $(printf '%q' \"$NCCL_HOST_DIR\"):$NCCL_CONTAINER_DIR:ro\"
-        NCCL_ENV=\"-e LD\"\"_LIBRARY_PATH=$NCCL_CONTAINER_DIR\"
+        NCCL_ARGS=(-v \"$NCCL_HOST_DIR:$NCCL_CONTAINER_DIR:ro\" -e \"LD_LIBRARY_PATH=$NCCL_CONTAINER_DIR\")
       fi
-      SHIM_VOL=''
+      SHIM_ARGS=()
       if [ -f /opt/aicad-prod/lib/libncclpin.so ] && [ -d /opt/nccl-ringonly ]; then
         mkdir -p \$HOME/nccl-debug
-        SHIM_VOL=\"-v /opt/aicad-prod/lib/libncclpin.so:/opt/libncclpin.so:ro -v /opt/nccl-ringonly:/opt/nccl-ringonly:ro -v \$HOME/nccl-debug:/nccl-debug:rw\"
+        SHIM_ARGS+=(-v /opt/aicad-prod/lib/libncclpin.so:/opt/libncclpin.so:ro
+          -v /opt/nccl-ringonly:/opt/nccl-ringonly:ro
+          -v \"\$HOME/nccl-debug:/nccl-debug:rw\")
       fi
       MODEL_SRC='$NFS_VOLUME'
       if [ '$WEIGHTS_MODE' = 'local' ]; then MODEL_SRC='$WORKER_MODEL_DIR'; fi
@@ -866,7 +866,7 @@ cmd_serve() {
         -v \$MODEL_SRC:/models/DeepSeek-V4.1-Flash:ro \
         -v $WORKER_DIR/state:/state \
         -v \$HOME/.cache:/root/.cache \
-        \$NCCL_VOL \$NCCL_ENV \$SHIM_VOL \\
+        \"\${NCCL_ARGS[@]}\" \"\${SHIM_ARGS[@]}\" \\
 $(worker_env_lines "$wip" "$wgid" "$rank")
         -e API_KEY=$(printf '%q' "$API_KEY") \\
         -e EXTRA_SGLANG_ARGS=$(printf '%q' "${EXTRA_SGLANG_ARGS:-}") \\
