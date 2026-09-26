@@ -500,7 +500,7 @@ EOF
 }
 
 # Validate every rank before any existing container is removed. This path is
-# opt-in; the local production profile uses the established TP4/EP2 ring path.
+# opt-in; the local production profile uses the established TP4/EP1 ring path.
 preflight_all_nodes() {
   [[ "$NCCL_OVERLAY_PIP" == 1 || "$NCCL_SWITCHLESS_RING_ONLY" == 1 ]] || return 0
   nccl_validate_config || return 1
@@ -847,7 +847,7 @@ cmd_serve() {
         NCCL_ARGS+=(-v \"$NCCL_LIBRARY_PATH:$NCCL_PIP_SO:ro\")
       fi
       if [ \"${NCCL_SWITCHLESS_RING_ONLY:-0}\" != 1 ] && [ \"${NCCL_OVERLAY_PIP:-0}\" != 1 ] && { [ -f \"$NCCL_HOST_DIR/libnccl.so.2.30.7\" ] || [ -f \"$NCCL_HOST_DIR/libnccl.so.2\" ]; }; then
-        NCCL_ARGS=(-v \"$NCCL_HOST_DIR:$NCCL_CONTAINER_DIR:ro\" -e \"LD_LIBRARY_PATH=$NCCL_CONTAINER_DIR\")
+        NCCL_ARGS=(-v \"$NCCL_HOST_DIR:$NCCL_CONTAINER_DIR:ro\")
       fi
       SHIM_ARGS=()
       if [ -f /opt/aicad-prod/lib/libncclpin.so ] && [ -d /opt/nccl-ringonly ]; then

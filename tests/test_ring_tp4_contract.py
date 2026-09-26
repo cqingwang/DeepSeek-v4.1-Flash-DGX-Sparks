@@ -23,7 +23,7 @@ def test_tp4_templates_keep_production_defaults() -> None:
         values = _env(name)
         assert values["NNODES"] == "4"
         assert values["TP_SIZE"] == "4"
-        assert values["EP_SIZE"] == "2"
+        assert values["EP_SIZE"] == "1"
         assert values["DIST_PORT"] == "25000"
         assert values["WEIGHTS_MODE"] == "local"
         assert values["NFS_SHARE"] == "0"
