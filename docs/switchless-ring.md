@@ -504,9 +504,11 @@ the two before it (the fast loader's boot-to-boot spread).
    python3 scripts/ring_mesh/plan.py --sparkring ~/sparkring --out ring-mesh spark1 spark2 spark3 spark4
    ```
 
-   It inventories the nodes over SSH, reads the cabling from the fabric subnets, numbers the ring the
-   way sparkring's planner needs it (every f0 port cabled to the next node's f1; it refuses anything
-   else), and has sparkring's planner build the RoCEnante selection: per node two `/32` routes, two
+   It inventories the nodes over SSH, reads the cabling from the fabric subnets, derives each host's
+   clockwise/counter-clockwise ports independently, and requires both PCIe domains to reach the same
+   neighbor on each side. This supports rings whose port numbering changes direction by node while
+   still refusing mismatched planes. It then has sparkring's planner build the RoCEnante selection:
+   per node two `/32` routes, two
    tc rules and two markers. It writes `mesh-up-<host>.sh` / `mesh-down-<host>.sh` and `env.txt`,
    the `EXTRA_CONTAINER_ENV` additions with the per-rank peer maps already translated to the TP rank
    order (sparkring numbers the ring by cabling direction, which need not match it).
@@ -529,9 +531,12 @@ the two before it (the fast loader's boot-to-boot spread).
    instead of 262144.
 5. **Verify the path** before booting the engine: every rule shows `in_hw` (`tc -s filter show dev
    <netdev> ingress`), and an RDMA write to the opposite node goes through the neighbour's rule, not its
-   kernel (`ib_write_lat -d <dev> -x 3 --flow_label=16383` against the opposite node's port: ~10 us at
-   61 KB here against 8.5 us to a direct neighbour; the neighbour's rule counters rise and its
-   `IpForwDatagrams` does not).
+   kernel. Start `ib_write_lat` on the receiver and the client on the sender with matching
+   `-d <dev> -x 3 --flow_label=16383 -s 61440 -n 100`; set `--flow_label=16383` on **both** ends so
+   the reverse RC response uses the corresponding marked path too. The client's positional host is
+   the peer's management IP (the perftest control socket); `-d` and `-x` select the RoCE data path.
+   A's `rocep1s0f0` to D's `rocep1s0f1` measured 10.17-11.86 us here, versus 8.5 us direct; the
+   neighbour's hardware rule counters rise and its `IpForwDatagrams` stays flat.
 6. **`.env.tp4`**: build `Dockerfile.canary-roce` as usual and append `env.txt` to the production
    `EXTRA_CONTAINER_ENV`, replacing its `B12X_ROCE_HCA`, `SGLANG_ROCE_MAX_SIZE` and `DSV41_ROCE_GATHER`.
    The boot log shows `RoCEnante ready: world=4 hcas=rocep1s0f0,rocep1s0f1,roceP2p1s0f0,roceP2p1s0f1`

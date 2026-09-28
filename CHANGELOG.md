@@ -3,6 +3,41 @@
 Newest first. Each entry says what changed in the production stack and what was measured; the
 raw results live under `docs/results/`.
 
+## 2026-09-29 (DeepSeek ring deployment; measured near, below switched README)
+
+- The local Spark config now enables the pinned `cx7_hairpin_diagonal` ring plan for this DeepSeek
+  TP4 target, including all four HCAs, TP-rank peer maps, 256 KiB collectives, and
+  `B12X_ROCE_GID_INDEX=3`. The separate override is required because DeepSeek's NCCL-only
+  `NCCL_IB_GID_INDEX=-1` is still passed to the RoCE proxy otherwise. A per-node orientation fix in
+  `scripts/ring_mesh/plan.py` handles this fleet's same-port-index cabling; source remains local and
+  was synced one-way with `spark/sync_to.sh`.
+- All four ranks are healthy on the read-only local model mount. RoCEnante reports world 4 / GID 3 /
+  262144 bytes; warm-up exercises the mesh routes, `skip_sw` counters show hardware-only forwarding,
+  and the kernel-forward counter stays flat. With flow label 16383 on both sides, a 61,440-byte
+  opposite-rank `ib_write_lat` passes at 10.17-11.86 us. See [`switchless-ring.md`](docs/switchless-ring.md)
+  for the required duplex validation command.
+- SparkDash prose, 256 output tokens, C1/C2/C4, three full rounds aggregate tok/s:
+  `75.87/111.03/146.04`, `79.54/116.03/153.11`, `79.76/115.73/152.65` (all streams completed).
+  Every level is below the switched README values `87.7/120.4/163.6`, with the largest visible gap
+  at C1. Paired qeval runs score `70/75` and `71/75`; the latter is inside the ring recipe's historical
+  71-72/75 range but below the fresh-clone README score 72/75. `json_count` is the additional
+  repeatable miss; this is near-target experimental evidence, not a switched-README pass.
+- A separate authenticated five-repetition 512-token streaming probe with two fixed prose prompts
+  measured C1 medians 59.87 and 58.32 tok/s; this is close to the README's 58.4 tok/s on 45 varied
+  prompts, and supports the documented single-prompt/reduction-order caveat. Five mixed prose/code
+  C4 waves aggregated 128.51 tok/s; that is not comparable to the README's pure-prose C4 row. Raw
+  details are in the result record below.
+- Raw service, RDMA, benchmark IDs and qeval evidence: [`ring-mesh-20260929.txt`](docs/results/ring-mesh-20260929.txt).
+
+## 2026-09-28 (ring planner; research-only path unchanged)
+
+- `scripts/ring_mesh/plan.py` now derives clockwise/counter-clockwise ports per node from the live
+  point-to-point subnets and verifies both PCIe domains reach the same neighbors. The former global
+  port-direction assumption rejected the current A-B-D-C physical ring, where each cable joins the
+  same port index at both ends. The generated dry-run plan passed sparkring `f16b5f4`; no host rules,
+  markers, NIC parameters, service, or container RoCEnante variables were applied. The planner also
+  writes through `Path.write_text(..., encoding="utf-8")` for the Python 3.9 control host.
+
 ## 2026-09-25 (ring)
 
 - **RoCEnante on a switchless ring, `DSV41_ROCE_RING=1`, off by default, research-only.** A four-node ring has no link between

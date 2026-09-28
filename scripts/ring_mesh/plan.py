@@ -5,8 +5,8 @@
 
 HEAD W1 W2 W3 are SSH names of the four Sparks in tensor-parallel rank order (the head, then
 WORKER_HOSTS). Each is inventoried over SSH with inventory.sh; the cabling is read from the
-fabric subnets (each DAC is its own /24), the ring is numbered the way sparkring's planner
-requires (physical port f0 clockwise), and FujitsuPolycom/sparkring's own planner
+fabric subnets (one point-to-point subnet per cable), the ring direction is derived per host,
+and FujitsuPolycom/sparkring's own planner
 (spark_transport/fabric/cx7_hairpin_diagonal/fabric.py, tested at f16b5f4) builds the RoCEnante
 selection: per rank two /32 routes to the opposite node via a neighbour, two hardware-only tc
 redirect rules for the traffic it forwards, and two source markers. Writes into --out:
@@ -28,13 +28,10 @@ import sys
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-# sparkring's source-bound map: physical port f0 is the clockwise direction, function 0 is the
-# first PCIe domain (rocep1s0f*) and function 1 the second (roceP2p1s0f*).
-PORTS = {
-    ("clockwise", 0): "enp1s0f0np0",
-    ("clockwise", 1): "enP2p1s0f0np0",
-    ("counter_clockwise", 0): "enp1s0f1np1",
-    ("counter_clockwise", 1): "enP2p1s0f1np1",
+# 两组物理端口分别属于独立 PCIe domain；各节点方向须由实际链路邻接推导。
+PORTS_BY_DOMAIN = {
+    0: ("enp1s0f0np0", "enp1s0f1np1"),
+    1: ("enP2p1s0f0np0", "enP2p1s0f1np1"),
 }
 HCAS = ("rocep1s0f0", "rocep1s0f1", "roceP2p1s0f0", "roceP2p1s0f1")  # B12X_ROCE_HCA order
 
@@ -69,46 +66,88 @@ def _gid_tail(cidr):
     return f"{int(a):02x}{int(b):02x}:{int(c):02x}{int(d):02x}"
 
 
-def ring_order(invs, hosts):
-    """Hosts in sparkring ring order, starting at the TP rank 0 host: each f0 port reaches the next host's f1."""
+def peer_endpoints(invs, hosts):
+    """按每条直连子网建立唯一且互易的端口邻接表。"""
     net = {}
-    for h in hosts:
-        for nd, p in invs[h]["ports"].items():
-            net.setdefault(ipaddress.ip_interface(p["ipv4"]).network, []).append((h, nd))
-    peer = {}
-    for ends in net.values():
-        if len(ends) != 2:
-            raise SystemExit(f"fabric subnet shared by {len(ends)} ports, expected one DAC per /24: {ends}")
-        (h1, n1), (h2, n2) = ends
-        peer[(h1, n1)], peer[(h2, n2)] = (h2, n2), (h1, n1)
-    order = [hosts[0]]
-    while True:
-        cur = order[-1]
-        nxt = []
-        for f in (0, 1):
-            h, nd = peer.get((cur, PORTS[("clockwise", f)]), (None, None))
-            if nd != PORTS[("counter_clockwise", f)]:
-                raise SystemExit(f"{cur} {PORTS[('clockwise', f)]} reaches {h} {nd}; sparkring needs every f0 port "
-                                 f"cabled to the next node's f1 port on the same PCIe domain")
-            nxt.append(h)
-        if nxt[0] != nxt[1]:
-            raise SystemExit(f"{cur}: its two f0 functions reach different nodes {nxt}")
-        if nxt[0] == hosts[0]:
-            break
-        order.append(nxt[0])
+    for host in hosts:
+        for netdev, port in invs[host]["ports"].items():
+            if not port["ipv4"]:
+                raise SystemExit(f"{host} {netdev}: missing fabric IPv4 address")
+            network = ipaddress.ip_interface(port["ipv4"]).network
+            net.setdefault(network, []).append((host, netdev))
+    peers = {}
+    for network, endpoints in net.items():
+        if len(endpoints) != 2:
+            raise SystemExit(f"fabric subnet {network} has {len(endpoints)} endpoints, expected a point-to-point cable: {endpoints}")
+        (host_a, netdev_a), (host_b, netdev_b) = endpoints
+        peers[(host_a, netdev_a)] = (host_b, netdev_b)
+        peers[(host_b, netdev_b)] = (host_a, netdev_a)
+    expected = len(hosts) * sum(len(interfaces) for interfaces in PORTS_BY_DOMAIN.values())
+    if len(peers) != expected:
+        raise SystemExit(f"fabric inventory has {len(peers)} endpoints, expected {expected}")
+    return peers
+
+
+def write_text(path, content):
+    """写出已显式带换行的 UTF-8 文本，兼容旧版 pathlib。"""
+    path.write_text(content, encoding="utf-8")
+
+
+def ring_order(invs, hosts):
+    """从 rank 0 主域端口 0 出发，按节点实际邻接关系推导物理环顺序。"""
+    peers = peer_endpoints(invs, hosts)
+    primary_ports = PORTS_BY_DOMAIN[0]
+    start = hosts[0]
+    first_peer = peers.get((start, primary_ports[0]))
+    if first_peer is None:
+        raise SystemExit(f"{start} {primary_ports[0]} has no peer")
+    order = [start]
+    previous, current = start, first_peer[0]
+    while current != start:
+        if current in order or current not in hosts:
+            raise SystemExit(f"fabric links do not form one four-node ring: {order + [current]}")
+        order.append(current)
+        next_hosts = {
+            peers[(current, netdev)][0]
+            for netdev in primary_ports
+            if (current, netdev) in peers and peers[(current, netdev)][0] != previous
+        }
+        if len(next_hosts) != 1:
+            raise SystemExit(f"{current}: expected one forward neighbor after {previous}, got {sorted(next_hosts)}")
+        previous, current = current, next_hosts.pop()
     if sorted(order) != sorted(hosts) or len(order) != 4:
         raise SystemExit(f"not a four-node ring: {order}")
+    ring_ports(invs, order, peers)
     return order
 
 
+def ring_ports(invs, order, peers=None):
+    """按环序为每个节点推导方向端口，并验证双 PCIe domain 连接同一邻机。"""
+    peers = peers or peer_endpoints(invs, order)
+    oriented = {}
+    for rank, host in enumerate(order):
+        neighbors = {
+            "clockwise": order[(rank + 1) % len(order)],
+            "counter_clockwise": order[(rank - 1) % len(order)],
+        }
+        for direction, neighbor in neighbors.items():
+            for domain, interfaces in PORTS_BY_DOMAIN.items():
+                matches = [netdev for netdev in interfaces if peers.get((host, netdev), (None, None))[0] == neighbor]
+                if len(matches) != 1:
+                    raise SystemExit(f"{host}: {direction} neighbor {neighbor} has {len(matches)} ports in PCIe domain {domain}")
+                oriented[(host, direction, domain)] = matches[0]
+    return oriented
+
+
 def topology(invs, order, state_root="/run/dsv41-mesh"):
+    oriented = ring_ports(invs, order)
     ranks = []
     for r, h in enumerate(order):
         ports = {}
         for d in ("clockwise", "counter_clockwise"):
             ports[d] = []
             for f in (0, 1):
-                nd = PORTS[(d, f)]
+                nd = oriented[(h, d, f)]
                 p = invs[h]["ports"][nd]
                 ports[d].append({
                     "function": f, "netdev": nd, "rdma_device": p["rdma"],
@@ -196,18 +235,18 @@ def main():
     order = ring_order(invs, a.hosts)
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
-    (out / "fabric.json").write_text(json.dumps(topology(invs, order), indent=2) + "\n", newline="\n")
+    write_text(out / "fabric.json", json.dumps(topology(invs, order), indent=2) + "\n")
     plan = fabric.build_rocenante_plan(fabric.build_plan(fabric.load_topology(out / "fabric.json")))
     for r, h in enumerate(order):
         up, down = host_scripts(plan, fabric, r)
-        (out / f"mesh-up-{h}.sh").write_text(up, newline="\n")
-        (out / f"mesh-down-{h}.sh").write_text(down, newline="\n")
+        write_text(out / f"mesh-up-{h}.sh", up)
+        write_text(out / f"mesh-down-{h}.sh", down)
     hairpin = min(int(p["hairpin_queue_size"] or 0) for h in a.hosts for p in invs[h]["ports"].values())
     cap = 262144 if hairpin >= 8192 else 81920
     maps = peer_maps(fabric.rocenante_native_path_arguments(plan), order, list(a.hosts))
     env = (f"DSV41_ROCE_RING=1 SGLANG_ROCE_ALLREDUCE=1 SGLANG_ROCE_MAX_SIZE={cap} DSV41_ROCE_GATHER={cap} "
            f"B12X_ROCE_HCA={','.join(HCAS)} B12X_ROCE_PEER_HCA_MAPS={maps} B12X_ROCE_TWO_WAVE_THRESHOLD_BYTES=0")
-    (out / "env.txt").write_text(env + "\n", newline="\n")
+    write_text(out / "env.txt", env + "\n")
     print(f"ring order (sparkring numbering): {' -> '.join(order)} -> {order[0]}")
     print(f"hairpin_queue_size (smallest): {hairpin} -> RoCE size cap {cap} bytes")
     print(f"wrote {out}/fabric.json, mesh-up-*.sh, mesh-down-*.sh, env.txt\nEXTRA_CONTAINER_ENV additions:\n  {env}")
