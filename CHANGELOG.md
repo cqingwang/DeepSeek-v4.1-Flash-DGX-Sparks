@@ -3,6 +3,30 @@
 Newest first. Each entry says what changed in the production stack and what was measured; the
 raw results live under `docs/results/`.
 
+## 2026-09-29 v2.3 (candidate, pre-gate)
+
+Lossless: greedy output byte-identical to v2.2.
+
+- **`adapter/cert_head.py`, `DSV41_CERT_HEAD=1 DSV41_CERT_HEAD_M=6,12,18,24,30,36,42,48`, on.** Certified
+  target LM head for greedy verify steps: an MXINT8 screen of the head shard with a proven error bound decides
+  which 16-row tiles can hold the argmax; only those are computed with the exact kernel (bit-identical to the stock
+  matmul), the rest are -inf. Sampled rows, logprobs, grammar and penalties take the full exact logits. GPU
+  qualification (`tests/gpu_test_cert_ds.py`): exact kernel bit-identical to `torch.matmul` on every logit of all
+  four rank shards for every verify row count 6..96; check mode on the fleet: 0 mismatches over 3,355 certified
+  steps. In-boot A/B c1: step -0.50 ms (CI -0.59..-0.37), outputs identical 24/24; sparkDash prose c1 +1.2 % /
+  +1.9 % (two windows), c4 +0.5 %, c8 flat. Slower from 10 requests up (M=96: +0.44 ms), so M stops at 48.
+  +173 MB per rank.
+- **`adapter/replay_guard.py`, `DSV41_REPLAY_GUARD` (default on).** Under the decoder SWA bounded replay that
+  `boot.py` always enables, a request for prompt-token logprobs (`/generate` with `logprob_start_len` below the
+  prompt length, `/v1/completions` with `echo` + `logprobs`) or for every prompt token's hidden states raised a
+  `ValueError` inside the forward and ended all four ranks. Such requests now get HTTP 400 and the engine keeps
+  serving; output logprobs are unaffected.
+- **`scripts/prefix_scan.py`** (from the GLM-5.3 TP4 recipe, adapted to SGLang): shared-long-prefix gate, c8 cold
+  vs warm at T > 0 plus a greedy drift test (full and mid-document cache hits, cold-vs-warm against cold-vs-cold
+  logprob drift). **`scripts/ds_gate.py`**: greedy-continuation KL panels (long 16.5k-40k prompts, short 1-3k) and
+  the T > 0 garble scan. **`scripts/qeval_tasks.py`**: `extract_final_number` prefers the last line that holds only a
+  number (the form the prompts ask for) before falling back to the last number.
+
 ## 2026-09-25 v2.2
 
 Decode-step overhead removed, all lossless: greedy output byte-identical to v2.1. Fresh-clone release gate,

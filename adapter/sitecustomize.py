@@ -92,6 +92,11 @@ class EngramLoader(importlib.abc.Loader):
             if os.environ.get('DSV41_L2_PREFETCH', '0').strip() not in ('0', 'off', 'false', ''):
                 from l2_prefetch import install_model as install_l2_prefetch_model
                 install_l2_prefetch_model(module)
+            # Gated on DSV41_CERT_HEAD: MXINT8 screening tables of the target head, built after the
+            # target's load_weights (adapter/cert_head.py). Gate checked BEFORE the import.
+            if os.environ.get('DSV41_CERT_HEAD', '0').strip().lower() not in ('0', 'off', 'false', '', 'no'):
+                from cert_head import install_model as install_cert_head_model
+                install_cert_head_model(module)
         elif module.__name__ == 'sglang.srt.models.deepseek_v4_dspark':
             # DSV41_VERIFY_CAP=conf:T needs the draft confidence head, which the engine only builds
             # in the ragged-verify modes.
@@ -153,6 +158,10 @@ class EngramLoader(importlib.abc.Loader):
             if os.environ.get('DSV41_VERIFY_CAP', '').strip() not in ('', '0', 'off'):
                 from verify_cap import install_verify as install_verify_cap_verify
                 install_verify_cap_verify(module)
+            # Gated on DSV41_CERT_HEAD: the certified-head flag (masked / full logits) set per verify step.
+            if os.environ.get('DSV41_CERT_HEAD', '0').strip().lower() not in ('0', 'off', 'false', '', 'no'):
+                from cert_head import install_verify as install_cert_head_verify
+                install_cert_head_verify(module)
             # Tap for offline draft training data. Gate checked BEFORE the import, so a disabled
             # flag imports nothing. Wraps TargetVerifyExecutor.commit_hidden; capture is switched
             # at runtime by the presence of DSV41_DRAFT_CAPTURE_TRIGGER, no restart needed.
@@ -220,6 +229,16 @@ class EngramLoader(importlib.abc.Loader):
             if os.environ.get('DSV41_L2_PREFETCH', '0').strip() not in ('0', 'off', 'false', ''):
                 from l2_prefetch import install_roce as install_l2_prefetch_roce
                 install_l2_prefetch_roce(module)
+        elif module.__name__ == 'sglang.srt.layers.logits_processor':
+            # Gated on DSV41_CERT_HEAD: the target-verify LM head through the certified path.
+            if os.environ.get('DSV41_CERT_HEAD', '0').strip().lower() not in ('0', 'off', 'false', '', 'no'):
+                from cert_head import install_logits as install_cert_head_logits
+                install_cert_head_logits(module)
+        elif module.__name__ == 'sglang.srt.managers.tokenizer_manager':
+            # DSV41_REPLAY_GUARD (default on): a prompt-logprob request gets HTTP 400 instead of
+            # raising inside the forward under decoder SWA bounded replay (all ranks exit).
+            from replay_guard import install as install_replay_guard
+            install_replay_guard(module)
         elif module.__name__ == 'sglang.srt.managers.schedule_batch':
             from loop_abort import install as install_loop_abort
             install_loop_abort(module)
@@ -253,6 +272,7 @@ class EngramFinder(importlib.abc.MetaPathFinder):
                             'sglang.srt.speculative.dspark_components.dspark_draft_sampler',
                             'sglang.kernels.ops.speculative.dspark.dspark_accept',
                             'sglang.srt.managers.schedule_batch',
+                            'sglang.srt.managers.tokenizer_manager',
                             'sglang.kernels.ops.moe.moe_fused_gate',
                             'sglang.srt.speculative.dspark_components.dspark_draft',
                             'sglang.srt.speculative.dspark_components.dspark_planner',
@@ -265,7 +285,8 @@ class EngramFinder(importlib.abc.MetaPathFinder):
                             'sglang.srt.models.deepseek_v2',
                             'b12x.comm.roce.roce_oneshot',
                             'b12x.comm.roce_ring.roce_oneshot',
-                            'sglang.srt.layers.attention.dsv4.metadata'):
+                            'sglang.srt.layers.attention.dsv4.metadata',
+                            'sglang.srt.layers.logits_processor'):
             return None
         spec = importlib.machinery.PathFinder.find_spec(fullname, path)
         if spec is not None:

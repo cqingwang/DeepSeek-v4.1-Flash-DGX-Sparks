@@ -55,7 +55,9 @@ TAG = "__dsv41_ab_variant__"
 
 # gates read at install time (by sitecustomize.py or an install_* function): unioned into os.environ
 UNION_BOOL = ("DSV41_L2_PREFETCH", "DSV41_L2_PREFETCH_WOA", "DSV41_L2_PREFETCH_DRAFT",
-              "DSV41_L2_PREFETCH_ENGRAM", "DSV41_L2_PREFETCH_LMHEAD")
+              "DSV41_L2_PREFETCH_ENGRAM", "DSV41_L2_PREFETCH_LMHEAD",
+              # adapter/cert_head.py: tables built when any variant enables it; mode read per capture
+              "DSV41_CERT_HEAD")
 UNION_PARTS = {"DSV41_FUSE_QUANT": ("qnorm", "wo_a", "hcpad"),
                # adapter/spec_sync_free.py: per-step rank-0 broadcasts kept / dropped per variant
                "DSV41_SPEC_SYNC_FREE": ("draft", "accept", "vcap", "merge"),
@@ -71,7 +73,7 @@ KNOWN = frozenset(UNION_BOOL) | frozenset(UNION_PARTS) | frozenset(RUNTIME)
 # numeric knobs with their defaults (the name is historical: SKIP_N is a row count, not MB)
 _MB_DEFAULTS = {"DSV41_L2_PREFETCH_MB": 6.0, "DSV41_L2_PREFETCH_WOA_MB": 6.0, "DSV41_L2_PREFETCH_ENGRAM_MB": 12.0,
                 "DSV41_L2_PREFETCH_SKIP_N": 0.0, "DSV41_L2_PREFETCH_WOB_MB": 0.0, "DSV41_L2_PREFETCH_MOE_MB": 10.0}
-HASHED_SOURCES = ("ab_variant", "l2_prefetch", "fuse_quant", "sitecustomize")
+HASHED_SOURCES = ("ab_variant", "l2_prefetch", "fuse_quant", "sitecustomize", "cert_head")
 
 MODULES = ("sglang.srt.model_executor.runner_backend.full_cuda_graph_backend",
            "sglang.srt.managers.scheduler_components.request_receiver")
@@ -147,6 +149,9 @@ def _norm(cfg):
             out[key] = float(value) if value not in (None, "") else _MB_DEFAULTS[key]
         elif key == "DSV41_L2_PREFETCH_AG":
             out[key] = value is None or value.strip() != "0"
+        elif key == "DSV41_CERT_HEAD":   # 0 / 1 / check are three behaviours
+            v = (value or "0").strip().lower()
+            out[key] = "0" if v in _OFF else ("check" if v == "check" else "1")
         else:
             out[key] = truthy(value)
     return out

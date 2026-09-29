@@ -346,7 +346,7 @@ def test_config_hash_inputs():
         b.configure(dict(env))
         c.configure(dict(env, DSV41_AB_MAX_BS="4"))
         assert a.CONFIG_HASH == b.CONFIG_HASH != c.CONFIG_HASH and c._MAX_BS == 4
-        assert set(a.SOURCES) == {"ab_variant", "l2_prefetch", "fuse_quant", "sitecustomize"}
+        assert set(a.SOURCES) == {"ab_variant", "l2_prefetch", "fuse_quant", "sitecustomize", "cert_head"}
         assert a.SOURCES["ab_variant"] != "missing" and a.SOURCES["l2_prefetch"] != "missing"
         # a different adapter file on one node changes that node's hash
         saved = sys.modules.get("fuse_quant")
