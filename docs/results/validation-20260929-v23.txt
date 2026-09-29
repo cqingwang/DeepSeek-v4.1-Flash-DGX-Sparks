@@ -1,0 +1,137 @@
+# v2.3 release gate, 2026-09-29 (Europe/Warsaw), 4x DGX Spark, GPU SM clock cap 2200 MHz
+# candidate: fresh clone of 5f11a97, image dsv41-4x-spark:ds41-rel0929 built on all four nodes (in-image tests incl. test_cert_head, test_replay_guard)
+# reference: the v2.2 tree (0925c) booted the same afternoon, same .env.tp4 without DSV41_CERT_HEAD
+
+## reference gate (v2.2)
+[16:11:39] health ok; steps: sd kld tscan qeval
+[16:12:13] sd: "type": "prose", "c": 1, "run": 0, "per": 89.29 "type": "prose", "c": 1, "run": 1, "per": 87.7 "type": "prose", "c": 1, "run": 2, "per": 89.32 "type": "code", "c": 1, "run": 0, "per": 125.68 
+[16:12:46] kld long: KLD-COLLECT long /home/knapcio/ds-campaign-20260929/gate/ref0925c/kld-long.json: 4 texts, prompts [16500, 18000, 24003, 40001], 98504 tokens, 0 warning(s)
+[16:13:33] kld short: KLD-COLLECT short /home/knapcio/ds-campaign-20260929/gate/ref0925c/kld-short.json: 12 texts, prompts [1531, 2049, 1203, 2555, 1777, 3001, 1409, 2311, 1027, 2803, 994, 2500], 23160 tokens, 0 warning(s)
+[16:18:26] TSCAN: 0 salad of 35 outputs (errors 0, bad json 0) -> /home/knapcio/ds-campaign-20260929/gate/ref0925c/tscan/tscan.jsonl
+[16:20:13] qeval 1:   PASS  prose_p5                72/75 passed (96.0%), 0 hit the token cap, wall 1.8 min, median 83.49 tok/s 
+[16:21:55] qeval 2:   PASS  prose_p5                72/75 passed (96.0%), 0 hit the token cap, wall 1.7 min, median 88.04 tok/s 
+[16:23:36] qeval 3:   PASS  prose_p5                72/75 passed (96.0%), 0 hit the token cap, wall 1.7 min, median 89.13 tok/s 
+[16:23:36] GATE-DONE
+
+## candidate boot
+[16:36:44] release healthy after 556 s (cold caches)
+      1 [2026-09-29 14:34:02] DSV41_REPLAY_GUARD: prompt-logprob / full-hidden-state requests rejected with 400 under decoder SWA bounded replay
+      2 [cert_head] armed (mode 1, qualified M [6, 12, 18, 24, 30, 36, 42, 48])
+      1 [cert_head] built on rank 0: MXINT8 copy of the 32320 x 5120 head shard (173.4 MB read per step vs 331.0 MB bf16), eps 0.822 %, unsafe rows 0, qualified M [6, 12, 18, 24, 30, 36, 42, 48] (agreed)
+      1 [cert_head] verify head M=12: certified
+      1 [cert_head] verify head M=18: certified
+      1 [cert_head] verify head M=24: certified
+      1 [cert_head] verify head M=30: certified
+      1 [cert_head] verify head M=36: certified
+      1 [cert_head] verify head M=42: certified
+      1 [cert_head] verify head M=48: certified
+      1 [cert_head] verify head M=6: certified
+max_total_num_tokens 6799104
+2 0 
+2 0 
+2 0 
+guard: generate prompt logprobs 400 completions echo+logprobs 400 chat logprobs 200
+health after guard 200
+
+## candidate gate
+[16:36:50] health ok; steps: sd kld tscan pscan qeval
+[16:37:14] sd: "type": "prose", "c": 1, "run": 0, "per": 90.42 "type": "prose", "c": 1, "run": 1, "per": 90.72 "type": "prose", "c": 1, "run": 2, "per": 90.61 "type": "code", "c": 1, "run": 0, "per": 123.86 
+[16:37:48] kld long: KLD-COLLECT long /home/knapcio/ds-campaign-20260929/gate/rel0929/kld-long.json: 4 texts, prompts [16500, 18000, 24003, 40001], 98504 tokens, 0 warning(s)
+[16:38:33] kld short: KLD-COLLECT short /home/knapcio/ds-campaign-20260929/gate/rel0929/kld-short.json: 12 texts, prompts [1531, 2049, 1203, 2555, 1777, 3001, 1409, 2311, 1027, 2803, 994, 2500], 23160 tokens, 0 warning(s)
+[16:43:27] TSCAN: 0 salad of 35 outputs (errors 0, bad json 0) -> /home/knapcio/ds-campaign-20260929/gate/rel0929/tscan/tscan.jsonl
+[16:53:21] pscan: PASS [] {'full': (0.0, 0.0, 0.0), 'partial': (0.0, 0.0, 0.0)} {'cold': {'responses': 8, 'degenerate': 0, 'errors': 0, 'misquotes': 0, 'false_anomaly': 0, 'scan': 2, 'incorrect': 0}, 'warm': {'responses': 8, 'degenerate': 0, 'errors': 0, 'misquotes': 0, 'false_anomaly': 0, 'scan': 2, 'incorrect': 0}}
+[16:55:08] qeval 1:   PASS  prose_p5                72/75 passed (96.0%), 0 hit the token cap, wall 1.8 min, median 83.6 tok/s 
+[16:55:08] GATE-DONE
+
+## greedy-continuation KL, candidate vs reference
+prose-docs   prompt  16500  continuation: identical 2/256 tokens, KL to divergence 0.00651 (3 pos)
+code-runner  prompt  18000  continuation: identical 145/256 tokens, KL to divergence 0.00343 (146 pos)
+code-sched   prompt  24003  continuation: identical 26/256 tokens, KL to divergence 0.00092 (27 pos)
+mixed-long   prompt  40001  continuation: identical 1/256 tokens, KL to divergence 0.00418 (2 pos)
+continuation-only panel: 178 positions (up to and including the first divergence), mean KL 0.00311, p99 0.0818, max 0.1200
+GATE kld_long_cont 0.00311 PASS 178
+docs-a       prompt   1531  continuation: identical 12/256 tokens, KL to divergence 0.00636 (13 pos)
+docs-b       prompt   2049  continuation: identical 17/256 tokens, KL to divergence 0.00579 (18 pos)
+docs-c       prompt   1203  continuation: identical 1/256 tokens, KL to divergence 0.00267 (2 pos)
+runner-a     prompt   2555  continuation: identical 16/256 tokens, KL to divergence 0.03557 (17 pos)
+runner-b     prompt   1777  continuation: identical 13/256 tokens, KL to divergence 0.00679 (14 pos)
+sched-a      prompt   3001  continuation: identical 55/256 tokens, KL to divergence 0.00461 (56 pos)
+sched-b      prompt   1409  continuation: identical 17/256 tokens, KL to divergence 0.00423 (18 pos)
+mixed-a      prompt   2311  continuation: identical 10/256 tokens, KL to divergence 0.00230 (11 pos)
+mixed-b      prompt   1027  continuation: identical 4/256 tokens, KL to divergence 0.00439 (5 pos)
+mixed-c      prompt   2803  continuation: identical 12/256 tokens, KL to divergence 0.00260 (13 pos)
+polish       prompt    994  continuation: identical 3/256 tokens, KL to divergence 0.00216 (4 pos)
+json         prompt   2500  continuation: identical 18/256 tokens, KL to divergence 0.00142 (19 pos)
+continuation-only panel: 190 positions (up to and including the first divergence), mean KL 0.00707, p99 0.0726, max 0.3694
+GATE kld_short_cont 0.00707 PASS 190
+
+## qeval (fixed number extractor)
+qeval-ref0925c-1.json 72 / 75 misses ['code_interval_intersect', 'json_escape', 'json_count']
+qeval-ref0925c-2.json 72 / 75 misses ['code_interval_intersect', 'json_escape', 'json_count']
+qeval-ref0925c-3.json 72 / 75 misses ['code_interval_intersect', 'json_escape', 'json_count']
+qeval-rel0929-1.json 72 / 75 misses ['code_interval_intersect', 'json_escape', 'json_count']
+
+## sparkDash at the 2200 MHz cap (rows: type, concurrency, run, per-stream, aggregate)
+prose c1 run 0 per 89.72 agg 89.72 17:01:30
+prose c1 run 1 per 89 agg 89 17:01:34
+prose c1 run 2 per 90.23 agg 90.23 17:01:38
+prose c2 run 0 per 64.22 agg 125.21 17:01:44
+prose c4 run 0 per 41.81 agg 165.52 17:01:52
+prose c4 run 1 per 42.04 agg 166.35 17:02:00
+prose c8 run 0 per 31.73 agg 244.56 17:02:10
+prose c16 run 0 per 23.21 agg 357.2 17:02:25
+code c1 run 0 per 131.52 agg 131.52 17:02:29
+code c1 run 1 per 131.92 agg 131.92 17:02:33
+code c1 run 2 per 132.05 agg 132.05 17:02:37
+code c2 run 0 per 91.66 agg 181.43 17:02:41
+code c4 run 0 per 63.05 agg 246.07 17:02:47
+code c4 run 1 per 64.01 agg 249.84 17:02:53
+code c8 run 0 per 44.01 agg 328.65 17:03:01
+code c16 run 0 per 30.46 agg 456.33 17:03:13
+structured c1 run 0 per 157.77 agg 157.77 17:03:17
+structured c1 run 1 per 160.11 agg 160.11 17:03:21
+structured c1 run 2 per 155.66 agg 155.66 17:03:25
+structured c2 run 0 per 106.88 agg 184.62 17:03:29
+structured c4 run 0 per 70.25 agg 240.96 17:03:35
+structured c4 run 1 per 71 agg 243.17 17:03:41
+structured c8 run 0 per 44.61 agg 300.59 17:03:49
+structured c16 run 0 per 47.12 agg 603.4 17:03:59
+json c1 run 0 per 130.65 agg 130.65 17:04:03
+json c1 run 1 per 130.4 agg 130.4 17:04:07
+json c1 run 2 per 130.31 agg 130.31 17:04:11
+json c2 run 0 per 92.78 agg 179.95 17:04:15
+json c4 run 0 per 81.32 agg 321.61 17:04:19
+json c4 run 1 per 80.4 agg 317.93 17:04:23
+json c8 run 0 per 60.97 agg 477.26 17:04:29
+json c16 run 0 per 44.81 agg 693.18 17:04:37
+prefill (tok/s per run): {"4096": [4719.54, 4693.6, 4681.69], "16384": [5555.73, 5527.09, 5638.23], "32768": [5649.63, 5677.25, 5623.74], "65536": [5651.14, 5679.56, 5649.0], "131072": [5556.57, 5494.59, 5300.75]}
+[17:01:01] 2200 recheck: prose c1 x3, code c1
+"per": 90.17 "per": 89.94 "per": 88.87 "per": 132.04 [17:01:18] 2200 cap: benches (sampler on)
+SWEEP prose: 89.7 | 125.2 (64.2) | 165.9 (41.9) | 244.6 (31.7) | 357.2 (23.2)
+SWEEP code: 131.9 | 181.4 (91.7) | 248.0 (63.5) | 328.6 (44.0) | 456.3 (30.5)
+SWEEP structured: 157.8 | 184.6 (106.9) | 242.1 (70.6) | 300.6 (44.6) | 603.4 (47.1)
+SWEEP json: 130.4 | 179.9 (92.8) | 319.8 (80.9) | 477.3 (61.0) | 693.2 (44.8)
+PREFILL 4k 4688 | 16k 5583 | 32k 5650 | 64k 5664 | 128k 5398
+[17:07:05] 2200 samples: SM clock under load median 2184 MHz p90 2190 n=43; hottest GPU 68 C; hottest SoC zone 82.8 C; samples with throttle reasons 0
+
+## A/A: the candidate's KL panels collected twice in one boot (floor for the comparison above)
+prose-docs   prompt  16500  continuation: identical 3/256 tokens, KL to divergence 0.01586 (4 pos)
+code-runner  prompt  18000  continuation: identical 228/256 tokens, KL to divergence 0.00490 (229 pos)
+code-sched   prompt  24003  continuation: identical 26/256 tokens, KL to divergence 0.00133 (27 pos)
+mixed-long   prompt  40001  continuation: identical 35/256 tokens, KL to divergence 0.00411 (36 pos)
+continuation-only panel: 296 positions (up to and including the first divergence), mean KL 0.00462, p99 0.0595, max 0.1712
+GATE kld_long_cont 0.00462 PASS 296
+docs-a       prompt   1531  continuation: identical 12/256 tokens, KL to divergence 0.01940 (13 pos)
+docs-b       prompt   2049  continuation: identical 7/256 tokens, KL to divergence 0.01964 (8 pos)
+docs-c       prompt   1203  continuation: identical 1/256 tokens, KL to divergence 0.00123 (2 pos)
+runner-a     prompt   2555  continuation: identical 20/256 tokens, KL to divergence 0.01485 (21 pos)
+runner-b     prompt   1777  continuation: identical 3/256 tokens, KL to divergence 0.03021 (4 pos)
+sched-a      prompt   3001  continuation: identical 55/256 tokens, KL to divergence 0.00226 (56 pos)
+sched-b      prompt   1409  continuation: identical 10/256 tokens, KL to divergence 0.00190 (11 pos)
+mixed-a      prompt   2311  continuation: identical 4/256 tokens, KL to divergence 0.00224 (5 pos)
+mixed-b      prompt   1027  continuation: identical 4/256 tokens, KL to divergence 0.00328 (5 pos)
+mixed-c      prompt   2803  continuation: identical 53/256 tokens, KL to divergence 0.00366 (54 pos)
+polish       prompt    994  continuation: identical 256/256 tokens (full), KL to divergence 0.00121 (256 pos)
+json         prompt   2500  continuation: identical 8/256 tokens, KL to divergence 0.00368 (9 pos)
+continuation-only panel: 444 positions (up to and including the first divergence), mean KL 0.00351, p99 0.0485, max 0.2387
+GATE kld_short_cont 0.00351 PASS 444

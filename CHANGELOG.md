@@ -3,9 +3,10 @@
 Newest first. Each entry says what changed in the production stack and what was measured; the
 raw results live under `docs/results/`.
 
-## 2026-09-29 v2.3 (candidate, pre-gate)
+## 2026-09-29 v2.3
 
-Lossless: greedy output byte-identical to v2.2.
+Lossless: the certified head returns the stock argmax (in-boot A/B: greedy outputs identical 24/24), the guard only
+rejects requests. Fresh-clone release gate, raw output: [`docs/results/validation-20260929-v23.txt`](docs/results/validation-20260929-v23.txt).
 
 - **`adapter/cert_head.py`, `DSV41_CERT_HEAD=1 DSV41_CERT_HEAD_M=6,12,18,24,30,36,42,48`, on.** Certified
   target LM head for greedy verify steps: an MXINT8 screen of the head shard with a proven error bound decides
@@ -26,6 +27,16 @@ Lossless: greedy output byte-identical to v2.2.
   logprob drift). **`scripts/ds_gate.py`**: greedy-continuation KL panels (long 16.5k-40k prompts, short 1-3k) and
   the T > 0 garble scan. **`scripts/qeval_tasks.py`**: `extract_final_number` prefers the last line that holds only a
   number (the form the prompts ask for) before falling back to the last number.
+- Release gate (fresh clone of 5f11a97 built on all four nodes, cold caches, healthy in 556 s; reference = the v2.2
+  tree booted the same afternoon): qeval 72 / 75 (v2.2: 72 / 72 / 72, the same three misses); greedy-continuation
+  KL vs v2.2 0.0031 (long prompts) / 0.0071 (short), A/A in one boot 0.0046 / 0.0035; T > 0 scan 0 of 35 garbled; `prefix_scan` PASS (drift 0.0 on
+  4 full and 4 mid-document hits); certified head armed on 4 / 4 ranks; prompt-logprob requests answered 400 with the
+  server staying up. sparkDash at the 2200 MHz cap: prose c1 89.7 (v2.2 reference the same afternoon: 89.3 / 87.7 / 89.3), code c1 131.9, structured 157.8, json 130.4; prefill 4.7k-5.7k tok/s.
+- Measured and not adopted: an L2 prefetch of the fp32 hyper-connection weights at the front of each collective
+  window (in-boot A/B +0.64 ms/step, -1.8 % tok/s: the stats kernels run on a side stream, off the critical path).
+  Checked and not applicable on this stack: a host sync before the target launch (draft end to verify start is
+  2-3 us), single-CTA fp32 GEMVs (none in the decode trace), large prefill gathers over RoCE (prefill gathers already
+  use NCCL).
 
 ## 2026-09-25 v2.2
 
