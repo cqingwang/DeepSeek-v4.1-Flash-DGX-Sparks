@@ -61,3 +61,24 @@ def test_official_adapter_additions_are_wired() -> None:
     assert (ROOT / "adapter/indexer_budget.py").is_file()
     metrics = (ROOT / "adapter/kv_pool_metrics.py").read_text(encoding="utf-8")
     assert "DeepSeekV4TokenToKVPool" in metrics
+
+
+def test_sitecustomize_conflict_merge_keeps_local_and_upstream_hooks() -> None:
+    """合并两边 adapter 时保留 UMA 防护和 Engram L2 prefetch hook。"""
+    import py_compile
+
+    source = ROOT / "adapter/sitecustomize.py"
+    py_compile.compile(str(source), doraise=True)
+    text = source.read_text(encoding="utf-8")
+    assert "DSV41_SERIAL_WEIGHT_LOAD" in text
+    assert "DSV41_L2_PREFETCH_ENGRAM" in text
+    assert "install_engram_prefetch(module)" in text
+
+
+def test_tp4_template_matches_the_managed_hardware_ring_contract() -> None:
+    values = _env(".env.tp4.example")
+    container_env = values["EXTRA_CONTAINER_ENV"]
+    assert "DSV41_ROCE_RING=1" in container_env
+    assert "SGLANG_ROCE_ALLREDUCE=1" in container_env
+    assert "B12X_ROCE_GID_INDEX=3" in container_env
+    assert "B12X_ROCE_PEER_HCA_MAPS=" in container_env

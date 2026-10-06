@@ -52,16 +52,16 @@ NATIVE = {
     "3": ["0,0,rocep1s0f0,3,1", "0,1,roceP2p1s0f0,3,1", "1,0,rocep1s0f1,3,2", "1,1,roceP2p1s0f0,3,2", "2,0,rocep1s0f1,3,1", "2,1,roceP2p1s0f1,3,1"],
 }
 MAPS = "1=1/3,2=0/3,3=0/2;0=0/2,2=1/3,3=1/2;0=1/2,1=0/2,3=1/3;0=1/3,1=0/3,2=0/2"
-LIVE_HOSTS = ["spark-a", "spark-c", "spark-d", "spark-b"]  # TP rank 顺序
+LIVE_HOSTS = ["spark-a", "spark-c", "spark-b", "spark-d"]  # TP rank 顺序
 LIVE_ADDR = {
     "spark-a": {"enp1s0f0np0": "10.251.20.1/30", "enp1s0f1np1": "10.251.20.14/30",
                  "enP2p1s0f0np0": "10.100.241.1/30", "enP2p1s0f1np1": "10.100.241.14/30"},
-    "spark-b": {"enp1s0f0np0": "10.251.20.2/30", "enp1s0f1np1": "10.251.20.5/30",
-                 "enP2p1s0f0np0": "10.100.241.2/30", "enP2p1s0f1np1": "10.100.241.5/30"},
+    "spark-b": {"enp1s0f0np0": "10.251.20.9/30", "enp1s0f1np1": "10.251.20.5/30",
+                 "enP2p1s0f0np0": "10.100.241.9/30", "enP2p1s0f1np1": "10.100.241.5/30"},
     "spark-c": {"enp1s0f0np0": "10.251.20.10/30", "enp1s0f1np1": "10.251.20.13/30",
                  "enP2p1s0f0np0": "10.100.241.10/30", "enP2p1s0f1np1": "10.100.241.13/30"},
-    "spark-d": {"enp1s0f0np0": "10.251.20.9/30", "enp1s0f1np1": "10.251.20.6/30",
-                 "enP2p1s0f0np0": "10.100.241.9/30", "enP2p1s0f1np1": "10.100.241.6/30"},
+    "spark-d": {"enp1s0f0np0": "10.251.20.2/30", "enp1s0f1np1": "10.251.20.6/30",
+                 "enP2p1s0f0np0": "10.100.241.2/30", "enP2p1s0f1np1": "10.100.241.6/30"},
 }
 
 
@@ -110,14 +110,14 @@ class Plan(unittest.TestCase):
 
     def test_live_ring_order_allows_per_node_port_orientation(self):
         self.assertEqual(plan.ring_order(inventory(LIVE_ADDR), LIVE_HOSTS),
-                         ["spark-a", "spark-b", "spark-d", "spark-c"])
+                         ["spark-a", "spark-d", "spark-b", "spark-c"])
 
     def test_live_ring_ports_follow_per_node_orientation(self):
         order = plan.ring_order(inventory(LIVE_ADDR), LIVE_HOSTS)
         oriented = plan.ring_ports(inventory(LIVE_ADDR), order)
         self.assertEqual(oriented[("spark-a", "clockwise", 0)], "enp1s0f0np0")
-        self.assertEqual(oriented[("spark-b", "clockwise", 0)], "enp1s0f1np1")
-        self.assertEqual(oriented[("spark-d", "clockwise", 0)], "enp1s0f0np0")
+        self.assertEqual(oriented[("spark-d", "clockwise", 0)], "enp1s0f1np1")
+        self.assertEqual(oriented[("spark-b", "clockwise", 0)], "enp1s0f0np0")
         self.assertEqual(oriented[("spark-c", "clockwise", 0)], "enp1s0f1np1")
         self.assertEqual([oriented[(host, "clockwise", 0)] == "enp1s0f0np0" for host in order],
                          [True, False, True, False])

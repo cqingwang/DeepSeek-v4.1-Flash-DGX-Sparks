@@ -1,0 +1,100 @@
+DeepSeek V4.1 Flash switchless TP4 — merge, ring mesh repair, deployment, and speed acceptance
+Date: 2026-10-06 Asia/Shanghai
+Source of truth: local /Users/chan/Documents/project/doc; child submodule remained on its task-start branch `main`; no commit created.
+Target: deepseek_v4.1_flash_switchless, model deepseek-ai/DeepSeek-V4.1-Flash
+API acceptance: spark-a management LAN 192.168.2.180:8888 (not loopback)
+
+Merge and managed-path repairs
+------------------------------
+Resolved the pulled knapcio source conflicts in `.env.tp4.example`, `CHANGELOG.md`,
+`README.md`, and `adapter/sitecustomize.py`, preserving the managed TP4/Ring-only path and
+upstream v2.3 adapter changes. The parent `spark/deploy.sh` now forces DeepSeek TP4 start and
+stop to execute on the remote head, including when its logical head/control names alias.
+The module `start.sh` handles empty Bash arrays on the macOS Bash 3 control environment and
+quotes mount paths safely. The targeted remote-head regression was observed failing before the
+fix and passing afterward. Child and parent remain uncommitted.
+
+Cause and repair of mesh failure
+--------------------------------
+Physical links were up, but the four hosts still had old `/opt/dsv41-mesh/mesh-up.sh` and
+`mesh-down.sh` state, with routes and `tc flower` destination MACs inconsistent with the
+current two-plane sparkring topology. This caused `ibv_modify_qp(RTR): Connection timed out`;
+it was a stale L2/L3 mesh-programming issue, not a missing direct connection between every pair.
+The configured TP4 order is A -> C -> B -> D. Per-node port orientations are asymmetric, so
+non-neighbor ranks are reached through their physical neighbors; no full-mesh assumption was
+used. The old scripts were backed up on each host under
+`/var/backups/dsv41-mesh/20261006-tp4-a-c-b-d/`, stale routes/rules were removed, and local
+planner-generated scripts were installed and started on all four hosts. `dsv41-mesh.service`
+is active on every host, and routes plus hardware flower rules match the planner's adjacent-peer
+map. Four HCA slots use B12X RoCE GID 3; NCCL's separate `NCCL_IB_GID_INDEX=-1` override is
+preserved.
+
+Before model start, corrected A-to-B routed RDMA probe used matching `-x 3 --flow_label=16383`
+on both ends, `-s 61440 -n 100`: mean 10.56 us, typical 10.54 us. The D-side forwarding rule
+was `in_hw in_hw_count 1`; the observed probe added 1,807 hardware packets / 6,988,386 bytes
+and zero software packets. The earlier stale-mesh QP timeout was resolved.
+
+Sync, image build, and applied runtime
+-------------------------------------
+`bash spark/sync_to.sh` safely synchronized local source one-way to A/C/B/D; no `--delete`, no
+model weight transfer. The prior September 25 images did not contain the current v2.3 hooks, so
+all four node images were rebuilt from the synchronized local source before final deployment.
+Node-local Docker image IDs differ; the deployed core files have identical hashes on all four:
+- adapter/sitecustomize.py: 13358f9cb8c0d13da2735f9ff49b8300186c199caca8eb6327346febe0305b32
+- cert_head.py: 43340118273cffaff001d615f9fbc55cabc2bdbf2832d502a13447d7dcefc299
+- eager_glue.py: 937b9a16c7a274dd93068a9b3512698ef4982c1fdf9fe445066e9b61cc34e66e
+- spec_sync_free.py: 745b1c59ee12f00770072f1e72e6a207ed9cc3b05b8e1e044c895c0a1607007b
+
+The production target was started through local `./spark/deploy.sh start --target=deepseek_v4.1_flash_switchless --model=deepseek-ai/DeepSeek-V4.1-Flash`.
+Rank order A/C/B/D = 0/1/2/3, world size 4, four containers running and healthy, and all
+model weights remain on host `/opt/models` with read-only container mounts. All four
+`dsv41-mesh.service` units are active. Runtime confirmed `RING-ONLY v4`, `Tree=0/Ring=1` for
+eight collective functions, four channels, four RoCE devices, and `NET/IB`. The separate
+RoCE proxy reported `world=4`, all four HCA names, GID 3. Expected CPU-path `cuMemGdrSupport 0`
+was observed. The applied v2.3 environment includes:
+`DSV41_SPEC_SYNC_FREE=all`, `DSV41_EAGER_GLUE=all`, `DSV41_SPLIT_COMPACT_GATHER=1`,
+`DSV41_CERT_HEAD=1`, and `DSV41_CERT_HEAD_M=6,12,18,24,30,36,42,48`.
+Runtime logs confirmed cert-head arming/build, eager-glue stages, spec-sync-free arming, and
+compact-gather bit-identical activation.
+
+From the control Mac, `http://192.168.2.180:8888/health` returned HTTP 200 and authenticated
+`/v1/models` returned `deepseek-v4.1-flash`. Startup smoke returned 42 and warm-up succeeded.
+No loopback URL was used for client acceptance.
+
+In-load fabric proof: for an additional c4 wave, the D hardware flower rule advanced from
+14,777,214,408 bytes / 4,645,946 packets to 15,826,641,608 bytes / 4,942,302 packets:
++1,049,427,200 bytes and +296,356 packets, with the rule still `in_hw` and software packet
+count still zero. The 4/4 API streams succeeded, linking the inference workload to hardware
+forwarding on the physical ring.
+
+Fixed-protocol SparkDash DecodeBench
+------------------------------------
+Endpoint is logical `spark-a`, model port 8888, model `deepseek-v4.1-flash`, streaming prose,
+temperature 0, thinking off, maxTokens=256 per stream. Two c1 warmups were discarded. Each
+measurement round completed every requested stream without errors:
+
+Concurrency     Round 1     Round 2     Round 3     Median tok/s
+C1               82.39       82.43       82.49          82.43
+C2 aggregate    113.35      117.98      118.14         117.98
+C4 aggregate    153.53      154.94      155.49         154.94
+
+The prior ring-only CHANGELOG acceptance rounds were C1 75.87/79.54/79.76 (median 79.54),
+C2 111.03/116.03/115.73 (median 115.73), and C4 146.04/153.11/152.65 (median 152.65).
+Against those cross-session ring-only medians, the new medians are +3.63%, +1.94%, and +1.50%.
+All three concurrency levels are at or above the prior ring-only baseline. This is not a same-
+window A/B. The switched-RoCE README target 87.7/120.4/163.6 is a different fabric and is not
+the acceptance threshold for this physical switchless ring.
+
+Regression and reproducibility
+------------------------------
+- Child ring/config contract suite: `python3 -m pytest -q tests/test_ring_tp4_contract.py tests/test_switchless_ring_integration.py tests/test_roce_ring.py tests/test_switchless_ring.py` -> 90 passed, 2 skipped.
+- Parent cluster config contract: `python3 -m pytest -q spark/tests/test_cluster_config.py -k 'not common_spark_nodes_are_complete_and_drive_legacy_query'` -> 1 passed, 1 deselected. The excluded fixture still refers to a retired legacy model.
+- Parent remote-head regression: `python3 -m pytest -q spark/tests/test_model_path_contract.py -k deepseek_tp4_start_and_stop_always_use_the_remote_head` -> 1 passed.
+- Build-time Dockerfile CPU tests passed on all node builds, including eager-glue (10/10), cert-head, compact-gather, spec-sync-free, and ring planner (12 tests).
+- `bash -n spark/deploy.sh spark/sync_to.sh spark/deepseek_v4.1_flash_switchless/start.sh`, Python compilation, and `git diff --check` passed.
+- Raw SparkDash rounds were retained in `/tmp/dsv41-latest-{c1-r1,c1-r2,c1-r3,c2,c2-r2,c2-r3,c4-r1,c4-r2,c4-r3}.json` on the control host for this session.
+
+Recovery note: if RTR QP setup fails while physical carrier remains up, inspect the active
+sparkring plan against each host's `ip route` and `tc -s filter ... in_hw` destinations before
+changing cable topology. Restore old mesh only from the per-host backup above if the new managed
+mesh must be rolled back.

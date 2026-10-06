@@ -185,7 +185,7 @@ remote_on() {
   python3 "$REMOTE_PY" --env-file "$ENV_FILE" \
     --host "$host" --user "$WORKER_USER" \
     --identity "$SSH_IDENTITY" \
-    "${to_args[@]}" \
+    "${to_args[@]+"${to_args[@]}"}" \
     "bash -lc $(printf '%q' "$*")"
 }
 remote_ok_on() { remote_on "$@" >/dev/null 2>&1; }
@@ -827,6 +827,9 @@ cmd_serve() {
   if [[ -f "$NCCL_HOST_DIR/libnccl.so.2.30.7" ]]; then
     NCCL_LIBRARY_PATH="$NCCL_HOST_DIR/libnccl.so.2.30.7"
   fi
+  local nccl_library_mount_arg nccl_host_mount_arg
+  nccl_library_mount_arg=$(printf '%q' "$NCCL_LIBRARY_PATH:$NCCL_PIP_SO:ro")
+  nccl_host_mount_arg=$(printf '%q' "$NCCL_HOST_DIR:$NCCL_CONTAINER_DIR:ro")
   for h in "${WORKER_HOSTS[@]}"; do
     wip="${WORKER_IPS[$idx]}"
     wgid="${WORKER_GIDS[$idx]}"
@@ -844,10 +847,10 @@ cmd_serve() {
       mkdir -p $WORKER_DIR/state $WORKER_DIR/logs
       NCCL_ARGS=()
       if [ \"${NCCL_OVERLAY_PIP:-0}\" = 1 ]; then
-        NCCL_ARGS+=(-v \"$NCCL_LIBRARY_PATH:$NCCL_PIP_SO:ro\")
+        NCCL_ARGS+=(-v $nccl_library_mount_arg)
       fi
       if [ \"${NCCL_SWITCHLESS_RING_ONLY:-0}\" != 1 ] && [ \"${NCCL_OVERLAY_PIP:-0}\" != 1 ] && { [ -f \"$NCCL_HOST_DIR/libnccl.so.2.30.7\" ] || [ -f \"$NCCL_HOST_DIR/libnccl.so.2\" ]; }; then
-        NCCL_ARGS=(-v \"$NCCL_HOST_DIR:$NCCL_CONTAINER_DIR:ro\")
+        NCCL_ARGS=(-v $nccl_host_mount_arg)
       fi
       SHIM_ARGS=()
       if [ -f /opt/aicad-prod/lib/libncclpin.so ] && [ -d /opt/nccl-ringonly ]; then
@@ -866,7 +869,7 @@ cmd_serve() {
         -v \$MODEL_SRC:/models/DeepSeek-V4.1-Flash:ro \
         -v $WORKER_DIR/state:/state \
         -v \$HOME/.cache:/root/.cache \
-        \"\${NCCL_ARGS[@]}\" \"\${SHIM_ARGS[@]}\" \\
+        \"\${NCCL_ARGS[@]+"\${NCCL_ARGS[@]}"}\" \"\${SHIM_ARGS[@]+"\${SHIM_ARGS[@]}"}\" \\
 $(worker_env_lines "$wip" "$wgid" "$rank")
         -e API_KEY=$(printf '%q' "$API_KEY") \\
         -e EXTRA_SGLANG_ARGS=$(printf '%q' "${EXTRA_SGLANG_ARGS:-}") \\
