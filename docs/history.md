@@ -4,6 +4,56 @@ Every dated table, note and rejected experiment that used to live in the README,
 
 All rows below were taken with sparkDash up to 1.8.6. sparkDash 1.8.7 replaced the code prompts (c1 and the concurrent waves), so the code columns here are not comparable with the README's current table; the prose, structured and prefill prompts are unchanged.
 
+## Production 2026-09-25 (v2.2), sparkDash 1.8.8 (GPU clock cap then at 3003 MHz, effectively the driver default boost)
+
+Production stack v2.2 (the last `EXTRA_CONTAINER_ENV` line of [`.env.tp4.example`](../.env.tp4.example) with `EP_SIZE=1`, `Dockerfile.canary-roce` image), built from a fresh clone of this repository on all four nodes and measured on that image with sparkDash 1.8.8: 256 new tokens, temperature 0, thinking off, idle fleet, 2026-09-25. Two boots, both healthy on the first try in 180 s and 160 s; KV pool 5.98-6.49M tokens (1M context). Raw output: [`docs/results/validation-20260925-v22.txt`](results/validation-20260925-v22.txt).
+
+**Decode, aggregate tok/s (per stream in brackets)**
+
+| prompt type | c1 | c2 | c4 | c8 | c16 |
+|---|---:|---:|---:|---:|---:|
+| prose | **89.8** | 122.0 (62.6) | 164.1 (41.5) | 238.8 (31.0) | 340.9 (22.2) |
+| code | 132.4 | 177.8 (89.8) | 252.7 (64.1) | 308.9 (41.4) | 436.4 (29.2) |
+| structured | 156.9 | 181.6 (105.4) | 239.6 (70.2) | 295.7 (44.2) | 565.5 (44.3) |
+| json | 124.3 | 177.6 (91.6) | 311.2 (78.7) | 468.8 (59.8) | 653.0 (42.2) |
+
+The c1, c4 and c16 columns are from the v2.2 fresh-clone boot; c2 and c8 were measured on the same image the same evening, first run of each cell after two warm-ups ([`docs/results/validation-20260925-v22.txt`](results/validation-20260925-v22.txt)). Prose c1 is the median of five runs, 89.76 (88.97-90.21), after the warm-ups; the second boot gave 89.04 / 90.42 / 89.47. Code c1 is the median of three runs (124.95 / 132.62 / 132.37). Greedy output is byte-identical to v2.1's (hash check of 15 outputs on the first boot and 6 on the second). With the deterministic MoE reduction the greedy text is identical run to run, so the sparkDash numbers repeat within about ±1 tok/s; sparkDash's prose c1 is one prompt, and a stack that sums in a different order (another fabric, another all-reduce) follows a different greedy text there, so compare step time or a many-prompt benchmark across stacks. On 45 varied prompts (prose, structured and other catalogs, c1 greedy) the same image runs 61.1 / 99.0 / 74.7 tok/s; decode step 31.2-32.5 ms on prose and 37.4-37.8 ms on code at c1. sparkDash uses a different set of prompts at each concurrency for the non-prose types, so per-stream values are not comparable across columns. Sampled chat at the model card's T=1 / top_p=0.95 with thinking (c1, 18 requests x 800 tokens on two prompt sets) runs 67.2 / 65.9 tok/s (measured on the 2026-09-24 stack; sparkDash benches are greedy, where the draft temperature and block verification do not act).
+
+**Prefill, cold, tok/s by prompt length** (one pass, same boot)
+
+| 4k | 16k | 32k | 64k | 128k | 262k |
+|---:|---:|---:|---:|---:|---:|
+| 3944 | 5789 | 5855 | 5850 | 5734 | 5286 |
+
+sparkDash's prefill filler is one repeated token, so every filler token hits the same Engram row and the row cache inflates these numbers (reported by koldfrontier in [MiaAI-Lab#21](https://github.com/MiaAI-Lab/DeepSeek-v4.1-Flash-DGX-Sparks/issues/21)); on real text (documentation and source code, a unique prefix per prompt so nothing comes from the prefix cache) the same image measured 3915 / 4743 / 4822 / 4946 / 4800 tok/s at ~4k / ~15k / ~30k / ~56k / ~123k tokens. Needle retrieval (a single phrase in varied filler at 37 % depth): PASS at 1,011,084 tokens on this image (324.3 s, head `MemAvailable` low-water 6,029 MiB); earlier stacks passed at 99k, 198k and 746k as well. A harder list-lookup needle ("value of item N" in a list of up to 197,000 items) passes for about half the keys at 129k and 259k on the stacks it was run on, a limit of the model rather than of either stack.
+
+**Quality.** `scripts/qeval.py` runs 75 auto-scored tasks (code executed against hidden asserts, JSON schema-checked, numeric answers matched, format constraints enforced, prose checked for degeneration; no LLM judge), one request at a time, temperature 0. qeval was not re-run for v2.2: its greedy output is byte-identical to v2.1's, which scores 72 of 75 (earlier stacks 71-72); the three misses (`code_interval_intersect`, `json_escape`, `math_m9`) fail identically on the upstream example. Every speed change here is meant to be lossless: same weights, every draft token verified by the target, and each adapter either bit-identical to the stock path (checked at boot or in the in-image tests) or exact in distribution (draft temperature, block verification). RoCEnante sums in a different order than NCCL, so the numerics are not bit-identical to an NCCL run, which is why the profile is also scored. Run qeval from a worker, not from the head (it executes model-generated Python).
+
+Every earlier measurement, the per-stage tables and the experiments that were tried and not adopted are in [docs/history.md](history.md); what changed when is in [CHANGELOG.md](../CHANGELOG.md).
+
+## Production 2026-09-25 (v2, with the v2.1 c1 and prefill), sparkDash 1.8.8
+
+Production stack (the last `EXTRA_CONTAINER_ENV` line of [`.env.tp4.example`](../.env.tp4.example) with `EP_SIZE=1`, `Dockerfile.canary-roce` image), built from a fresh clone of this repository on all four nodes and measured on that image with sparkDash 1.8.8: 256 new tokens, temperature 0, thinking off, idle fleet, 2026-09-25. Engine start to healthy 160-170 s; KV pool 6.0-6.6M tokens (1M context). Raw output: [`docs/results/validation-20260925-v2.txt`](results/validation-20260925-v2.txt).
+
+**Decode, aggregate tok/s (per stream in brackets)**
+
+| prompt type | c1 | c2 | c4 | c8 | c16 |
+|---|---:|---:|---:|---:|---:|
+| prose | **87.7** | 120.4 (61.9) | 163.6 (41.4) | 237.6 (30.8) | 342.7 (22.2) |
+| code | 124.8 | 175.0 (88.4) | 246.8 (63.2) | 309.8 (41.4) | 438.3 (29.3) |
+| structured | 152.4 | 177.6 (103.3) | 240.4 (70.4) | 295.5 (44.2) | 572.2 (44.4) |
+| json | 118.9 | 174.2 (89.8) | 301.7 (76.2) | 471.5 (60.2) | 659.9 (42.7) |
+
+Prose and code c1 are from the latest fresh-clone boot (v2.1, prose median of five runs 86.7-87.7 after two discarded warm-ups; the v2 boot gave 86.5 and 122.6); the other columns are from the v2 sweep, whose decode path is identical. With the deterministic MoE reduction the greedy text is identical run to run, so the sparkDash numbers repeat within about ±1 tok/s; sparkDash's prose c1 is one prompt, and a stack that sums in a different order (another fabric, another all-reduce) follows a different greedy text there, so compare step time or a many-prompt benchmark across stacks. On 45 varied prompts (prose, structured and other catalogs, c1 greedy) the same image runs 58.4 / 94.3 / 71.8 tok/s; decode step 32.4-33.6 ms on prose and 38.9-39.4 ms on code at c1. sparkDash uses a different set of prompts at each concurrency for the non-prose types, so per-stream values are not comparable across columns. Sampled chat at the model card's T=1 / top_p=0.95 with thinking (c1, 18 requests x 800 tokens on two prompt sets) runs 67.2 / 65.9 tok/s (measured on the 2026-09-24 stack; sparkDash benches are greedy, where the draft temperature and block verification do not act).
+
+**Prefill, cold, tok/s by prompt length** (two passes; fresh clone of the MXFP8 attention-gather commit, [`docs/results/validation-20260925-v21.txt`](results/validation-20260925-v21.txt), which also measured prose c1 87.7 (86.7-87.7), code c1 124.8, qeval 72/75 and the 1,011,084-token needle PASS in 325 s)
+
+| 4k | 16k | 32k | 64k | 128k | 262k |
+|---:|---:|---:|---:|---:|---:|
+| 4119 / 4840 | 5891 / 5846 | 5893 / 5868 | 5936 / 5903 | 5793 / 5761 | 5355 / 5360 |
+
+sparkDash's prefill filler is one repeated token, so every filler token hits the same Engram row and the row cache inflates these numbers (reported by koldfrontier in [MiaAI-Lab#21](https://github.com/MiaAI-Lab/DeepSeek-v4.1-Flash-DGX-Sparks/issues/21)); on real text (documentation and source code, a unique prefix per prompt so nothing comes from the prefix cache) the same image measured 4202-4685 / 4824-4922 / 4827-4830 / 4942-4970 / 4822-4871 tok/s at ~4k / ~15k / ~32k / ~62k / ~120k tokens. Needle retrieval (a single phrase in varied filler at 37 % depth): PASS at 99k, 198k, 746k and 1,011,084 tokens (the last one in 322 s, head `MemAvailable` low-water 7 GiB). A harder list-lookup needle ("value of item N" in a list of up to 197,000 items) passes for about half the keys at 129k and 259k on this stack and on the previous one alike, a limit of the model rather than of either stack.
+
 ## Production 2026-09-24 evening (EP1 release), sparkDash 1.8.8
 
 Production stack (the last `EXTRA_CONTAINER_ENV` line of [`.env.tp4.example`](../.env.tp4.example) with `EP_SIZE=1`, `Dockerfile.canary-roce` image), built from a fresh clone of this repository on all four nodes and measured on that image with sparkDash 1.8.8: 256 new tokens, temperature 0, thinking off, idle fleet, 2026-09-24. Engine start to healthy 170 s; KV pool 6.56M tokens (1M context). Raw output: [`docs/results/validation-20260924-ep1.txt`](results/validation-20260924-ep1.txt).
@@ -186,6 +236,17 @@ The three tasks that fail on every stack (`code_interval_intersect`, `json_escap
 - The 2026-09-18 production rows were re-measured on 2026-09-18 on the Engram-prefetch boot (`results/fastload-20260918/prodbench-prefetch-20260918.txt`): two warm-up prose c1 runs discarded, then one run per cell; prose c1 is the median of three runs (61.0, 61.2, 61.0); the 4k and 16k prefill cells are single cold points that swing 2.4–3.8k between boots.
 
 ## Tested and not adopted
+
+### 2026-09-25
+
+Measured on the fleet while building v2.2.
+
+- **L2 prefetch v3/v4 sub-gates**: `AHEAD`, `ENGRAM`, `DRAFT` and `LMHEAD` flat; `SKIP_N` +0.17 ms/step; `WOB_MB=4` +0.12 ms/step; `MOE` slows the MoE stream it overlaps (~12.6 us per 10 MB) and its lines do not survive to the next layer. Only `WOA` shipped.
+- **Fused MXFP8 quantization into q_norm / wo_a / hc**: flat.
+- **Layer-14 Engram lookup on a side stream during verify**: ~0.
+- **Fused hc prefill kernel**: slower than the current kernels.
+- **MoE restructures**: closed; the MoE phases already run at 223 GB/s live, near the DRAM limit.
+- **CPU pinning**: flat.
 
 ### 2026-09-23
 

@@ -31,8 +31,18 @@ def extract_json(text):
 _NUM = re.compile(r"-?\d[\d,]*(?:\.\d+)?")
 
 
+_OWN_LINE_NUM = re.compile(r"^[ \t>*_`$]*(-?\d[\d,]*(?:\.\d+)?)[ \t*_`$.]*$", re.M)
+
+
 def extract_final_number(text):
-    """The last standalone number, preferring one after an 'answer'-ish marker."""
+    """The number the prompt asked for: the last line that holds nothing but a number (optionally bold),
+    else the last standalone number, preferring one after an 'answer'-ish marker."""
+    own = _OWN_LINE_NUM.findall(text)
+    if own:
+        try:
+            return float(own[-1].replace(",", ""))
+        except ValueError:
+            pass
     tail = text
     for marker in ("final answer", "answer:", "answer is", "**", "="):
         idx = text.lower().rfind(marker)

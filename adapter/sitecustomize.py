@@ -20,6 +20,12 @@ class EngramLoader(importlib.abc.Loader):
             # hasher. Gated on DSV41_ENGRAM_PREFETCH, inactive by default.
             from engram_prefetch import install as install_engram_prefetch
             install_engram_prefetch(module)
+            # After engram_prefetch: the row join forks an L2 prefetch of the engram.wkv slice.
+            # Gated on DSV41_L2_PREFETCH + DSV41_L2_PREFETCH_ENGRAM (adapter/l2_prefetch.py).
+            if (os.environ.get('DSV41_L2_PREFETCH', '0').strip() not in ('0', 'off', 'false', '')
+                    and os.environ.get('DSV41_L2_PREFETCH_ENGRAM', '0').strip() not in ('0', 'off', 'false', '')):
+                from l2_prefetch import install_engram as install_l2_prefetch_engram
+                install_l2_prefetch_engram(module)
         elif module.__name__ == 'sglang.srt.model_loader.utils':
             if os.environ.get('DSV41_SERIAL_WEIGHT_LOAD', '0') == '1':
                 if not callable(getattr(module, 'should_async_load', None)):
@@ -108,6 +114,11 @@ class EngramLoader(importlib.abc.Loader):
             if os.environ.get('DSV41_L2_PREFETCH', '0').strip() not in ('0', 'off', 'false', ''):
                 from l2_prefetch import install_model as install_l2_prefetch_model
                 install_l2_prefetch_model(module)
+            # Gated on DSV41_CERT_HEAD: MXINT8 screening tables of the target head, built after the
+            # target's load_weights (adapter/cert_head.py). Gate checked BEFORE the import.
+            if os.environ.get('DSV41_CERT_HEAD', '0').strip().lower() not in ('0', 'off', 'false', '', 'no'):
+                from cert_head import install_model as install_cert_head_model
+                install_cert_head_model(module)
         elif module.__name__ == 'sglang.srt.models.deepseek_v4_dspark':
             # DSV41_VERIFY_CAP=conf:T needs the draft confidence head, which the engine only builds
             # in the ragged-verify modes.
@@ -128,17 +139,38 @@ class EngramLoader(importlib.abc.Loader):
             if os.environ.get('DSV41_DRAFT_HEAD_FP8', '0').strip() not in ('0', 'off', 'false', ''):
                 from draft_head_fp8 import install as install_draft_head_fp8
                 install_draft_head_fp8(module)
+            # Gated on DSV41_L2_PREFETCH + DSV41_L2_PREFETCH_DRAFT: the draft forward is bracketed
+            # like the target's, so its collectives prefetch the next stage's weights.
+            if (os.environ.get('DSV41_L2_PREFETCH', '0').strip() not in ('0', 'off', 'false', '')
+                    and os.environ.get('DSV41_L2_PREFETCH_DRAFT', '0').strip() not in ('0', 'off', 'false', '')):
+                from l2_prefetch import install_draft as install_l2_prefetch_draft
+                install_l2_prefetch_draft(module)
         elif module.__name__ == 'sglang.srt.speculative.dspark_components.dspark_draft_sampler':
+            # Gated on DSV41_SPEC_SYNC_FREE: rank-invariant draft noise, per-step rank-0 broadcasts
+            # dropped / merged / audited (adapter/spec_sync_free.py). Gate checked BEFORE the import.
+            if os.environ.get('DSV41_SPEC_SYNC_FREE', '').strip() not in ('', '0', 'off', 'false'):
+                from spec_sync_free import install_sampler as install_spec_sync_free_sampler
+                install_spec_sync_free_sampler(module)
             # Gated on DSV41_DRAFT_TAU (unset or 1 = off): draft proposal temperature.
             if os.environ.get('DSV41_DRAFT_TAU', '1').strip() not in ('', '1', '1.0'):
                 from draft_tau import install as install_draft_tau
                 install_draft_tau(module)
+            # Gated on DSV41_EAGER_GLUE (adapter/eager_glue.py): stage / vcap. After draft_tau and
+            # spec_sync_free: its stage cache must be the outermost stage_sampling_params.
+            if os.environ.get('DSV41_EAGER_GLUE', '').strip() not in ('', '0', 'off', 'false'):
+                from eager_glue import install_sampler as install_eager_glue_sampler
+                install_eager_glue_sampler(module)
         elif module.__name__ == 'sglang.kernels.ops.speculative.dspark.dspark_accept':
             # Gated on DSV41_BLOCK_VERIFY: block verification for sampled rows (lossless).
             if os.environ.get('DSV41_BLOCK_VERIFY', '0').strip() not in ('0', 'off', 'false', ''):
                 from block_verify import install as install_block_verify
                 install_block_verify(module)
         elif module.__name__ == 'sglang.srt.speculative.dspark_components.dspark_verify':
+            # Gated on DSV41_SPEC_SYNC_FREE (adapter/spec_sync_free.py). First in this branch: its
+            # merge mode checks the engine's own DsparkVerifyEpilogue._accept source.
+            if os.environ.get('DSV41_SPEC_SYNC_FREE', '').strip() not in ('', '0', 'off', 'false'):
+                from spec_sync_free import install_verify as install_spec_sync_free_verify
+                install_spec_sync_free_verify(module)
             # Gated on DSV41_FOLDED_FENCE: folded results cloned off the persistent verify buffers
             # (sglang#40919 race under overlap scheduling).
             if os.environ.get('DSV41_FOLDED_FENCE', '0').strip() not in ('0', 'off', 'false', ''):
@@ -148,6 +180,10 @@ class EngramLoader(importlib.abc.Loader):
             if os.environ.get('DSV41_VERIFY_CAP', '').strip() not in ('', '0', 'off'):
                 from verify_cap import install_verify as install_verify_cap_verify
                 install_verify_cap_verify(module)
+            # Gated on DSV41_CERT_HEAD: the certified-head flag (masked / full logits) set per verify step.
+            if os.environ.get('DSV41_CERT_HEAD', '0').strip().lower() not in ('0', 'off', 'false', '', 'no'):
+                from cert_head import install_verify as install_cert_head_verify
+                install_cert_head_verify(module)
             # Tap for offline draft training data. Gate checked BEFORE the import, so a disabled
             # flag imports nothing. Wraps TargetVerifyExecutor.commit_hidden; capture is switched
             # at runtime by the presence of DSV41_DRAFT_CAPTURE_TRIGGER, no restart needed.
@@ -162,6 +198,9 @@ class EngramLoader(importlib.abc.Loader):
             if os.environ.get('DSV41_VERIFY_CAP', '').strip() not in ('', '0', 'off'):
                 from verify_cap import install_draft as install_verify_cap_draft
                 install_verify_cap_draft(module)
+            if os.environ.get('DSV41_EAGER_GLUE', '').strip() not in ('', '0', 'off', 'false'):
+                from eager_glue import install_draft as install_eager_glue_draft
+                install_eager_glue_draft(module)
         elif module.__name__ == 'sglang.srt.speculative.dspark_components.dspark_planner':
             if os.environ.get('DSV41_VERIFY_CAP', '').strip() not in ('', '0', 'off'):
                 from verify_cap import install_planner as install_verify_cap_planner
@@ -212,6 +251,16 @@ class EngramLoader(importlib.abc.Loader):
             if os.environ.get('DSV41_L2_PREFETCH', '0').strip() not in ('0', 'off', 'false', ''):
                 from l2_prefetch import install_roce as install_l2_prefetch_roce
                 install_l2_prefetch_roce(module)
+        elif module.__name__ == 'sglang.srt.layers.logits_processor':
+            # Gated on DSV41_CERT_HEAD: the target-verify LM head through the certified path.
+            if os.environ.get('DSV41_CERT_HEAD', '0').strip().lower() not in ('0', 'off', 'false', '', 'no'):
+                from cert_head import install_logits as install_cert_head_logits
+                install_cert_head_logits(module)
+        elif module.__name__ == 'sglang.srt.managers.tokenizer_manager':
+            # DSV41_REPLAY_GUARD (default on): a prompt-logprob request gets HTTP 400 instead of
+            # raising inside the forward under decoder SWA bounded replay (all ranks exit).
+            from replay_guard import install as install_replay_guard
+            install_replay_guard(module)
         elif module.__name__ == 'sglang.srt.managers.schedule_batch':
             from loop_abort import install as install_loop_abort
             install_loop_abort(module)
@@ -253,6 +302,7 @@ class EngramFinder(importlib.abc.MetaPathFinder):
                             'sglang.srt.speculative.dspark_components.dspark_draft_sampler',
                             'sglang.kernels.ops.speculative.dspark.dspark_accept',
                             'sglang.srt.managers.schedule_batch',
+                            'sglang.srt.managers.tokenizer_manager',
                             'sglang.kernels.ops.moe.moe_fused_gate',
                             'sglang.srt.speculative.dspark_components.dspark_draft',
                             'sglang.srt.speculative.dspark_components.dspark_planner',
@@ -265,7 +315,8 @@ class EngramFinder(importlib.abc.MetaPathFinder):
                             'sglang.srt.models.deepseek_v2',
                             'b12x.comm.roce.roce_oneshot',
                             'b12x.comm.roce_ring.roce_oneshot',
-                            'sglang.srt.layers.attention.dsv4.metadata'):
+                            'sglang.srt.layers.attention.dsv4.metadata',
+                            'sglang.srt.layers.logits_processor'):
             return None
         spec = importlib.machinery.PathFinder.find_spec(fullname, path)
         if spec is not None:
@@ -274,6 +325,22 @@ class EngramFinder(importlib.abc.MetaPathFinder):
 
 if os.environ.get('DSV41_SOURCE'):
     sys.meta_path.insert(0, EngramFinder())
+
+# TEST ONLY, gated on DSV41_AB_VARIANTS>=2: in-boot A/B, one CUDA graph set per flag variant
+# (adapter/ab_variant.py). After the finder, before tp3_pad imports any sglang module, so every
+# adapter reads the unioned gates at install. site swallows sitecustomize exceptions, which would
+# leave the engine up without its adapters: any failure here kills the process instead.
+if os.environ.get('DSV41_AB_VARIANTS', '').strip() not in ('', '0', '1'):
+    try:
+        import ab_variant
+        if ab_variant.configure():
+            print(ab_variant.describe(), flush=True)
+    except BaseException as exc:
+        print(f'DSV41_AB: refusing to start: {exc!r}', file=sys.stderr, flush=True)
+        print(f'DSV41_AB: refusing to start: {exc!r}', flush=True)
+        os._exit(1)
+
+if os.environ.get('DSV41_SOURCE'):
     try:
         import tp3_pad
         tp3_pad.install()

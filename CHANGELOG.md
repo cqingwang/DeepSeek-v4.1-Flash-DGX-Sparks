@@ -37,6 +37,78 @@ raw results live under `docs/results/`.
   same port index at both ends. The generated dry-run plan passed sparkring `f16b5f4`; no host rules,
   markers, NIC parameters, service, or container RoCEnante variables were applied. The planner also
   writes through `Path.write_text(..., encoding="utf-8")` for the Python 3.9 control host.
+## 2026-09-29 v2.3
+
+Lossless: the certified head returns the stock argmax (in-boot A/B: greedy outputs identical 24/24), the guard only
+rejects requests. Fresh-clone release gate, raw output: [`docs/results/validation-20260929-v23.txt`](docs/results/validation-20260929-v23.txt).
+
+- **`adapter/cert_head.py`, `DSV41_CERT_HEAD=1 DSV41_CERT_HEAD_M=6,12,18,24,30,36,42,48`, on.** Certified
+  target LM head for greedy verify steps: an MXINT8 screen of the head shard with a proven error bound decides
+  which 16-row tiles can hold the argmax; only those are computed with the exact kernel (bit-identical to the stock
+  matmul), the rest are -inf. Sampled rows, logprobs, grammar and penalties take the full exact logits. GPU
+  qualification (`tests/gpu_test_cert_ds.py`): exact kernel bit-identical to `torch.matmul` on every logit of all
+  four rank shards for every verify row count 6..96; check mode on the fleet: 0 mismatches over 3,355 certified
+  steps. In-boot A/B c1: step -0.50 ms (CI -0.59..-0.37), outputs identical 24/24; sparkDash prose c1 +1.2 % /
+  +1.9 % (two windows), c4 +0.5 %, c8 flat. Slower from 10 requests up (M=96: +0.44 ms), so M stops at 48.
+  +173 MB per rank.
+- **`adapter/replay_guard.py`, `DSV41_REPLAY_GUARD` (default on).** Under the decoder SWA bounded replay that
+  `boot.py` always enables, a request for prompt-token logprobs (`/generate` with `logprob_start_len` below the
+  prompt length, `/v1/completions` with `echo` + `logprobs`) or for every prompt token's hidden states raised a
+  `ValueError` inside the forward and ended all four ranks. Such requests now get HTTP 400 and the engine keeps
+  serving; output logprobs are unaffected.
+- **`scripts/prefix_scan.py`** (from the GLM-5.3 TP4 recipe, adapted to SGLang): shared-long-prefix gate, c8 cold
+  vs warm at T > 0 plus a greedy drift test (full and mid-document cache hits, cold-vs-warm against cold-vs-cold
+  logprob drift). **`scripts/ds_gate.py`**: greedy-continuation KL panels (long 16.5k-40k prompts, short 1-3k) and
+  the T > 0 garble scan. **`scripts/qeval_tasks.py`**: `extract_final_number` prefers the last line that holds only a
+  number (the form the prompts ask for) before falling back to the last number.
+- Release gate (fresh clone of 5f11a97 built on all four nodes, cold caches, healthy in 556 s; reference = the v2.2
+  tree booted the same afternoon): qeval 72 / 75 (v2.2: 72 / 72 / 72, the same three misses); greedy-continuation
+  KL vs v2.2 0.0031 (long prompts) / 0.0071 (short), A/A in one boot 0.0046 / 0.0035; T > 0 scan 0 of 35 garbled; `prefix_scan` PASS (drift 0.0 on
+  4 full and 4 mid-document hits); certified head armed on 4 / 4 ranks; prompt-logprob requests answered 400 with the
+  server staying up. sparkDash at the 2200 MHz cap: prose c1 89.7 (v2.2 reference the same afternoon: 89.3 / 87.7 / 89.3), code c1 131.9, structured 157.8, json 130.4; prefill 4.7k-5.7k tok/s.
+- Measured and not adopted: an L2 prefetch of the fp32 hyper-connection weights at the front of each collective
+  window (in-boot A/B +0.64 ms/step, -1.8 % tok/s: the stats kernels run on a side stream, off the critical path).
+  Checked and not applicable on this stack: a host sync before the target launch (draft end to verify start is
+  2-3 us), single-CTA fp32 GEMVs (none in the decode trace), large prefill gathers over RoCE (prefill gathers already
+  use NCCL).
+
+## 2026-09-25 v2.2
+
+Decode-step overhead removed, all lossless: greedy output byte-identical to v2.1. Fresh-clone release gate,
+raw output: [`docs/results/validation-20260925-v22.txt`](docs/results/validation-20260925-v22.txt).
+
+- **`adapter/l2_prefetch.py`, `DSV41_L2_PREFETCH_WOA=1`, on.** The MXFP8 linear before `wo_a` opens an L2
+  prefetch window for `wo_a` while the attention core runs: -0.4 ms/step. The other v3/v4 sub-gates (AHEAD,
+  DRAFT, ENGRAM, LMHEAD, SKIP_N, WOB_MB, MOE) measured flat or slower and stay off. The ring package's
+  collectives are hooked at both install sites.
+- **`adapter/spec_sync_free.py`, `DSV41_SPEC_SYNC_FREE=all`, on.** The per-step rank-0 broadcasts of the draft
+  token, the verify epilogue and verify_cap's length are dropped (their values are identical on every rank; the
+  draft noise is a counter-based stream shared by the ranks). Audit mode: 0 rank mismatches over ~60k checks.
+  In-boot A/B -0.53 to -0.59 ms/step; the reboot suite gave ~-0.2 ms.
+- **`adapter/eager_glue.py`, `DSV41_EAGER_GLUE=all` (fence, stage, vcap, vcapk), on.** Fewer eager kernels
+  between the draft and verify graphs, bit-identical: ~-0.1 to -0.2 ms/step. `tvglue` / `dglue` dropped after
+  a fleet boot's check failed (stale `out_cache_loc` pointer in a glue graph).
+- **Bit-exact bundle, `DSV41_SPLIT_COMPACT_GATHER=1`, on:** compact RoCE columns gather for the replicated
+  splits (new `all_gather(columns=...)` kernel in `runtime/b12x`), the `wqkv_a` window GEMM
+  (`DSV41_REPLICATED_SPLIT_WINDOW`, default on), and the b12x_next barrier single fill + Triton route planner
+  under determinism (`SOURCE_PATCH` `da662ccc7e2372b5`). -0.40 ms/step prose, -0.45 ms code. 4-rank gather
+  test PASS (M=6: compact 11.31 us vs 14.88 us for the old path).
+- Includes the ring entry below (`DSV41_ROCE_RING`, #8, off by default).
+- `DSV41_PREFILL_SP_FP8_MOE=1` (MXFP8 MoE-input gathers in prefill SP, b12x_next pre-quantized input): bit-exact
+  on every check but flat on real-text prefill. In the code, off, not in the production line.
+- In-boot A/B harness (`adapter/ab_variant.py`, `scripts/ab_inboot.py`, `scripts/repeat_sha.py`), test only, off
+  unless `DSV41_AB_VARIANTS` >= 2.
+- Fresh clone, sparkDash 1.8.8: prose c1 87.67 -> 89.76 (median of five, 88.97-90.21; second boot 89.04-90.42),
+  code c1 124.76 -> 132.37 (median of three: 124.95 / 132.62 / 132.37), structured c1 156.9, json c1 124.3; c4 per stream
+  prose 41.5, code 64.1, structured 70.2, json 78.7; c16 aggregate prose 340.9, code 436.4, structured 565.5,
+  json 653. Decode step c1 prose 33.26 -> 31.24-32.5 ms, code 38.88 -> 37.4-37.84 ms. Varied prompts
+  58.4 / 94.3 / 71.8 -> 61.1 / 99.0 / 74.7. Prefill 16k-128k 5734-5855, 262k 5286 (one pass; v2.1
+  5793-5936, 5355); real text 4743-4946 from 15k to 123k. 1,011,084-token needle PASS in 324.3 s (head low-water 6,029 MiB). qeval not
+  re-run (greedy output byte-identical to v2.1, which scores 72/75). Two boots, both healthy on the first try.
+- Tested and not adopted: the L2 sub-gates above, fused MXFP8 quantization into q_norm / wo_a / hc (flat),
+  layer-14 Engram lookup on a side stream during verify (~0), fused hc prefill kernel (slower), MoE restructures
+  (the phases already run at 223 GB/s live), CPU pinning (flat). Details in
+  [docs/history.md](docs/history.md#2026-09-25).
 
 ## 2026-09-25 (ring)
 
