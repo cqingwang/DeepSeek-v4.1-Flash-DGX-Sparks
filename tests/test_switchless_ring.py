@@ -32,6 +32,8 @@ BASE_SETTINGS = {
     "NNODES": "4",
     "TP_SIZE": "4",
     "EP_SIZE": "2",
+    # 该 fixture 模拟 start-tp4.sh；普通 start.sh 的 EP1/2 拒绝由集成测试覆盖。
+    "DSV41_LAUNCHER": "tp4",
     "NCCL_NET": "IB",
     "NCCL_IB_DISABLE": "0",
     "IB_HCA": "rocep1s0f0,rocep1s0f1",
@@ -223,7 +225,7 @@ class ValidationTests(unittest.TestCase):
                 result = self.run_validation({"NCCL_SWITCHLESS_RING_ONLY": "1",
                                               "NCCL_OVERLAY_PIP": "1", "EP_SIZE": ep})
                 self.assertNotEqual(result.returncode, 0)
-                self.assertIn("1 <= EP_SIZE <= TP_SIZE", result.stderr)
+                self.assertIn("EP_SIZE", result.stderr)
 
     def test_rejects_topology_that_cannot_carry_the_ring(self):
         for settings in ({"NNODES": "3"}, {"TP_SIZE": "3"}):

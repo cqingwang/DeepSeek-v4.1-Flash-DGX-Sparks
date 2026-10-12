@@ -12,6 +12,11 @@
 # alias) are in start.sh + the overlay image; .env.tp4.example defaults match.
 #
 # Usage: ./start-tp4.sh doctor | build | share | pack | serve | stop | status | logs | smoke
+#
+# DSV41_LAUNCHER=tp4 is the only switch that arms TP4 behavior inside start.sh
+# and the adapter: the named Dockerfile, EXTRA_CONTAINER_ENV, the shared-pad
+# defaults, the anchored worker rsync, EP 1/2 on the ring, and the production
+# hooks. ./start.sh leaves it unset, and that path stays as it was.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export ENV_FILE="$ROOT/.env.tp4"
@@ -19,4 +24,5 @@ export ENV_EXAMPLE="$ROOT/.env.tp4.example"
 export STATE_DIR="${STATE_DIR:-$ROOT/state-tp4}"
 export LOG_DIR="${LOG_DIR:-$ROOT/logs-tp4}"
 export SERVE_LOG="${SERVE_LOG:-$LOG_DIR/dsv41.log}"
+export DSV41_LAUNCHER=tp4
 exec "$ROOT/start.sh" "$@"

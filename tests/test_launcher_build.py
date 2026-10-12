@@ -70,7 +70,10 @@ class BuildTargetTests(unittest.TestCase):
         source = (ROOT / "start.sh").read_text()
         self.assertIn("NCCL_ARGS=()", source)
         self.assertIn("SHIM_ARGS=()", source)
-        self.assertIn(r'\"\${NCCL_ARGS[@]}\" \"\${SHIM_ARGS[@]}\"', source)
+        # 远端 worker 命令使用 Bash 的空数组安全展开；内层 ${...} 还要再转义一次，
+        # 因为命令会经过 ssh 的远端 shell -lc 这一层。
+        self.assertIn(r'\"\${NCCL_ARGS[@]+"\${NCCL_ARGS[@]}"}\"', source)
+        self.assertIn(r'\"\${SHIM_ARGS[@]+"\${SHIM_ARGS[@]}"}\"', source)
         self.assertNotIn("NCCL_VOL=", source)
         self.assertNotIn("SHIM_VOL=", source)
 
@@ -135,6 +138,12 @@ class RsyncExcludesTests(unittest.TestCase):
 
 class CanaryDockerfileTests(unittest.TestCase):
     """Dockerfile.canary installs two wheels from PyPI; an offline site needs a mirror."""
+
+    def test_tp4_images_keep_the_launcher_overlay_identity(self):
+        """启动器必须能在每个节点识别本地构建的 TP4 镜像。"""
+        for name in ("Dockerfile.canary", "Dockerfile.canary-roce"):
+            text = (ROOT / name).read_text()
+            self.assertIn('LABEL com.spark.dsv41.overlay="1"', text, name)
 
     def test_the_pip_index_is_overridable(self):
         text = (ROOT / "Dockerfile.canary").read_text()

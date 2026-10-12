@@ -1,0 +1,46 @@
+# Third-party sources of the TP4 images (Dockerfile.canary, Dockerfile.canary-roce).
+#
+# Nothing below is committed here: scripts/fetch_runtime.sh downloads each file at its pinned
+# commit, refuses it unless the sha256 matches, and applies this repository's patches. The
+# Dockerfiles run it in their `fetch` stage; run it on a host to inspect or diff the result:
+#   scripts/fetch_runtime.sh runtime/fetched            # all components
+#   scripts/fetch_runtime.sh runtime/fetched b12x-next  # one component
+#
+# Columns: component  source-commit  sha256-of-the-downloaded-file  url
+# (the url always names the same commit; the script checks that). `local` rows at the end
+# list files kept in this repository: local  path  sha256  -
+
+# SGLang dsv4.1 branch, python/ tree only (2026-09-16 19:45 UTC). Apache-2.0.
+sglang-canary  f80c91a4b97e52e17fbcff088aa6b47b6270f6b9  9968fcff7fa8218b8246a4553d72933b08f4846550e7c5b6a891bdc3bdc881a8  https://github.com/sgl-project/sglang/archive/f80c91a4b97e52e17fbcff088aa6b47b6270f6b9.tar.gz
+
+# b12x as frozen for rhys101's SG17 RoCEnante overlay (b12x.comm.roce); published as a source
+# archive in rhys101/DeepSeek-V4.1-Flash-vLLM-DGX-Spark-8, provenance in
+# runtime/b12x/source-provenance.json. Apache-2.0 (local-inference-lab/b12x).
+b12x-sg17  66aa6bd5085e63bbb011557075765e3191e807b2  4922d0db9395fb8b537d7e216d509a5747867a45f20c18290e385786609dd05f  https://raw.githubusercontent.com/rhys101/DeepSeek-V4.1-Flash-vLLM-DGX-Spark-8/66aa6bd5085e63bbb011557075765e3191e807b2/sglang/experiments/sg17-rocenante/b12x-source.tar.gz
+
+# b12x.comm.roce_ring: FujitsuPolycom/sparkring's path-aware RoCEnante (frozen release copy),
+# added beside b12x.comm.roce; then scripts/roce_ring-sparkring-f16b5f4.patch (package rename,
+# per-rank peer maps, proxy idle spins; runtime/b12x/roce_ring-provenance.json). Apache-2.0.
+roce-ring/__init__.py  f16b5f43208c188c018c43820ccf52955006d1a5  d1eabaa9395bbdc568d503c79cc1a57ab74626feed0c67851a00be0ba2718a7e  https://raw.githubusercontent.com/FujitsuPolycom/sparkring/f16b5f43208c188c018c43820ccf52955006d1a5/runtime/glm53-spark-mtp3-mesh/performance/transport/bundle-source/b12x_overlay/b12x/comm/roce/__init__.py
+roce-ring/_allgather_cute.py  f16b5f43208c188c018c43820ccf52955006d1a5  e26ab2e7cce1cff334452ea237b1c0db8ab11ecba8e0a933f5cad35075a37f0f  https://raw.githubusercontent.com/FujitsuPolycom/sparkring/f16b5f43208c188c018c43820ccf52955006d1a5/runtime/glm53-spark-mtp3-mesh/performance/transport/bundle-source/b12x_overlay/b12x/comm/roce/_allgather_cute.py
+roce-ring/_cute_intrinsics.py  f16b5f43208c188c018c43820ccf52955006d1a5  ff0847d986243bf92444cd4c3db9156a6fc10d8c2e1a16d54761375e6aa7a78e  https://raw.githubusercontent.com/FujitsuPolycom/sparkring/f16b5f43208c188c018c43820ccf52955006d1a5/runtime/glm53-spark-mtp3-mesh/performance/transport/bundle-source/b12x_overlay/b12x/comm/roce/_cute_intrinsics.py
+roce-ring/_oneshot_cute.py  f16b5f43208c188c018c43820ccf52955006d1a5  1dd563020d15e50c7b391aac8bbee2e2760e66ced1bb891de7e59da5cc477173  https://raw.githubusercontent.com/FujitsuPolycom/sparkring/f16b5f43208c188c018c43820ccf52955006d1a5/runtime/glm53-spark-mtp3-mesh/performance/transport/bundle-source/b12x_overlay/b12x/comm/roce/_oneshot_cute.py
+roce-ring/_path_config.py  f16b5f43208c188c018c43820ccf52955006d1a5  7c5550b16a70d74216970cd08a8d969a9928a975d1efcb9fb70e247eb0322e3a  https://raw.githubusercontent.com/FujitsuPolycom/sparkring/f16b5f43208c188c018c43820ccf52955006d1a5/runtime/glm53-spark-mtp3-mesh/performance/transport/bundle-source/b12x_overlay/b12x/comm/roce/_path_config.py
+roce-ring/_proxy.py  f16b5f43208c188c018c43820ccf52955006d1a5  3ace33c00f64ce43317a00b19879bbc6562bb3e466aa94683ed95ce211ec25c0  https://raw.githubusercontent.com/FujitsuPolycom/sparkring/f16b5f43208c188c018c43820ccf52955006d1a5/runtime/glm53-spark-mtp3-mesh/performance/transport/bundle-source/b12x_overlay/b12x/comm/roce/_proxy.py
+roce-ring/_roce_proxy.c  f16b5f43208c188c018c43820ccf52955006d1a5  b208f07d4bb12613a6aef3e8e59ac334b53028655b76f3f5c6e531bd354b369e  https://raw.githubusercontent.com/FujitsuPolycom/sparkring/f16b5f43208c188c018c43820ccf52955006d1a5/runtime/glm53-spark-mtp3-mesh/performance/transport/bundle-source/b12x_overlay/b12x/comm/roce/_roce_proxy.c
+roce-ring/api.py  f16b5f43208c188c018c43820ccf52955006d1a5  02becd3757e71c917a71e98ab3f779d52bb18e6801b8efebd792ab186277ea46  https://raw.githubusercontent.com/FujitsuPolycom/sparkring/f16b5f43208c188c018c43820ccf52955006d1a5/runtime/glm53-spark-mtp3-mesh/performance/transport/bundle-source/b12x_overlay/b12x/comm/roce/api.py
+roce-ring/roce_oneshot.py  f16b5f43208c188c018c43820ccf52955006d1a5  2e431e7c5ef714636247b81602fdc1b85b38ebe1cef7665bc8d486f7841a65e1  https://raw.githubusercontent.com/FujitsuPolycom/sparkring/f16b5f43208c188c018c43820ccf52955006d1a5/runtime/glm53-spark-mtp3-mesh/performance/transport/bundle-source/b12x_overlay/b12x/comm/roce/roce_oneshot.py
+
+# b12x main, installed as the top-level package b12x_next beside the SG17 copy (renamed
+# identifiers, B12X_* knobs -> B12X_NEXT_*), then scripts/b12x_next-compact-n64-m64.patch.
+# adapter/moe_b12x_next.py refuses any other commit. Apache-2.0.
+b12x-main  a7d7d29b2ef8869086e0ceaa787321f17544e3c9  e2d070850d50fb365a01f82f16e3f582a53e7ad1c6e3d657b50babb68814635d  https://github.com/local-inference-lab/b12x/archive/a7d7d29b2ef8869086e0ceaa787321f17544e3c9.tar.gz
+
+# Files that stay in this repository; the script checks their sha256 before using them.
+#   runtime/sglang-rocenante.patch     = rhys101 @ 66aa6bd  sglang/experiments/sg17-rocenante/sglang-rocenante.patch
+#   runtime/flash_mla_sm120.canary.py  = rhys101 @ 22d65f5  sglang/patches/source/python/sglang/kernels/ops/attention/flash_mla_sm120.py
+#                                        (runtime/flash_mla_sm120.py re-applied to the dsv4.1 branch kernel file)
+local  runtime/sglang-rocenante.patch  e813f97a87539681a5951f055b4d0b78f14630437f7c0adaa7e012f7adc5c704  -
+local  runtime/flash_mla_sm120.canary.py  2fe25ba5e2ff91f6028b6a32c315ba8875d8780b9341bae9411af1cc927885bf  -
+local  scripts/b12x_next-compact-n64-m64.patch  1fb1f1eca87206618115f57f9303860bf7a3be8700356bca91ca87a2ba57b701  -
+local  scripts/roce_ring-sparkring-f16b5f4.patch  4479d3d0fc847c787234ebd043890d1f4fd53fcee689f1cbfd14217215a7b6bf  -

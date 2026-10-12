@@ -1,14 +1,18 @@
-# Upstream dsv4.1 branch image (optional, measured in docs/window-20260916.md).
-# Same base image as Dockerfile, but the SGLang python tree is replaced by the upstream
-# dsv4.1 branch at the commit staged by scripts/fetch-sglang-canary.sh (default f80c91a4b,
-# 2026-09-16), together with the kernel packages that branch pins (sglang-kernel 0.4.7,
-# sgl-deep-gemm 0.2.0; aarch64 wheels from PyPI). The SM120 page-split fix from
+# Upstream dsv4.1 branch image (optional TP4 image without RoCEnante, docs/tp4-optional-setups.md).
+# Same pinned base image as Dockerfile, but the SGLang python tree is replaced by the upstream
+# dsv4.1 branch at f80c91a4b (2026-09-16), fetched at build at the commit and sha256 in
+# runtime/sources.manifest, together with the kernel packages that branch pins (sglang-kernel
+# 0.4.7, sgl-deep-gemm 0.2.0; aarch64 wheels from PyPI). The SM120 page-split fix from
 # runtime/flash_mla_sm120.py is re-applied on top of the branch's kernel file
 # (runtime/flash_mla_sm120.canary.py). Everything else is identical to Dockerfile.
 #
-#   scripts/fetch-sglang-canary.sh
 #   docker build -f Dockerfile.canary -t dsv41-4x-spark:canary .    # on every node
 #   IMAGE=dsv41-4x-spark:canary in .env.tp4, plus SGLANG_DSPARK_FOLDED_SAMPLING=2
+FROM lmsysorg/sglang:dev-dsv41@sha256:3dbc313030a6ef2c5d7de8ecf48e9aece722694a82182cb618cc82b588816349 AS fetch
+COPY runtime/sources.manifest runtime/sglang-rocenante.patch runtime/flash_mla_sm120.canary.py /src/runtime/
+COPY scripts/fetch_runtime.sh scripts/b12x_next-compact-n64-m64.patch scripts/roce_ring-sparkring-f16b5f4.patch /src/scripts/
+RUN bash /src/scripts/fetch_runtime.sh /fetched sglang-canary
+
 FROM lmsysorg/sglang:dev-dsv41@sha256:3dbc313030a6ef2c5d7de8ecf48e9aece722694a82182cb618cc82b588816349
 # The two kernel wheels come from PyPI. A network without pypi.org points this at a
 # mirror: `docker build --build-arg PIP_INDEX=https://<mirror>/simple`, or BUILD_ARGS
@@ -16,14 +20,12 @@ FROM lmsysorg/sglang:dev-dsv41@sha256:3dbc313030a6ef2c5d7de8ecf48e9aece722694a82
 ARG PIP_INDEX=https://pypi.org/simple
 RUN pip install --no-deps --no-cache-dir -i "$PIP_INDEX" "sglang-kernel==0.4.7" "sgl-deep-gemm==0.2.0"
 RUN rm -rf /sgl-workspace/sglang/python
-COPY runtime/sglang-canary/python /sgl-workspace/sglang/python
-COPY runtime/patch_encoding_dsv41.py /opt/dsv41/runtime/patch_encoding_dsv41.py
-RUN python3 /opt/dsv41/runtime/patch_encoding_dsv41.py
+COPY --from=fetch /fetched/sglang-canary/python /sgl-workspace/sglang/python
 RUN python3 -c "import sglang, sglang.srt.models.deepseek_v4, sglang.srt.layers.attention.deepseek_v4_backend, sglang.srt.models.deepseek_v4_dspark; print('import ok')"
 WORKDIR /opt/dsv41
 COPY adapter /opt/dsv41/adapter
 RUN g++ -O2 -Wall -Wextra -Werror -std=c++17 -shared -fPIC -pthread \
-    adapter/row_store.cpp -o adapter/librow_store.so
+    -DDSV41_ROW_STORE_DRM adapter/row_store.cpp -o adapter/librow_store.so
 COPY runtime/flash_mla_sm120.canary.py /sgl-workspace/sglang/python/sglang/kernels/ops/attention/flash_mla_sm120.py
 COPY boot.py /opt/dsv41/boot.py
 COPY scripts /opt/dsv41/scripts
@@ -37,6 +39,7 @@ RUN PYTHONPATH=/opt/dsv41/adapter python3 /opt/dsv41/tests/test_thinking_alias.p
  && PYTHONPATH=/opt/dsv41/adapter python3 /opt/dsv41/tests/test_draft_tau.py \
  && PYTHONPATH=/opt/dsv41/adapter python3 /opt/dsv41/tests/test_folded_fence.py \
  && PYTHONPATH=/opt/dsv41/adapter python3 /opt/dsv41/tests/test_draft_head_fp8.py \
+ && PYTHONPATH=/opt/dsv41/adapter python3 /opt/dsv41/tests/test_draft_head_fp8_tp4.py \
  && BV_TEST_N=60000 PYTHONPATH=/opt/dsv41/adapter python3 /opt/dsv41/tests/test_block_verify.py \
  && PYTHONPATH=/opt/dsv41/adapter python3 /opt/dsv41/tests/test_autotune_keep.py \
  && CUDA_VISIBLE_DEVICES= PYTHONPATH=/opt/dsv41/adapter python3 /opt/dsv41/tests/test_replicated_split.py \

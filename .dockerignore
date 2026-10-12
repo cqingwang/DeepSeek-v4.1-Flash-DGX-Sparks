@@ -19,3 +19,4 @@ __pycache__
 *.trace.json.gz
 .idea
 .vscode
+runtime/fetched

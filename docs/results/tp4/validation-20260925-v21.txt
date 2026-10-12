@@ -1,0 +1,26 @@
+# Recorded in knapcio/DeepSeek-V4.1-Flash-4x-DGX-Spark-TP4 (fresh clone of that repository on all four nodes); commit ids refer to it.
+7aae4b2 Prefill SP: MXFP8 attention-input gathers (bit-identical to the bf16 gather, checked per chunk size)
+0
+DSV41_PREFILL_SP=1 DSV41_L2_PREFETCH=1 
+10.100.96.1 build rc=0
+10.100.96.3 build rc=0
+10.100.96.4 build rc=0
+head build rc=0
+health 200 after 170 s
+armed+captured lines: 14
+{"label": "v21", "kind": "prose", "step_ms": 33.26, "tok_per_step": 2.274, "tps": 64.4, "n": 6}
+{"label": "v21", "kind": "code", "step_ms": 38.88, "tok_per_step": 3.865, "tps": 99.1, "n": 6}
+prose c1 per 87.73 agg 87.73
+prose c1 per 86.67 agg 86.67
+prose c1 per 87.71 agg 87.71
+prose c1 per 87.67 agg 87.67
+prose c1 per 87.26 agg 87.26
+code c1 per 124.76 agg 124.76
+prose c16 per 21.96 agg 337.63
+prefill [(4116, 4118.68), (16403, 5891.14), (32787, 5893.08), (65553, 5936.05), (131093, 5793.14), (262160, 5354.53)]
+prefill [(4116, 4840.07), (16404, 5846.44), (32786, 5868.22), (65554, 5902.85), (131091, 5760.64), (262167, 5359.89)]
+{"label": "v21-1", "4k": [3732, 0.8, 4685], "16k": [16326, 3.32, 4922], "32k": [30115, 6.24, 4830], "64k": [60204, 12.11, 4970], "128k": [123870, 25.69, 4822]}
+{"label": "v21-2", "4k": [3818, 0.91, 4202], "16k": [13220, 2.74, 4824], "32k": [33825, 7.01, 4827], "64k": [63445, 12.84, 4942], "128k": [117063, 24.03, 4871]}
+v21-1m needle PASS prompt_tokens 1011084 wall_s 325.2 answer 'violet-otter-seventeen'
+72/75 passed (96.0%), 0 hit the token cap, wall 1.8 min, median 82.44 tok/s
+V21-DONE

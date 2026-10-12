@@ -1,0 +1,132 @@
+diff -ruN a/roce_ring/__init__.py b/roce_ring/__init__.py
+--- a/roce_ring/__init__.py
++++ b/roce_ring/__init__.py
+@@ -1,5 +1,9 @@
+-"""``b12x.comm.roce`` (RoCEnante): one-shot all-reduce and all-gather over RoCE for multi-node TP.
++"""``b12x.comm.roce_ring`` (RoCEnante with per-peer paths): one-shot all-reduce and all-gather over RoCE.
+ 
++The per-peer path variant of ``b12x.comm.roce`` for a switchless four-node ring whose opposite
++nodes are reached through hardware-forwarded paths (FujitsuPolycom/sparkring); see
++``runtime/b12x/roce_ring-provenance.json`` in the recipe for origin and local changes.
++
+ Target: clusters of DGX Spark nodes joined by their ConnectX-7 200 GbE ports,
+ one GPU per node.  The GB10's unified memory lets the NIC RDMA-write straight
+ into pinned host memory that the GPU kernel then reads in place, so no
+@@ -19,7 +23,7 @@
+ from ..._lib.meta import OpMeta, Provenance, install_lazy_api
+ 
+ META = OpMeta(
+-    name="roce",
++    name="roce_ring",
+     group="comm",
+     api_style="stateful",
+     entry_points=(
+diff -ruN a/roce_ring/_allgather_cute.py b/roce_ring/_allgather_cute.py
+--- a/roce_ring/_allgather_cute.py
++++ b/roce_ring/_allgather_cute.py
+@@ -351,7 +351,7 @@
+         1,
+         1,
+         current_cuda_stream(),
+-        compile_spec=KernelCompileSpec.from_key("comm.roce.allgather", 2, cache_key),
++        compile_spec=KernelCompileSpec.from_key("comm.roce_ring.allgather", 2, cache_key),
+     )
+ 
+     def run(
+diff -ruN a/roce_ring/_oneshot_cute.py b/roce_ring/_oneshot_cute.py
+--- a/roce_ring/_oneshot_cute.py
++++ b/roce_ring/_oneshot_cute.py
+@@ -429,7 +429,7 @@
+         1,
+         1,
+         current_cuda_stream(),
+-        compile_spec=KernelCompileSpec.from_key("comm.roce.oneshot", 2, cache_key),
++        compile_spec=KernelCompileSpec.from_key("comm.roce_ring.oneshot", 2, cache_key),
+     )
+ 
+     def run(
+diff -ruN a/roce_ring/_path_config.py b/roce_ring/_path_config.py
+--- a/roce_ring/_path_config.py
++++ b/roce_ring/_path_config.py
+@@ -9,6 +9,7 @@
+ PATH_COUNT = 2
+ MAX_PATH_COUNT = 4
+ PEER_HCA_MAP_ENV = "B12X_ROCE_PEER_HCA_MAP"
++PEER_HCA_MAPS_ENV = "B12X_ROCE_PEER_HCA_MAPS"
+ OPPOSITE_PATHS_ENV = "B12X_ROCE_OPPOSITE_PATHS"
+ CANONICAL_TP4_HCAS = (
+     "rocep1s0f0",
+@@ -67,6 +68,8 @@
+     the opposite-rank entry has four distinct HCA indices. A two-HCA runtime
+     defaults every non-local peer to ``0/1``; runtimes with more HCAs require
+     an explicit mapping because local and reciprocal indices can differ.
++    ``B12X_ROCE_PEER_HCA_MAPS`` carries one such map per rank, ``;``-separated in rank order, so a
++    single launcher environment serves every rank; ``B12X_ROCE_PEER_HCA_MAP`` wins when both are set.
+     """
+ 
+     if hca_count < PATH_COUNT:
+@@ -75,6 +78,14 @@
+             f"got {hca_count}"
+         )
+     raw = os.getenv(PEER_HCA_MAP_ENV, "").strip()
++    per_rank = os.getenv(PEER_HCA_MAPS_ENV, "").strip()
++    if not raw and per_rank:
++        maps = [item.strip() for item in per_rank.split(";")]
++        if len(maps) != world_size:
++            raise ValueError(
++                f"{PEER_HCA_MAPS_ENV} needs {world_size} ';'-separated maps, got {len(maps)}"
++            )
++        raw = maps[rank]
+     if not raw:
+         if hca_count == PATH_COUNT:
+             return tuple(
+@@ -160,6 +171,7 @@
+     "OPPOSITE_PATHS_ENV",
+     "PATH_COUNT",
+     "PEER_HCA_MAP_ENV",
++    "PEER_HCA_MAPS_ENV",
+     "opposite_path_count",
+     "peer_hca_map",
+     "peer_path_count",
+diff -ruN a/roce_ring/_proxy.py b/roce_ring/_proxy.py
+--- a/roce_ring/_proxy.py
++++ b/roce_ring/_proxy.py
+@@ -70,7 +70,7 @@
+     if override:
+         return Path(override)
+     root = os.getenv("XDG_CACHE_HOME") or os.path.join(os.path.expanduser("~"), ".cache")
+-    return Path(root) / "b12x" / "roce"
++    return Path(root) / "b12x" / "roce_ring"
+ 
+ 
+ def _compiler() -> str:
+@@ -79,7 +79,7 @@
+         if candidate and shutil.which(candidate):
+             return candidate
+     raise RuntimeError(
+-        "b12x.comm.roce needs a C compiler (gcc/cc/clang) and libibverbs headers "
++        "b12x.comm.roce_ring needs a C compiler (gcc/cc/clang) and libibverbs headers "
+         "to build its RDMA proxy"
+     )
+ 
+diff -ruN a/roce_ring/_roce_proxy.c b/roce_ring/_roce_proxy.c
+--- a/roce_ring/_roce_proxy.c
++++ b/roce_ring/_roce_proxy.c
+@@ -44,7 +44,7 @@
+ #define ROCE_PORT 1
+ #define ROCE_SEND_DEPTH 256
+ #define ROCE_ABI_VERSION 4
+-#define ROCE_IDLE_SPINS 200000
++#define ROCE_IDLE_SPINS 20000000  /* dsv41: match the recipe's SG17 proxy; 200000 let the proxy nap mid-step */
+ #define ROCE_DEFAULT_TWO_WAVE_THRESHOLD_BYTES 131072u
+ #define ROCE_WAVE_MODE_TWO 0u
+ #define ROCE_WAVE_MODE_MIXED_TWO 1u
+diff -ruN a/roce_ring/api.py b/roce_ring/api.py
+--- a/roce_ring/api.py
++++ b/roce_ring/api.py
+@@ -1,4 +1,4 @@
+-"""Public surface for comm.roce (docs in the op ``__init__``)."""
++"""Public surface for comm.roce_ring (docs in the op ``__init__``)."""
+ 
+ from __future__ import annotations
+ 

@@ -1,0 +1,55 @@
+# Recorded in knapcio/DeepSeek-V4.1-Flash-4x-DGX-Spark-TP4 (fresh clone of that repository on all four nodes); commit ids refer to it.
+health 200 after 10 s
+log /home/knapcio/ds41-verify-0925/logs-tp4/dsv41.log
+{"label": "final-1", "kind": "prose", "step_ms": 33.62, "tok_per_step": 2.274, "tps": 64.1, "n": 6}
+{"label": "final-1", "kind": "code", "step_ms": 39.44, "tok_per_step": 3.865, "tps": 98.2, "n": 6}
+{"label": "final-2", "kind": "prose", "step_ms": 32.41, "tok_per_step": 2.274, "tps": 65.0, "n": 6}
+{"label": "final-2", "kind": "code", "step_ms": 38.92, "tok_per_step": 3.865, "tps": 98.1, "n": 6}
+prose c1 per 86.39 agg 86.39
+prose c1 per 85.82 agg 85.82
+prose c1 per 87.16 agg 87.16
+prose c1 per 87.17 agg 87.17
+prose c1 per 86.54 agg 86.54
+prose c1 per 86.7 agg 86.7
+prose c1 per 85.96 agg 85.96
+prose c2 per 61.85 agg 120.42
+prose c4 per 41.38 agg 163.59
+prose c8 per 30.81 agg 237.62
+prose c16 per 22.24 agg 342.67
+code c1 per 122.56 agg 122.56
+code c2 per 88.37 agg 174.95
+code c4 per 63.21 agg 246.8
+code c8 per 41.43 agg 309.8
+code c16 per 29.33 agg 438.25
+structured c1 per 152.37 agg 152.37
+structured c2 per 103.28 agg 177.59
+structured c4 per 70.43 agg 240.4
+structured c8 per 44.19 agg 295.51
+structured c16 per 44.43 agg 572.17
+json c1 per 118.9 agg 118.9
+json c2 per 89.81 agg 174.15
+json c4 per 76.2 agg 301.73
+json c8 per 60.19 agg 471.48
+json c16 per 42.7 agg 659.85
+prefill [(4113, 4029.18), (16404, 5768.47), (32787, 5796.75), (65555, 5818.47), (131094, 5644.35), (262164, 5213.97)]
+prefill [(4115, 4760.23), (16402, 5709.4), (32786, 5766.79), (65559, 5774.06), (131088, 5622.69), (262161, 5225.27)]
+{"label": "final-1", "4k": [3767, 0.94, 4011], "16k": [13327, 2.81, 4740], "32k": [31079, 6.46, 4808], "64k": [57853, 11.91, 4856], "128k": [121918, 25.69, 4746]}
+{"label": "final-2", "4k": [4009, 0.95, 4204], "16k": [15421, 3.2, 4820], "32k": [25715, 5.28, 4870], "64k": [57747, 11.94, 4835], "128k": [121267, 25.48, 4759]}
+{"prose": 58.36, "structural": 94.25, "other": 71.77, "label": "final"}
+26000 20001 expected 7 got '7' prompt 129025 25.5 s
+26000 3333 expected 331 got '331' prompt 129025 1.0 s
+52000 17777 expected 439 got '446' prompt 259025 31.7 s
+52000 20001 expected 7 got '7' prompt 259025 0.9 s
+197000 123457 expected 199 got '14' prompt 984025 281.1 s
+  985k low-water: 05:54:22 head MemAvailable GiB 6
+72/75 passed (96.0%), 0 hit the token cap, wall 1.8 min, median 83.52 tok/s
+      1 DSV41 hc_fused: first call (1071 rows) bit-identical to stock
+      2 DSV41 hc_fused: hc mix stats for >= 512 rows in one K walk
+      1 [2026-09-25 03:33:38 TP0] DSV41 fast load: phase=target read 155.2 GB eagerly over 45 shards, 0 shards skipped (92160 expert tensors TP-sliced, 83.0 GB kept); host buffers: 330 requested (83.1 GB), 330 slabs of 256 MB, p
+      1 [2026-09-25 03:33:52 TP0] DSV41 fast load: phase=draft read 4.3 GB eagerly over 3 shards, 45 shards skipped (2304 expert tensors TP-sliced, 2.5 GB kept); host buffers: 11 requested (2.5 GB), 11 slabs of 256 MB, peak 7 li
+      1 [2026-09-25 03:34:18 TP0] max_total_num_tokens=6034944, chunked_prefill_size=4096, max_prefill_tokens=16384, max_running_requests=16, context_len=1048576, available_gpu_mem=16.34 GB
+      1 [moe_b12x_next] FusedOpPool('none', 'flashinfer_mxfp4') -> b12x_next
+      1 [moe_b12x_next] armed: routed MoE on b12x_next a7d7d29b (W4A8, in-place repack); graph bs [1, 2, 3, 4, 5, 6, 7, 8, 10, 12, 14, 16], rows 5/6, ladder [128, 256, 512, 1024, 2048, 4096], tune=True
+      1 [moe_b12x_next] geometry ready {'geometry': {'E': 128, 'K': 5120, 'N': 576, 'topk': 3, 'offset': 0}, 'capacities': [5, 6, 10, 12, 15, 18, 20, 24, 25, 30, 35, 36, 40, 42, 48, 50, 60, 70, 72, 80, 84, 96, 128, 256, 512, 102
+      1 [moe_b12x_next] geometry ready {'geometry': {'E': 384, 'K': 5120, 'N': 576, 'topk': 6, 'offset': 0}, 'capacities': [5, 6, 10, 12, 15, 18, 20, 24, 25, 30, 35, 36, 40, 42, 48, 50, 60, 70, 72, 80, 84, 96, 128, 256, 512, 102
+FINAL-DONE

@@ -107,11 +107,20 @@ nccl_validate_config() {
     return 1
   fi
   [[ "${NCCL_SWITCHLESS_RING_ONLY:-0}" == 1 ]] || return 0
-  if [[ "$NNODES" != 4 || "$TP_SIZE" != 4 || ! "$EP_SIZE" =~ ^[1-9][0-9]*$ || "$EP_SIZE" -gt "$TP_SIZE" ||
+  # 环网覆盖 TP=4；EP=1/2 只允许由 start-tp4.sh（导出 DSV41_LAUNCHER=tp4）使用，
+  # 普通三节点启动器不能静默接受 TP4 专家并行配置。
+  local ep_ok=0 ep_message="EP_SIZE=4"
+  if [[ "$EP_SIZE" == 4 ]]; then
+    ep_ok=1
+  elif [[ "${DSV41_LAUNCHER:-}" == tp4 && "$EP_SIZE" =~ ^[12]$ ]]; then
+    ep_ok=1
+    ep_message="EP_SIZE 1, 2 or 4"
+  fi
+  if [[ "$NNODES" != 4 || "$TP_SIZE" != 4 || "$ep_ok" != 1 ||
         "$NCCL_OVERLAY_PIP" != 1 || "${NCCL_ALGO:-Ring}" != Ring ||
         "$NCCL_NET" != IB || "$NCCL_IB_DISABLE" != 0 ||
         "${NCCL_IB_SUBNET_AWARE_ROUTING:-1}" != 1 ]]; then
-    echo 'Ring requires NNODES=TP_SIZE=4, 1 <= EP_SIZE <= TP_SIZE, NCCL_OVERLAY_PIP=1, NCCL_ALGO=Ring, NCCL_NET=IB, NCCL_IB_DISABLE=0 and subnet-aware routing=1' >&2
+    echo "Ring requires NNODES=TP_SIZE=4, $ep_message, NCCL_OVERLAY_PIP=1, NCCL_ALGO=Ring, NCCL_NET=IB, NCCL_IB_DISABLE=0 and subnet-aware routing=1" >&2
     return 1
   fi
   local minimum="${NCCL_MIN_NCHANNELS:-4}" maximum="${NCCL_MAX_NCHANNELS:-32}"

@@ -18,10 +18,12 @@
 #include <cstring>
 #include <fcntl.h>
 #include <mutex>
-#include <sys/ioctl.h>
 #include <sys/mman.h>
+#ifdef DSV41_ROW_STORE_DRM
+#include <sys/ioctl.h>
 #include <drm/drm.h>
 #include <drm/drm_mode.h>
+#endif
 #include <sys/stat.h>
 #include <thread>
 #include <unistd.h>
@@ -309,6 +311,7 @@ bool pin_scales(Store *s) {
 
 }  // namespace
 
+#ifdef DSV41_ROW_STORE_DRM
 // Optional backing for the next store's row cache: a DRM dumb buffer carved from the GB10
 // firmware's display reservation (needs nvidia_drm modeset=1 fbdev=0, no display server). That
 // memory is outside MemAvailable, so the cache stops competing with the KV pool. Only the CPU
@@ -349,6 +352,7 @@ static uint8_t *drm_cache(uint64_t need) {
                (unsigned long long)need, g_drm_node);
   return static_cast<uint8_t *>(p);               // fd and mapping live as long as the process
 }
+#endif
 
 extern "C" Store *row_store_open(const char *path, uint64_t rows,
                                  uint64_t woff, uint64_t soff, uint64_t budget) {
@@ -384,10 +388,12 @@ extern "C" Store *row_store_open(const char *path, uint64_t rows,
   s->sets = budget / ((kRowBytes + sizeof(uint64_t)) * s->ways + 1);
   s->slots = s->sets * s->ways;
   if (s->slots) {
+#ifdef DSV41_ROW_STORE_DRM
     s->cache = drm_cache(s->slots * kRowBytes);
     if (!s->cache)
-      s->cache = static_cast<uint8_t *>(mmap(nullptr, s->slots * kRowBytes,
-          PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0));
+#endif
+    s->cache = static_cast<uint8_t *>(mmap(nullptr, s->slots * kRowBytes,
+        PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0));
     s->keys = static_cast<uint64_t *>(mmap(nullptr, s->slots * sizeof(uint64_t),
         PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0));
     s->victim = static_cast<uint8_t *>(mmap(nullptr, s->sets,

@@ -187,6 +187,11 @@ def test_ring_config_requires_safe_overlay_and_ring_algorithm():
         check(shell("nccl_validate_config", d, settings))
         for key, value in (("NCCL_OVERLAY_PIP", "0"), ("NCCL_ALGO", "Tree"), ("NCCL_MIN_NCHANNELS", "33"), ("NCCL_IB_DISABLE", "1"), ("DSV41_SERIAL_WEIGHT_LOAD", "yes")):
             assert shell("nccl_validate_config", d, {**settings, key: value}).returncode != 0
+        for ep in ("1", "2"):   # start-tp4.sh: EP groups the experts inside the TP ring
+            check(shell("nccl_validate_config", d, {**settings, "EP_SIZE": ep, "DSV41_LAUNCHER": "tp4"}))
+            assert shell("nccl_validate_config", d, {**settings, "EP_SIZE": ep}).returncode != 0
+        for ep in ("3", "8", "0"):
+            assert shell("nccl_validate_config", d, {**settings, "EP_SIZE": ep, "DSV41_LAUNCHER": "tp4"}).returncode != 0
 
 
 def test_preflight_rejects_stock_nccl_and_missing_pip_path():
@@ -340,9 +345,13 @@ NFS_REUSE_EXPORT=1; nfs_publish_model; printf 'DEVICE=%s\\n' "$NFS_DEVICE"
 def test_tp4_profile_ring_flags_are_commented_and_base_defaults_preserved():
     text = (ROOT / ".env.tp4.example").read_text()
     values = dict(re.findall(r"(?m)^([A-Z][A-Z0-9_]*)=(.*)$", text))
-    assert values["DSV41_SERIAL_WEIGHT_LOAD"] == "1"
+    # The TP4 profile keeps the switchless-ring flags opt-in, while serial weight
+    # loading is an active GB10/UMA safety default in the local production template.
+    commented = set(re.findall(r"(?m)^#([A-Z][A-Z0-9_]*)=", text))
     for key in ("NCCL_SWITCHLESS_RING_ONLY", "NCCL_ALGO", "NCCL_MIN_NCHANNELS", "NCCL_P2P_LEVEL"):
         assert key not in values
+        assert key in commented
+    assert values["DSV41_SERIAL_WEIGHT_LOAD"] == "1"
     assert values["NCCL_MAX_NCHANNELS"] == "8"
     for key, value in {"DSPARK_BLOCK_SIZE": "5", "SGLANG_DSV41_REASONING_EFFORT": "75", "DSV41_MAX_NEW_TOKENS": "32768", "DSV41_LOOP_ABORT": "1"}.items():
         assert values[key] == value
