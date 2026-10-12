@@ -31,6 +31,12 @@ RUN PYTHONPATH=/opt/b12x python3 -c "from b12x.comm import roce; print('roce', r
 COPY --from=fetch /fetched/b12x_next/b12x_next /opt/b12x_next/b12x_next
 COPY --from=fetch /fetched/b12x_next/LICENSE /opt/b12x_next/LICENSE
 RUN PYTHONPATH=/opt/b12x:/opt/b12x_next python3 -c "import b12x.comm.roce, b12x_next.moe.fused_moe; print('b12x_next', open('/opt/b12x_next/b12x_next/SOURCE_COMMIT').read().strip())"
+# Keep the local API compatibility fix in the RoCE-derived image as well; do not rely on
+# an old base layer retaining a previously patched encoding_dsv41.py.
+COPY runtime/patch_encoding_dsv41.py /opt/dsv41/runtime/patch_encoding_dsv41.py
+RUN python3 /opt/dsv41/runtime/patch_encoding_dsv41.py
+COPY runtime/sources.manifest /opt/dsv41/runtime/sources.manifest
+COPY runtime/b12x/source-provenance.json runtime/b12x/roce_ring-provenance.json /opt/dsv41/runtime/b12x/
 WORKDIR /opt/dsv41
 COPY adapter /opt/dsv41/adapter
 RUN g++ -O2 -Wall -Wextra -Werror -std=c++17 -shared -fPIC -pthread \
@@ -67,4 +73,10 @@ HEALTHCHECK --interval=30s --timeout=30s --start-period=30m --retries=3 \
     CMD ["python3", "-S", "/opt/dsv41/boot.py", "health"]
 ENTRYPOINT ["python3", "-u", "/opt/dsv41/boot.py"]
 CMD ["run"]
-LABEL com.spark.dsv41.overlay="1"
+ARG SOURCE_REV=unknown
+LABEL com.spark.dsv41.overlay="1" \
+      com.spark.dsv41.source-revision="$SOURCE_REV" \
+      com.spark.dsv41.base-image="lmsysorg/sglang:dev-dsv41@sha256:3dbc313030a6ef2c5d7de8ecf48e9aece722694a82182cb618cc82b588816349" \
+      com.spark.dsv41.sglang-commit="f80c91a4b97e52e17fbcff088aa6b47b6270f6b9" \
+      com.spark.dsv41.b12x-commit="a7d7d29b2ef8869086e0ceaa787321f17544e3c9" \
+      com.spark.dsv41.roce-ring-commit="f16b5f43208c188c018c43820ccf52955006d1a5"

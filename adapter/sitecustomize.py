@@ -137,7 +137,12 @@ class EngramLoader(importlib.abc.Loader):
                 install_draft_main_proj(module)
             # Gated on DSV41_DRAFT_HEAD_FP8: the draft's LM head from an fp8 copy (target untouched).
             if os.environ.get('DSV41_DRAFT_HEAD_FP8', '0').strip() not in ('0', 'off', 'false', ''):
-                from draft_head_fp8 import install as install_draft_head_fp8
+                # TP4 只在受管 tp4 启动器和显式实现开关同时满足时切换专用内核。
+                if (os.environ.get('DSV41_LAUNCHER', '').strip() == 'tp4'
+                        and os.environ.get('DSV41_DRAFT_HEAD_FP8_IMPL', '').strip() == 'tp4'):
+                    from draft_head_fp8_tp4 import install as install_draft_head_fp8
+                else:
+                    from draft_head_fp8 import install as install_draft_head_fp8
                 install_draft_head_fp8(module)
             # Gated on DSV41_L2_PREFETCH + DSV41_L2_PREFETCH_DRAFT: the draft forward is bracketed
             # like the target's, so its collectives prefetch the next stage's weights.

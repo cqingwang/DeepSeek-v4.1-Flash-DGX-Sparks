@@ -145,6 +145,27 @@ class CanaryDockerfileTests(unittest.TestCase):
             text = (ROOT / name).read_text()
             self.assertIn('LABEL com.spark.dsv41.overlay="1"', text, name)
 
+    def test_roce_image_applies_encoding_compatibility_patch(self):
+        """RoCE 派生镜像不能依赖旧基础层遗留的文本编码补丁。"""
+        text = (ROOT / "Dockerfile.canary-roce").read_text()
+        self.assertIn("COPY runtime/patch_encoding_dsv41.py /opt/dsv41/runtime/patch_encoding_dsv41.py", text)
+        self.assertIn("RUN python3 /opt/dsv41/runtime/patch_encoding_dsv41.py", text)
+
+    def test_roce_image_declares_pinned_provenance(self):
+        """TP4 RoCE 镜像必须把源码和第三方基线写进 OCI 标签。"""
+        text = (ROOT / "Dockerfile.canary-roce").read_text()
+        for marker in ("com.spark.dsv41.source-revision", "com.spark.dsv41.base-image",
+                       "com.spark.dsv41.sglang-commit", "com.spark.dsv41.b12x-commit",
+                       "com.spark.dsv41.roce-ring-commit"):
+            self.assertIn(marker, text)
+
+    def test_roce_image_embeds_runtime_provenance_files(self):
+        """最终镜像必须能离线审计第三方源码基线。"""
+        text = (ROOT / "Dockerfile.canary-roce").read_text()
+        self.assertIn("COPY runtime/sources.manifest /opt/dsv41/runtime/sources.manifest", text)
+        self.assertIn("runtime/b12x/source-provenance.json", text)
+        self.assertIn("runtime/b12x/roce_ring-provenance.json", text)
+
     def test_the_pip_index_is_overridable(self):
         text = (ROOT / "Dockerfile.canary").read_text()
         self.assertIn("ARG PIP_INDEX=https://pypi.org/simple", text)
