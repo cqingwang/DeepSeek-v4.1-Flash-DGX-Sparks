@@ -8,14 +8,16 @@ at batch 1) it pads M to 128 and streams 32 weight columns per tile, which the
 decode step, the same as the Triton kernel it replaced). FlashInfer's b12x
 warp-level MMA kernel has 16|32 x 64|128 tiles for small M and is what
 mm_mxfp8's own 'auto' heuristic prefers on SM120/121; 'cudnn' is the other
-SM12x option. DSV41_MXFP8_BACKEND selects it (default b12x; 'cutlass' or ''
-restores SGLang's choice). A shape the chosen backend rejects falls back to
+SM12x option. DSV41_MXFP8_BACKEND selects it (default b12x; '', 'cutlass',
+'off', or '0' restores SGLang's choice). A shape the chosen backend rejects falls back to
 cutlass for the rest of the process, logged once.
 """
 import logging
 import os
 
 import torch
+
+from mxfp8_mode import mxfp8_backend_disabled
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +26,7 @@ _REJECTED = set()
 
 def install(module):
     want = os.environ.get('DSV41_MXFP8_BACKEND', 'b12x').strip()
-    if want in ('', 'cutlass', 'off', '0'):
+    if mxfp8_backend_disabled(want):
         return
     original = module.flashinfer_mxfp8_blockscaled_linear
 
@@ -97,7 +99,7 @@ def _repair_padded_scales(layer, block_size):
 def install_fp8(module):
     """Hook Fp8LinearMethod._prepare_block_fp8_as_mxfp8 so padded shards pass the e8m0
     check whatever their (never written) scale memory holds, and log what was found."""
-    if os.environ.get('DSV41_MXFP8_BACKEND', 'b12x').strip() in ('', 'cutlass', 'off', '0'):
+    if mxfp8_backend_disabled(os.environ.get('DSV41_MXFP8_BACKEND', 'b12x')):
         return
     cls = getattr(module, 'Fp8LinearMethod', None)
     if cls is None or not hasattr(cls, '_prepare_block_fp8_as_mxfp8'):

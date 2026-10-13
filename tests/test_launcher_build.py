@@ -39,7 +39,7 @@ def launcher_source():
 def shell(code, directory, settings=None):
     env = {"PATH": os.environ["PATH"], "HOME": os.environ["HOME"], "ROOT": str(ROOT)}
     for name in ("MODEL_DIR", "COMMON_MODEL", "SSH_IDENTITY", "NCCL_HOST_DIR",
-                 "STATE_DIR", "LOG_DIR", "WORKER_DIR", "WORKER_ENGRAM_DIR", "ENGRAM_DIR"):
+                 "STATE_DIR", "LOG_DIR", "WORKER_DIR", "WORKER_ENGRAM_DIR", "ENGRAM_DIR", "HF_EXPORT_ROOT"):
         env[name] = str(directory / name)
     env.update(settings or {})
     result = subprocess.run(["bash", "-c", launcher_source() + "\n" + code],
@@ -170,3 +170,18 @@ class CanaryDockerfileTests(unittest.TestCase):
         text = (ROOT / "Dockerfile.canary").read_text()
         self.assertIn("ARG PIP_INDEX=https://pypi.org/simple", text)
         self.assertIn('-i "$PIP_INDEX"', text)
+
+
+class DockerfilePrefillBypassTests(unittest.TestCase):
+    def test_every_serving_image_checks_hook_against_its_final_scheduler(self):
+        source_root = ('DSV41_PREFILL_BYPASS_SOURCE_ROOT='
+                       '/sgl-workspace/sglang/python/sglang/srt/managers')
+        for name in ('Dockerfile', 'Dockerfile.canary', 'Dockerfile.canary-roce'):
+            with self.subTest(name=name):
+                text = (ROOT / name).read_text()
+                command = next(line for line in text.splitlines()
+                               if 'test_prefill_bypass.py' in line)
+                self.assertIn(source_root, command)
+                self.assertIn('PYTHONPATH=/opt/dsv41/adapter', command)
+                expected = 'unsupported' if name == 'Dockerfile' else 'supported'
+                self.assertIn(f'DSV41_PREFILL_BYPASS_EXPECT={expected}', command)

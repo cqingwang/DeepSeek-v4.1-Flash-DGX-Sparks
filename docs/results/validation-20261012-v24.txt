@@ -1,0 +1,138 @@
+# v2.4 release gate, 2026-10-12 (Europe/Warsaw), 4x DGX Spark, GPU SM clock cap 2200 MHz
+# candidate: v2.4-prep 8a41820, image dsv41-4x-spark:v24-roce-8a41820 built from a clean tree on all four nodes (in-image tests pass)
+# settings vs v2.3: CHUNKED_PREFILL_SIZE=8192, MEM_FRACTION_STATIC=HEAD_MEM_FRACTION_STATIC=0.78, --swa-prefix-tails 128, --prefill-decode-interval 2, DSV41_PREFILL_BYPASS=256
+# reference: same image, v2.3 settings (4096 / 0.80 / no tails, interval or bypass), booted the same morning; both without the optional DSV41_ENGRAM_DRM_NODE
+
+## reference gate (v2.3 settings)
+[08:32:23] health ok; steps: sd kld tscan pscan qeval
+[08:32:47] sd: "type": "prose", "c": 1, "run": 0, "per": 88.77 "type": "prose", "c": 1, "run": 1, "per": 90.09 "type": "prose", "c": 1, "run": 2, "per": 90.22 "type": "code", "c": 1, "run": 0, "per": 125.54
+[08:33:20] kld long: KLD-COLLECT long /home/knapcio/ds-campaign-20260929/gate/v24-ref-c0/kld-long.json: 4 texts, prompts [16500, 18000, 24003, 40001], 98504 tokens, 0 warning(s)
+[08:34:06] kld short: KLD-COLLECT short /home/knapcio/ds-campaign-20260929/gate/v24-ref-c0/kld-short.json: 12 texts, prompts [1531, 2049, 1203, 2555, 1777, 3001, 1409, 2311, 1027, 2803, 994, 2500], 23160 tokens, 0 warning(s)
+[08:39:02] TSCAN: 0 salad of 35 outputs (errors 0, bad json 0) -> /home/knapcio/ds-campaign-20260929/gate/v24-ref-c0/tscan/tscan.jsonl
+[08:49:51] pscan: PASS [] {'full': (0.0, 0.0, 0.0), 'partial': (0.0, 0.0, 0.0)} {'cold': {'responses': 24, 'degenerate': 0, 'errors': 0, 'misquotes': 0, 'false_anomaly': 0, 'scan': 6, 'incorrect': 0}, 'warm': {'responses': 24, 'degenerate': 0, 'errors': 0, 'misquotes': 0, 'false_anomaly': 1, 'scan': 6, 'incorrect': 1}}
+[08:51:38] qeval 1:   PASS  prose_p5                72/75 passed (96.0%), 0 hit the token cap, wall 1.8 min, median 82.93 tok/s
+[08:53:19] qeval 2:   PASS  prose_p5                72/75 passed (96.0%), 0 hit the token cap, wall 1.7 min, median 89.41 tok/s
+[08:54:59] qeval 3:   PASS  prose_p5                72/75 passed (96.0%), 0 hit the token cap, wall 1.7 min, median 88.99 tok/s
+[08:54:59] GATE-DONE
+
+## candidate gate (final image)
+[09:53:53] health ok; steps: sd kld tscan pscan qeval
+[09:54:17] sd: "type": "prose", "c": 1, "run": 0, "per": 89.58 "type": "prose", "c": 1, "run": 1, "per": 90.13 "type": "prose", "c": 1, "run": 2, "per": 90.01 "type": "code", "c": 1, "run": 0, "per": 123.66
+[09:54:48] kld long: KLD-COLLECT long /home/knapcio/ds-campaign-20260929/gate/v24-final/kld-long.json: 4 texts, prompts [16500, 18000, 24003, 40001], 98504 tokens, 0 warning(s)
+[09:55:31] kld short: KLD-COLLECT short /home/knapcio/ds-campaign-20260929/gate/v24-final/kld-short.json: 12 texts, prompts [1531, 2049, 1203, 2555, 1777, 3001, 1409, 2311, 1027, 2803, 994, 2500], 23160 tokens, 0 warning(s)
+[10:00:23] TSCAN: 0 salad of 35 outputs (errors 0, bad json 0) -> /home/knapcio/ds-campaign-20260929/gate/v24-final/tscan/tscan.jsonl
+[10:10:11] pscan: PASS [] {'full': (0.0, 0.0, 0.0), 'partial': (0.0, 0.0, 0.0)} {'cold': {'responses': 24, 'degenerate': 0, 'errors': 0, 'misquotes': 0, 'false_anomaly': 0, 'scan': 6, 'incorrect': 0}, 'warm': {'responses': 24, 'degenerate': 0, 'errors': 0, 'misquotes': 0, 'false_anomaly': 1, 'scan': 6, 'incorrect': 1}}
+[10:11:58] qeval 1:   PASS  prose_p5                72/75 passed (96.0%), 0 hit the token cap, wall 1.8 min, median 82.86 tok/s
+[10:13:39] qeval 2:   PASS  prose_p5                72/75 passed (96.0%), 0 hit the token cap, wall 1.7 min, median 89.55 tok/s
+[10:15:19] qeval 3:   PASS  prose_p5                72/75 passed (96.0%), 0 hit the token cap, wall 1.7 min, median 89.23 tok/s
+[10:15:19] GATE-DONE
+continuation-only panel: 239 positions (up to and including the first divergence), mean KL 0.00446, p99 0.0823, max 0.1643
+GATE kld_long_cont 0.00446 PASS 239
+continuation-only panel: 559 positions (up to and including the first divergence), mean KL 0.00608, p99 0.0659, max 0.6427
+GATE kld_short_cont 0.00608 PASS 559
+
+## sparkDash matrix, final image (agg / per tok/s)
+{"label": "v24-final-matrix", "type": "prose", "c": 1, "run": 0, "per": 89.32, "agg": 89.32, "t": "10:15:32"}
+{"label": "v24-final-matrix", "type": "prose", "c": 1, "run": 1, "per": 89.02, "agg": 89.02, "t": "10:15:36"}
+{"label": "v24-final-matrix", "type": "prose", "c": 1, "run": 2, "per": 90.03, "agg": 90.03, "t": "10:15:40"}
+{"label": "v24-final-matrix", "type": "code", "c": 1, "run": 0, "per": 131.04, "agg": 131.04, "t": "10:15:44"}
+{"label": "v24-final-matrix", "type": "code", "c": 1, "run": 1, "per": 129.33, "agg": 129.33, "t": "10:15:48"}
+{"label": "v24-final-matrix", "type": "code", "c": 1, "run": 2, "per": 131.44, "agg": 131.44, "t": "10:15:52"}
+{"label": "v24-final-matrix", "type": "structured", "c": 1, "run": 0, "per": 154.47, "agg": 154.47, "t": "10:15:56"}
+{"label": "v24-final-matrix", "type": "structured", "c": 1, "run": 1, "per": 158.76, "agg": 158.76, "t": "10:16:00"}
+{"label": "v24-final-matrix", "type": "structured", "c": 1, "run": 2, "per": 158.3, "agg": 158.3, "t": "10:16:04"}
+{"label": "v24-final-matrix", "type": "json", "c": 1, "run": 0, "per": 123.38, "agg": 123.38, "t": "10:16:08"}
+{"label": "v24-final-matrix", "type": "json", "c": 1, "run": 1, "per": 129.52, "agg": 129.52, "t": "10:16:12"}
+{"label": "v24-final-matrix", "type": "json", "c": 1, "run": 2, "per": 128.45, "agg": 128.45, "t": "10:16:16"}
+{"label": "v24-final-matrix", "type": "prose", "c": 2, "run": 0, "per": 61.89, "agg": 122.6, "t": "10:16:22"}
+{"label": "v24-final-matrix", "type": "code", "c": 2, "run": 0, "per": 86, "agg": 170.33, "t": "10:16:26"}
+{"label": "v24-final-matrix", "type": "structured", "c": 2, "run": 0, "per": 103.36, "agg": 178.38, "t": "10:16:30"}
+{"label": "v24-final-matrix", "type": "json", "c": 2, "run": 0, "per": 90.27, "agg": 175.07, "t": "10:16:34"}
+{"label": "v24-final-matrix", "type": "prose", "c": 4, "run": 0, "per": 41.52, "agg": 164.36, "t": "10:16:42"}
+{"label": "v24-final-matrix", "type": "prose", "c": 4, "run": 1, "per": 41.79, "agg": 165.36, "t": "10:16:50"}
+{"label": "v24-final-matrix", "type": "code", "c": 4, "run": 0, "per": 61.81, "agg": 241.8, "t": "10:16:56"}
+{"label": "v24-final-matrix", "type": "code", "c": 4, "run": 1, "per": 63.69, "agg": 248.59, "t": "10:17:02"}
+{"label": "v24-final-matrix", "type": "structured", "c": 4, "run": 0, "per": 69.48, "agg": 238.18, "t": "10:17:08"}
+{"label": "v24-final-matrix", "type": "structured", "c": 4, "run": 1, "per": 70.27, "agg": 240.71, "t": "10:17:14"}
+{"label": "v24-final-matrix", "type": "json", "c": 4, "run": 0, "per": 77.14, "agg": 305.23, "t": "10:17:20"}
+{"label": "v24-final-matrix", "type": "json", "c": 4, "run": 1, "per": 69.01, "agg": 255.23, "t": "10:17:26"}
+{"label": "v24-final-matrix", "type": "prose", "c": 8, "run": 0, "per": 30.78, "agg": 237.21, "t": "10:17:36"}
+{"label": "v24-final-matrix", "type": "code", "c": 8, "run": 0, "per": 40.88, "agg": 305.68, "t": "10:17:44"}
+{"label": "v24-final-matrix", "type": "structured", "c": 8, "run": 0, "per": 43.51, "agg": 292.16, "t": "10:17:52"}
+{"label": "v24-final-matrix", "type": "json", "c": 8, "run": 0, "per": 59.16, "agg": 462.68, "t": "10:17:58"}
+{"label": "v24-final-matrix", "type": "prose", "c": 16, "run": 0, "per": 22.11, "agg": 340.14, "t": "10:18:12"}
+{"label": "v24-final-matrix", "type": "code", "c": 16, "run": 0, "per": 29.29, "agg": 438.54, "t": "10:18:24"}
+{"label": "v24-final-matrix", "type": "structured", "c": 16, "run": 0, "per": 44.68, "agg": 570.85, "t": "10:18:34"}
+{"label": "v24-final-matrix", "type": "json", "c": 16, "run": 0, "per": 41.43, "agg": 629.73, "t": "10:18:42"}
+
+## sparkDash c8/c16, reference settings, same image, 11:30
+{"label": "ref2-c8c16", "type": "prose", "c": 8, "run": 0, "per": 30.53, "agg": 235.18, "t": "11:30:32"}
+{"label": "ref2-c8c16", "type": "code", "c": 8, "run": 0, "per": 40.5, "agg": 303.09, "t": "11:30:40"}
+{"label": "ref2-c8c16", "type": "structured", "c": 8, "run": 0, "per": 43.25, "agg": 290.87, "t": "11:30:48"}
+{"label": "ref2-c8c16", "type": "json", "c": 8, "run": 0, "per": 59.76, "agg": 468.13, "t": "11:30:55"}
+{"label": "ref2-c8c16", "type": "prose", "c": 16, "run": 0, "per": 22.01, "agg": 338.82, "t": "11:31:09"}
+{"label": "ref2-c8c16", "type": "code", "c": 16, "run": 0, "per": 29.16, "agg": 436.62, "t": "11:31:21"}
+{"label": "ref2-c8c16", "type": "structured", "c": 16, "run": 0, "per": 44.4, "agg": 567.12, "t": "11:31:31"}
+{"label": "ref2-c8c16", "type": "json", "c": 16, "run": 0, "per": 41.5, "agg": 630.78, "t": "11:31:39"}
+
+## sparkDash prefill bench, final image (targetTokens, prefillTps)
+[(4096, 4117, 4756.01), (16384, 16405, 5789.64), (32768, 32788, 5940.62), (65536, 65557, 5969.15), (131072, 131088, 5895.85)]
+
+## long-context panel (probe.py; ~388K = 400 ktok text, 1M needle = 969K tokens)
+{"probe": "messages", "image_token_text": {"ok": true, "s": 0.37, "stop": "end_turn"}, "thinking_enabled_no_budget": {"ok": true, "s": 0.59, "stop": "end_turn"}, "ts": "2026-10-12 07:42:00", "label": "C0"}
+{"probe": "cold", "ktok": 400, "prompt_tokens": 387515, "cached": 0, "seconds": 93.38, "prefill_tok_s": 4150.0, "ts": "2026-10-12 07:43:49", "label": "C0"}
+{"probe": "sessions", "ktok": 400, "A_cold": {"prompt": 387592, "cached": 0, "s": 89.7}, "A_follow": {"prompt": 387609, "cached": 387584, "s": 1.4}, "B_cold": {"prompt": 387511, "cached": 0, "s": 89.78}, "A_revisit": {"prompt": 387609, "cached": 0, "s": 89.27}, "ts": "2026-10-12 07:48:20", "label": "C0"}
+{"probe": "needle", "ktok": 1000, "prompt_tokens": 968679, "seconds": 324.96, "pass": true, "answer": "GIGMIZWHTH", "ts": "2026-10-12 07:53:45", "label": "C0"}
+{"probe": "cold", "ktok": 400, "prompt_tokens": 387611, "cached": 0, "seconds": 84.95, "prefill_tok_s": 4563.1, "ts": "2026-10-12 07:59:47", "label": "D2-8192"}
+{"probe": "cold", "ktok": 400, "prompt_tokens": 387631, "cached": 0, "seconds": 82.51, "prefill_tok_s": 4697.9, "ts": "2026-10-12 08:01:10", "label": "D2-8192"}
+{"probe": "needle", "ktok": 1000, "prompt_tokens": 968351, "seconds": 257.95, "pass": true, "answer": "NLNACFLNXQ", "ts": "2026-10-12 08:05:28", "label": "D2-8192"}
+{"probe": "cold", "ktok": 400, "prompt_tokens": 387818, "cached": 0, "seconds": 79.07, "prefill_tok_s": 4905.0, "ts": "2026-10-12 08:10:22", "label": "D2b-8192-mfs078"}
+{"probe": "cold", "ktok": 400, "prompt_tokens": 387657, "cached": 0, "seconds": 78.36, "prefill_tok_s": 4946.9, "ts": "2026-10-12 08:11:41", "label": "D2b-8192-mfs078"}
+{"probe": "needle", "ktok": 1000, "prompt_tokens": 968806, "seconds": 233.18, "pass": true, "answer": "GRHTTZPEFX", "ts": "2026-10-12 08:15:34", "label": "D2b-8192-mfs078"}
+{"probe": "sessions", "ktok": 400, "A_cold": {"prompt": 387469, "cached": 0, "s": 78.73}, "A_follow": {"prompt": 387486, "cached": 387328, "s": 1.5}, "B_cold": {"prompt": 387817, "cached": 0, "s": 78.02}, "A_revisit": {"prompt": 387486, "cached": 387328, "s": 1.49}, "ts": "2026-10-12 08:21:52", "label": "D3a-tails256"}
+{"probe": "sessions", "ktok": 400, "A_cold": {"prompt": 387483, "cached": 0, "s": 79.26}, "A_follow": {"prompt": 387500, "cached": 387328, "s": 1.45}, "B_cold": {"prompt": 387277, "cached": 0, "s": 78.63}, "A_revisit": {"prompt": 387500, "cached": 387328, "s": 1.58}, "ts": "2026-10-12 08:27:57", "label": "D3b-tails128"}
+{"probe": "overlap", "ktok": 400, "long_s": 87.97, "short_s": 80.03, "ts": "2026-10-12 08:56:46", "label": "ref-c0"}
+{"probe": "cold", "ktok": 400, "prompt_tokens": 387305, "cached": 0, "seconds": 78.49, "prefill_tok_s": 4934.7, "ts": "2026-10-12 09:30:44", "label": "v24-cand"}
+{"probe": "cold", "ktok": 400, "prompt_tokens": 387348, "cached": 0, "seconds": 77.84, "prefill_tok_s": 4976.0, "ts": "2026-10-12 09:32:02", "label": "v24-cand"}
+{"probe": "overlap", "ktok": 400, "short_s": 4.64, "long_s": 78.76, "ts": "2026-10-12 09:33:21", "label": "v24-cand"}
+{"probe": "sessions", "ktok": 400, "A_cold": {"prompt": 387606, "cached": 0, "s": 78.19}, "A_follow": {"prompt": 387623, "cached": 387584, "s": 1.49}, "B_cold": {"prompt": 387607, "cached": 0, "s": 78.22}, "A_revisit": {"prompt": 387623, "cached": 387584, "s": 1.46}, "ts": "2026-10-12 09:36:01", "label": "v24-cand"}
+{"probe": "needle", "ktok": 1000, "prompt_tokens": 968765, "seconds": 234.57, "pass": true, "answer": "BGGQRPMJKE", "ts": "2026-10-12 09:39:55", "label": "v24-cand"}
+{"probe": "messages", "image_token_text": {"ok": true, "s": 0.32, "stop": "end_turn"}, "thinking_enabled_no_budget": {"ok": true, "s": 0.5, "stop": "end_turn"}, "ts": "2026-10-12 09:39:56", "label": "v24-cand"}
+
+## 60-minute c16 soak, final image (soak.py: mixed prompts, T 0/0.6/1.0, 30 % thinking, ~5 % 22-45K cold prompts)
+{"final": true, "ok": 2285, "err": 0, "empty": 0, "long_ok": 113, "p50_s": 21.1, "p99_s": 92.0}
+container restarts 0, OOMKilled false, kernel Xid/NV_ERR 0; MemAvailable minimum 12.9 / 13.4 / 13.6 / 13.5 GiB
+
+## sparkDash matrix, second sweep on the serving boot of the same final image (11:4x); README cells = better of the two sweeps
+{"label": "v24-serve-matrix", "type": "prose", "c": 1, "run": 0, "per": 89.9, "agg": 89.9, "t": "11:56:53"}
+{"label": "v24-serve-matrix", "type": "prose", "c": 1, "run": 1, "per": 88.98, "agg": 88.98, "t": "11:56:57"}
+{"label": "v24-serve-matrix", "type": "prose", "c": 1, "run": 2, "per": 90, "agg": 90, "t": "11:57:01"}
+{"label": "v24-serve-matrix", "type": "code", "c": 1, "run": 0, "per": 125.77, "agg": 125.77, "t": "11:57:05"}
+{"label": "v24-serve-matrix", "type": "code", "c": 1, "run": 1, "per": 131.54, "agg": 131.54, "t": "11:57:09"}
+{"label": "v24-serve-matrix", "type": "code", "c": 1, "run": 2, "per": 130.37, "agg": 130.37, "t": "11:57:13"}
+{"label": "v24-serve-matrix", "type": "structured", "c": 1, "run": 0, "per": 152.75, "agg": 152.75, "t": "11:57:17"}
+{"label": "v24-serve-matrix", "type": "structured", "c": 1, "run": 1, "per": 159.26, "agg": 159.26, "t": "11:57:21"}
+{"label": "v24-serve-matrix", "type": "structured", "c": 1, "run": 2, "per": 158.65, "agg": 158.65, "t": "11:57:25"}
+{"label": "v24-serve-matrix", "type": "json", "c": 1, "run": 0, "per": 125.1, "agg": 125.1, "t": "11:57:29"}
+{"label": "v24-serve-matrix", "type": "json", "c": 1, "run": 1, "per": 129.46, "agg": 129.46, "t": "11:57:33"}
+{"label": "v24-serve-matrix", "type": "json", "c": 1, "run": 2, "per": 128.28, "agg": 128.28, "t": "11:57:37"}
+{"label": "v24-serve-matrix", "type": "prose", "c": 2, "run": 0, "per": 63.26, "agg": 123.35, "t": "11:57:43"}
+{"label": "v24-serve-matrix", "type": "code", "c": 2, "run": 0, "per": 88.78, "agg": 175.78, "t": "11:57:47"}
+{"label": "v24-serve-matrix", "type": "structured", "c": 2, "run": 0, "per": 103.68, "agg": 178.92, "t": "11:57:51"}
+{"label": "v24-serve-matrix", "type": "json", "c": 2, "run": 0, "per": 90.45, "agg": 175.01, "t": "11:57:55"}
+{"label": "v24-serve-matrix", "type": "prose", "c": 4, "run": 0, "per": 41.48, "agg": 164.16, "t": "11:58:03"}
+{"label": "v24-serve-matrix", "type": "prose", "c": 4, "run": 1, "per": 41.87, "agg": 165.69, "t": "11:58:11"}
+{"label": "v24-serve-matrix", "type": "code", "c": 4, "run": 0, "per": 62.89, "agg": 245.57, "t": "11:58:17"}
+{"label": "v24-serve-matrix", "type": "code", "c": 4, "run": 1, "per": 63.55, "agg": 248.05, "t": "11:58:23"}
+{"label": "v24-serve-matrix", "type": "structured", "c": 4, "run": 0, "per": 69.6, "agg": 238.51, "t": "11:58:29"}
+{"label": "v24-serve-matrix", "type": "structured", "c": 4, "run": 1, "per": 70.73, "agg": 242.33, "t": "11:58:35"}
+{"label": "v24-serve-matrix", "type": "json", "c": 4, "run": 0, "per": 77.65, "agg": 307.17, "t": "11:58:41"}
+{"label": "v24-serve-matrix", "type": "json", "c": 4, "run": 1, "per": 81.16, "agg": 320.92, "t": "11:58:45"}
+{"label": "v24-serve-matrix", "type": "prose", "c": 8, "run": 0, "per": 30.76, "agg": 237, "t": "11:58:55"}
+{"label": "v24-serve-matrix", "type": "code", "c": 8, "run": 0, "per": 41, "agg": 306.82, "t": "11:59:03"}
+{"label": "v24-serve-matrix", "type": "structured", "c": 8, "run": 0, "per": 43.5, "agg": 291.96, "t": "11:59:11"}
+{"label": "v24-serve-matrix", "type": "json", "c": 8, "run": 0, "per": 59.35, "agg": 465, "t": "11:59:17"}
+{"label": "v24-serve-matrix", "type": "prose", "c": 16, "run": 0, "per": 22.17, "agg": 341.27, "t": "11:59:31"}
+{"label": "v24-serve-matrix", "type": "code", "c": 16, "run": 0, "per": 29.41, "agg": 440.32, "t": "11:59:44"}
+{"label": "v24-serve-matrix", "type": "structured", "c": 16, "run": 0, "per": 44.7, "agg": 575.64, "t": "11:59:54"}
+{"label": "v24-serve-matrix", "type": "json", "c": 16, "run": 0, "per": 41.71, "agg": 632.75, "t": "12:00:02"}

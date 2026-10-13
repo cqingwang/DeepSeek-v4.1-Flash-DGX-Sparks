@@ -22,7 +22,8 @@ nfs_server_ip_for() {
   # Per-worker override: NFS_SERVER_IPS="10.0.22.1 10.0.23.1 ..." (one entry per
   # worker, or a single entry used for all, e.g. behind a switch), else the legacy
   # NFS_SERVER_IP_<n>, else NFS_SERVER_IP.
-  local explicit="" -a _nfs_ips=()
+  local explicit=""
+  local -a _nfs_ips=()
   if [[ -n "${NFS_SERVER_IPS:-}" ]]; then
     read -r -a _nfs_ips <<<"$(tr ',' ' ' <<<"$NFS_SERVER_IPS")"
     if [[ ${#_nfs_ips[@]} -eq 1 ]]; then explicit="${_nfs_ips[0]}"; else explicit="${_nfs_ips[$idx]:-}"; fi
@@ -38,7 +39,8 @@ nfs_server_ip_for() {
   local peer="${WORKER_IPS[$idx]}"
   # Prefer the CX7 source address toward that worker's fabric IP if set:
   # WORKER_FABRIC_IPS="10.0.22.2 10.0.23.3 ..." or legacy WORKER<n>_FABRIC_IP.
-  local fabric_peer="" -a _fab=()
+  local fabric_peer=""
+  local -a _fab=()
   if [[ -n "${WORKER_FABRIC_IPS:-}" ]]; then
     read -r -a _fab <<<"$(tr ',' ' ' <<<"$WORKER_FABRIC_IPS")"
     fabric_peer="${_fab[$idx]:-}"
@@ -72,6 +74,24 @@ nfs_rpc_ready() {
   timeout 3 rpcinfo -t "$ip" nfs 4 >/dev/null 2>&1
 }
 
+nfs_container_export_mount() {
+  local ctn="$1"
+  docker inspect --format '{{range .Mounts}}{{if eq .Destination "/export"}}{{printf "%s\t%s\n" .Type .Source}}{{end}}{{end}}' \
+    "$ctn" 2>/dev/null | head -1
+}
+
+nfs_require_current_model_export() {
+  local ctn="$1" mount_type source expected
+  IFS=$'\t' read -r mount_type source <<<"$(nfs_container_export_mount "$ctn" || true)"
+  expected="$(_abs "$MODEL_DIR")"
+  [[ -n "$source" ]] || die "$ctn is running but has no /export bind mount; refusing to reuse it"
+  [[ "$mount_type" == "bind" ]] || die \
+    "$ctn mounts /export as $mount_type, not a host bind; refusing to reuse it"
+  source="$(_abs "$source")"
+  [[ "$source" == "$expected" ]] || die \
+    "$ctn exports $source, but MODEL_DIR resolves to $expected; refusing to change a live exporter (stop it explicitly, then rerun share)"
+}
+
 nfs_write_exports() {
   local ctn="$1" clients="$2"
   docker exec -e NFS_CLIENTS="$clients" -e NFS_OPTS="${NFS_OPTS:-ro,sync,no_subtree_check,no_root_squash,insecure,fsid=0}" \
@@ -97,9 +117,18 @@ nfs_ensure_server() {
   live="$(nfs_live_container || true)"
 
   if [[ -n "$live" ]] && nfs_rpc_ready 127.0.0.1; then
+    if [[ "$live" == "$NFS_CONTAINER" ]]; then
+      # A same-named container can survive a profile/model-path change. Never
+      # silently make workers mount that stale checkpoint or replace a live server.
+      nfs_require_current_model_export "$live"
+    fi
     info "NFS already up ($live) — adding spark2/spark3 CX7 clients"
     nfs_write_exports "$live" "$clients"
-    NFS_REUSE_EXPORT=1
+    if [[ "$live" == "$NFS_CONTAINER" ]]; then
+      NFS_REUSE_EXPORT=0   # our exporter has MODEL_DIR at the NFSv4 root
+    else
+      NFS_REUSE_EXPORT=1   # HF-cache exporter needs the published subtree
+    fi
     NFS_LIVE_CTN="$live"
     return 0
   fi

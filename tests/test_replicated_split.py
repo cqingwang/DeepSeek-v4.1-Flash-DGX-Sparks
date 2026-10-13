@@ -15,7 +15,9 @@ import replicated_split as rs  # noqa: E402
 class Toy(torch.nn.Module):
     def __init__(self, n, k):
         super().__init__()
-        self.weight = torch.nn.Parameter(torch.arange(n * k).view(n, k).float().to(torch.float8_e4m3fn),
+        # Keep this slicing fixture finite: overflowing E4M3 values become NaN
+        # on CPU, where torch.equal correctly rejects even two identical NaNs.
+        self.weight = torch.nn.Parameter((torch.arange(n * k) % 448).view(n, k).float().to(torch.float8_e4m3fn),
                                          requires_grad=False)
         self.weight_scale_inv_swizzled = torch.nn.Parameter(torch.arange(n * k // 32, dtype=torch.int32),
                                                             requires_grad=False)

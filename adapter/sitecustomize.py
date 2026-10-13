@@ -65,6 +65,9 @@ class EngramLoader(importlib.abc.Loader):
             install(module)
             from kv_pool_metrics import install_scheduler_diag
             install_scheduler_diag(module)
+            if os.environ.get('DSV41_PREFILL_BYPASS', '').strip():
+                from prefill_bypass import install as install_prefill_bypass
+                install_prefill_bypass(module)
         elif module.__name__ == 'sglang.srt.layers.attention.deepseek_v4_backend':
             # sglang#39187 backport: dense prefill indexer scored in bounded row chunks.
             # Gate checked BEFORE the import so a disabled flag imports nothing. v1 targets
@@ -87,6 +90,9 @@ class EngramLoader(importlib.abc.Loader):
         elif module.__name__ == 'sglang.srt.entrypoints.openai.serving_chat':
             from encoding_compat import install_serving_chat
             install_serving_chat(module)
+        elif module.__name__ == 'sglang.srt.entrypoints.anthropic.protocol':
+            from encoding_compat import install_anthropic_protocol
+            install_anthropic_protocol(module)
         elif module.__name__ == 'sglang.srt.model_loader.weight_utils':
             # Gated on DSV41_FAST_LOAD: this rank's tensors are read eagerly by a thread
             # pool instead of page-faulted through the loader's mmap (adapter/fast_load.py).
@@ -300,6 +306,7 @@ class EngramFinder(importlib.abc.MetaPathFinder):
                             'sglang.srt.layers.attention.deepseek_v4_backend',
                             'sglang.srt.entrypoints.openai.encoding_dsv41',
                             'sglang.srt.entrypoints.openai.serving_chat',
+                            'sglang.srt.entrypoints.anthropic.protocol',
                             'sglang.srt.model_loader.weight_utils',
                             'sglang.srt.models.deepseek_v4',
                             'sglang.srt.models.deepseek_v4_dspark',

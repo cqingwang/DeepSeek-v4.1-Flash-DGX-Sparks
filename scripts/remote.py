@@ -18,8 +18,24 @@ def load_dotenv(path: str) -> None:
             if not line or line.startswith("#") or "=" not in line:
                 continue
             k, v = line.split("=", 1)
-            v = v.strip().strip('"').strip("'")
+            v = v.strip()
+            if len(v) >= 2 and v[0] == v[-1] == "'":
+                v = v[1:-1]
+            else:
+                if len(v) >= 2 and v[0] == v[-1] == '"':
+                    v = v[1:-1]
+                v = os.path.expandvars(v)
             os.environ.setdefault(k.strip(), v)
+
+
+def env_file_from_argv(argv: list[str]) -> str:
+    """Read the env file before argparse captures environment-based defaults."""
+    for i, arg in enumerate(argv):
+        if arg == '--env-file' and i + 1 < len(argv):
+            return argv[i + 1]
+        if arg.startswith('--env-file='):
+            return arg.split('=', 1)[1]
+    return ''
 
 
 def ssh_cmd(
@@ -30,6 +46,7 @@ def ssh_cmd(
     identity: str | None,
     timeout: int,
 ) -> int:
+    identity = os.path.expandvars(os.path.expanduser(identity or ""))
     dest = f"{user}@{host}"
     base = [
         "ssh",
@@ -129,6 +146,7 @@ def ssh_cmd(
 
 
 def main() -> int:
+    load_dotenv(env_file_from_argv(sys.argv))
     ap = argparse.ArgumentParser()
     ap.add_argument("--env-file", default="")
     # Ring adaptation: defaults must be resolved AFTER load_dotenv, otherwise a

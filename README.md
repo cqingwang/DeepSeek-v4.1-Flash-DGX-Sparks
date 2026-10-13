@@ -19,40 +19,60 @@ Other work this profile builds on:
 - **sumsliu**, [dgx-spark-deepseek-v41](https://github.com/sumsliu/dgx-spark-deepseek-v41): the eight-Spark measurement that moving to expert tensor parallelism removes most of the all-reduce wait.
 - **Saolence**, [#1](https://github.com/knapcio/DeepSeek-V4.1-Flash-4x-DGX-Spark-TP4/pull/1), [#2](https://github.com/knapcio/DeepSeek-V4.1-Flash-4x-DGX-Spark-TP4/pull/2), [#5](https://github.com/knapcio/DeepSeek-V4.1-Flash-4x-DGX-Spark-TP4/pull/5), [#6](https://github.com/knapcio/DeepSeek-V4.1-Flash-4x-DGX-Spark-TP4/pull/6): the switchless ring as an opt-in switch, the worker NCCL and build fixes, and the first-deployer review in [#4](https://github.com/knapcio/DeepSeek-V4.1-Flash-4x-DGX-Spark-TP4/pull/4) behind the host prerequisites, the download step, the patched-NCCL section and the ring addressing notes.
 - **ChrisLou-bioinfo**, **ZackO2o** and **hushengkai** (Mia's repo [#40](https://github.com/MiaAI-Lab/DeepSeek-v4.1-Flash-DGX-Sparks/issues/40), [#41](https://github.com/MiaAI-Lab/DeepSeek-v4.1-Flash-DGX-Sparks/issues/41), [#45](https://github.com/MiaAI-Lab/DeepSeek-v4.1-Flash-DGX-Sparks/issues/45)): the ring recovery notes and the bring-up pitfalls in `docs/switchless-ring.md` and `.env.tp4.example`; the people who published their own measurements are listed in [`docs/community-results.md`](docs/community-results.md).
+- **hushengkai** ([Mia #44](https://github.com/MiaAI-Lab/DeepSeek-v4.1-Flash-DGX-Sparks/issues/44), [#9](https://github.com/knapcio/DeepSeek-V4.1-Flash-4x-DGX-Spark-TP4/issues/9), [Mia PR #15](https://github.com/MiaAI-Lab/DeepSeek-v4.1-Flash-DGX-Sparks/pull/15), [#10](https://github.com/knapcio/DeepSeek-V4.1-Flash-4x-DGX-Spark-TP4/issues/10)): the diagnosis of short-request starvation behind chunked prefill (the opt-in `DSV41_PREFILL_BYPASS` adapter is our own implementation, pending fleet qualification), the image-placeholder sanitizer patched into the images, and the offline-load and dead-proxy reports behind `SKIP_PULL` and the proxy pre-check.
+- **100menotu001** ([Mia PR #46](https://github.com/MiaAI-Lab/DeepSeek-v4.1-Flash-DGX-Sparks/pull/46), [PR #47](https://github.com/MiaAI-Lab/DeepSeek-v4.1-Flash-DGX-Sparks/pull/47)): public-key recovery and key-blob matching in `ensure_ssh_keys`, the share-before-build error, and Messages `thinking: enabled` without a budget.
+- **yalindogusahin** ([Mia PR #4](https://github.com/MiaAI-Lab/DeepSeek-v4.1-Flash-DGX-Sparks/pull/4)), **RustyAiLab** ([PR #5](https://github.com/MiaAI-Lab/DeepSeek-v4.1-Flash-DGX-Sparks/pull/5), [PR #8](https://github.com/MiaAI-Lab/DeepSeek-v4.1-Flash-DGX-Sparks/pull/8)) and **BHCC2025** ([PR #26](https://github.com/MiaAI-Lab/DeepSeek-v4.1-Flash-DGX-Sparks/pull/26)): NFS exporter reuse, the single-rail shell fixes, `remote.py` reading `.env` defaults, and re-sharing before `pack` (GID auto-selection is opt-in here).
+- **bertholomus** ([Mia PR #10](https://github.com/MiaAI-Lab/DeepSeek-v4.1-Flash-DGX-Sparks/pull/10)): reading each node's HCA port state, used here as a `doctor` check.
+- **motzudao** ([Mia #31](https://github.com/MiaAI-Lab/DeepSeek-v4.1-Flash-DGX-Sparks/issues/31)): the report that a custom `EXTRA_SGLANG_ARGS` dropped the required FP8 GEMM backend.
 - **MiaAI-Lab/sparkDash**, the benchmark used for every number below.
 
 ## Current results
 
-Production stack v2.3 (the last `EXTRA_CONTAINER_ENV` line of [`.env.tp4.example`](.env.tp4.example) with `EP_SIZE=1`, `Dockerfile.canary-roce` image), built from a fresh clone of this repository on all four nodes, booted once with empty caches (healthy in 556 s; KV pool 6.80M tokens, 1M context), sparkDash 1.8.8: 256 new tokens, temperature 0, thinking off, idle fleet, 2026-09-29. Raw output: [`docs/results/validation-20260929-v23.txt`](docs/results/validation-20260929-v23.txt). Measurements from other fleets are linked, with their dates, in [`docs/community-results.md`](docs/community-results.md).
+Production stack v2.4 (the last `EXTRA_CONTAINER_ENV` line of [`.env.tp4.example`](.env.tp4.example) with the v2.4 production block below it, `EP_SIZE=1`, `Dockerfile.canary-roce` image), built from a clean tree on all four nodes, sparkDash 1.8.8: 256 new tokens, temperature 0, thinking off, idle fleet, 2026-10-12. KV pool 3.67M tokens, 1M context. Raw output: [`docs/results/validation-20261012-v24.txt`](docs/results/validation-20261012-v24.txt). Measurements from other fleets are linked, with their dates, in [`docs/community-results.md`](docs/community-results.md).
 
 ### sparkDash, GPU clock capped at 2200 MHz
 
-All results here are at the 2200 MHz SM clock cap this fleet runs with (`nvidia-smi -lgc 0,2200`, re-applied by a timer), which keeps the nodes cooler; DeepSeek-V4.1 decode gains almost nothing from higher clocks. SM clock under load median 2184 MHz (p90 2190), hottest GPU 68 °C, no throttling samples.
+All results here are at the 2200 MHz SM clock cap this fleet runs with (`nvidia-smi -lgc 0,2200`, re-applied by a timer), which keeps the nodes cooler.
 
 **Decode, aggregate tok/s (per stream in brackets)**
 
 | prompt type | c1 | c2 | c4 | c8 | c16 |
 |---|---:|---:|---:|---:|---:|
-| prose | **89.7** | 125.2 (64.2) | 165.9 (41.9) | 244.6 (31.7) | 357.2 (23.2) |
-| code | 131.9 | 181.4 (91.7) | 248.0 (63.5) | 328.6 (44.0) | 456.3 (30.5) |
-| structured | 157.8 | 184.6 (106.9) | 242.1 (70.6) | 300.6 (44.6) | 603.4 (47.1) |
-| json | 130.4 | 179.9 (92.8) | 319.8 (80.9) | 477.3 (61.0) | 693.2 (44.8) |
+| prose | **89.9** | 123.3 (63.3) | 164.9 (41.7) | 237.2 (30.8) | 341.3 (22.2) |
+| code | 131.0 | 175.8 (88.8) | 246.8 (63.2) | 306.8 (41.0) | 440.3 (29.4) |
+| structured | 158.7 | 178.9 (103.7) | 240.4 (70.2) | 292.2 (43.5) | 575.6 (44.7) |
+| json | 128.4 | 175.1 (90.3) | 314.0 (79.4) | 465.0 (59.4) | 632.8 (41.7) |
 
 **Prefill, cold, tok/s**
 
 | 4k | 16k | 32k | 64k | 128k |
 |---:|---:|---:|---:|---:|
-| 4688 | 5583 | 5650 | 5664 | 5398 |
+| 4756 | 5790 | 5941 | 5969 | 5896 |
 
-**How these were measured.** sparkDash DecodeBench after two discarded warm-up prose c1 runs; c1 is the median of three runs, c4 the median of two, c2 / c8 / c16 one run each (c1 runs: prose 89.7 / 89.0 / 90.2; code 131.5 / 131.9 / 132.1; structured 157.8 / 160.1 / 155.7; json 130.7 / 130.4 / 130.3). sparkDash's prose c1 is one prompt: greedy text is identical run to run on this stack, but a change in rounding anywhere (another stack, another clock) can follow a different greedy text there, so compare step time or many prompts across stacks. The non-prose types use a different prompt at each concurrency, so per-stream values are not comparable across columns. Prefill: sparkDash prefill bench, cold (salted prompts), after a 4k warm-up, median of the second and third of three runs per length. sparkDash's prefill filler is one repeated token, so every filler token hits the same Engram row and the row cache inflates these numbers ([MiaAI-Lab#21](https://github.com/MiaAI-Lab/DeepSeek-v4.1-Flash-DGX-Sparks/issues/21)); on real text v2.2 measured 3915 / 4743 / 4822 / 4946 / 4800 tok/s at ~4k / ~15k / ~30k / ~56k / ~123k tokens, and v2.3 does not change prefill.
+**How these were measured.** sparkDash DecodeBench after two discarded warm-up prose c1 runs; c1 is the median of three runs, c4 the median of two, c2 / c8 / c16 one run each. Each cell is the better of two full sweeps on two boots of the same final image (c1 runs: prose 89.9 / 89.0 / 90.0; code 131.0 / 129.3 / 131.4; structured 152.8 / 159.3 / 158.7; json 123.4 / 129.5 / 128.5). This fleet ran without the optional `DSV41_ENGRAM_DRM_NODE` (its display reservation is used by another tenant), which costs a few percent at c8-c16. Prefill: sparkDash prefill bench, cold, one run per length; its filler is one repeated token, so the Engram row cache inflates these numbers ([MiaAI-Lab#21](https://github.com/MiaAI-Lab/DeepSeek-v4.1-Flash-DGX-Sparks/issues/21)).
 
-**Quality and correctness gates** (same boot, against the v2.2 production tree booted the same afternoon as the reference):
+### Long context and multi-user behaviour
 
-- `scripts/qeval.py` (75 auto-scored tasks: code run against hidden asserts, JSON schema checks, numeric answers, format constraints; no LLM judge; c1, temperature 0, number extractor fixed in this release): 72 / 75 on v2.3; the v2.2 reference scored 72 / 72 / 72 in three runs. Both miss the same three tasks (`code_interval_intersect`, `json_escape`, `json_count`).
-- Greedy-continuation KL against the reference (`scripts/ds_gate.py kld`, 256 greedy tokens after cold prompts of 16.5k-40k tokens and of 1-3k tokens, KL up to and including the first divergent token): mean 0.0031 over 178 positions (long) and 0.0071 over 190 positions (short), PASS against a 0.035 limit and at the A/A floor: the same candidate collected twice in one boot gives 0.0046 / 0.0035, because cold prefills of these prompts are not bit-reproducible run to run and the greedy texts part within a few tokens either way. Prompt-token logprobs are not available on this launch (see Known limits), so the panel scores the continuation.
-- T > 0 scan (`ds_gate.py tscan`, 35 outputs at T 1.0 / 0.6 and mixed c4 batches, thinking on): 0 garbled outputs, 0 errors (reference: 0 of 35).
-- Prefix cache (`scripts/prefix_scan.py`, ~100k-token shared prefix, c8 cold then warm at T 0.8, plus a greedy drift test with 4 full and 4 mid-document cache hits): PASS; cold-vs-warm logprob drift 0.0 over 128 greedy tokens on all eight hits, 0 degenerate outputs.
-- The certified head is exact by construction and was checked on the device: its exact kernel matches the stock matmul bit for bit on every logit of all four rank shards, and check mode counted 0 mismatches over 3,355 live verify steps; armed on all four ranks in this boot. Prompt-logprob requests answered HTTP 400 and the server kept serving.
+Varied-text prompts, cold (unique salt per prompt), [`scripts/v24_probe.py`](scripts/v24_probe.py):
+
+| | v2.4 |
+|---|---:|
+| cold prefill, 388K-token prompt | 77.8 s (4,976 tok/s) |
+| 969K-token needle (passphrase found) | 235 s |
+| short chat sent 8 s into a cold 400K prefill, time to answer | 4.6 s |
+| return to a 388K session after a second 388K session ran | 1.5 s (100 % cached) |
+| lowest MemAvailable during the 1M prefill, head / workers | 5.7 / 7.1-7.7 GiB |
+
+What v2.4 changed against v2.3 is in [CHANGELOG.md](CHANGELOG.md).
+
+**Quality and correctness gates** (final image, against the v2.3 settings booted the same morning as the reference):
+
+- `scripts/qeval.py` (75 auto-scored tasks, c1, temperature 0): 72 / 72 / 72 on v2.4, the reference 72 / 72 / 72; both miss the same three tasks.
+- Greedy-continuation KL against the reference (`scripts/ds_gate.py kld`): mean 0.0045 over 239 positions (long prompts, 16.5k-40k) and 0.0061 over 559 positions (short, 1-3k), PASS against the 0.035 limit.
+- T > 0 scan (`ds_gate.py tscan`, 35 outputs): 0 garbled, 0 errors (reference 0 of 35).
+- Prefix cache (`scripts/prefix_scan.py`): PASS, cold-vs-warm logprob drift 0.0 on all eight hits (reference identical, including its one false anomaly).
+- 60-minute soak at 16 concurrent clients (mixed prompts, T 0 / 0.6 / 1.0, 30 % thinking, ~5 % cold 22K-45K-token prompts): 2,285 completions, 0 errors, 0 empty, 0 container restarts or OOM, 0 kernel Xid / `NV_ERR`, MemAvailable never below 12.9 GiB.
+- `/v1/messages` with the image placeholder token in message text and with `thinking: {"type": "enabled"}` without a budget: both answered.
 
 Every earlier measurement, the per-stage tables and the experiments that were tried and not adopted are in [docs/history.md](docs/history.md); what changed when is in [CHANGELOG.md](CHANGELOG.md).
 
@@ -70,7 +90,9 @@ Every earlier measurement, the per-stage tables and the experiments that were tr
 | Kernels | `DSV41_SHARED_PAD_K=1`, `DSV41_WO_A_W8=1`, `DSV41_WO_A_W8_MID=1`, `DSV41_WO_A_W8_DROP=1`, `DSV41_DRAFT_HEAD_FP8=1` | shared expert kept on the b12x kernel; `wo_a` and the draft LM head read exact fp8 twins of their weights |
 | Replicated linears | `DSV41_REPLICATED_SPLIT=wqkv_a,engram.wkv`, `DSV41_DRAFT_MAIN_PROJ_SPLIT=1`, `DSV41_SPLIT_COMPACT_GATHER=1` | layers every rank computed in full are split by columns across ranks and all-gathered; enabled only where bit-identical on all ranks. A rank with a narrower slice runs its GEMM on a window of the widest slice's width, so no pad precedes the gather, and with the compact gather each rank sends only its own columns, which RoCEnante writes in place (no pad, reorder or cat; checked byte for byte against the old path per layer and row count at boot) |
 | Transport | `SGLANG_ROCE_ALLREDUCE=1`, `SGLANG_ROCE_MAX_SIZE=2097152`, `DSV41_ROCE_GATHER=2097152`, `B12X_ROCE_HCA=rocep1s0f0,roceP2p1s0f0` | TP all-reduces and all-gathers up to 2 MiB over the one-shot RDMA kernel on both rails |
-| Prefill | `CHUNKED_PREFILL_SIZE=4096`, `DSV41_INDEXER_CHUNKED=1`, `SPARK_PREFILL_TP_SPLIT=1` | bounded indexer transient (sglang#39187) plus the SG18 row split across ranks from 32k context |
+| Prefill | `CHUNKED_PREFILL_SIZE=8192`, `MEM_FRACTION_STATIC=HEAD_MEM_FRACTION_STATIC=0.78`, `DSV41_INDEXER_CHUNKED=1`, `SPARK_PREFILL_TP_SPLIT=1` | bounded indexer transient (sglang#39187) plus the SG18 row split across ranks from 32k context; 8192-token chunks are 17-28 % faster on 400K-1M cold prompts, and the 0.78 fraction gives back the ~3 GiB the larger chunk costs at 1M (at 0.80 the head dropped to 2.7 GiB available) |
+| Multi-user | `--prefill-decode-interval 2`, `DSV41_PREFILL_BYPASS=256` | a short request that arrives during a long cold prefill is admitted next to the in-flight chunk and decoded between chunks: answered in 4.6 s instead of after the prefill (80 s at 400K); the admission adapter only acts after the engine's own memory check and reads only rank-identical state |
+| Prefix cache | `--swa-prefix-tails 128` | room for 128 sliding-window prefix tails instead of 64: a long session stays cached when another long session runs (388K revisit 1.5 s instead of an 89 s re-prefill); costs KV pool |
 | Loading | `DSV41_FAST_LOAD=1`, `DSV41_FAST_LOAD_TP_SLICE=auto`, `DSV41_AUTOTUNE_KEEP=1` | engine start 343 s → ~120 s; at EP1 each rank reads only its slice of every expert, into 256 MiB pinned slabs (330 allocations instead of ~94k, which gave back ~0.7M tokens of KV pool); MoE autotune cache kept across boots |
 | Prefill hc | `DSV41_HC_FUSED=1` | the hyper-connection mix statistics of prefill chunks in one pass over K instead of 80 partial slices: ~1.46 → ~0.83 ms per call at 4096 rows, bit-identical to the stock kernels (checked on the first live call) |
 | Prefill sequence parallel | `DSV41_PREFILL_SP=1` | at prefill chunks of >= 2048 rows the per-layer all-reduces become reduce-scatter + all-gather, and the per-row work between them (hyper-connection mixing and norms, the Engram `wkv` projection and gate) runs on each rank's quarter of the rows instead of all four ranks repeating it: prefill ~+20 % from 16k to 262k. Decode is untouched. The partial sums are added in a different order than the all-reduce's (the same kind of change as RoCEnante); `DSV41_PREFILL_SP_EXACT=1` keeps the all-reduce and is bit-identical to the unsharded path (checked op by op on the fleet) for ~+10 %. `DSV41_PREFILL_SP_FP8=1` gathers the attention input of 17 of the 21 full-row layers as the MXFP8 bytes and scales `wqkv_a` would compute itself (checked bit-identical per chunk size on every rank): about half the gather bytes there, +1.5-3 % prefill |
@@ -129,7 +151,7 @@ Same launcher as upstream; read [`docs/README-upstream.md`](docs/README-upstream
 
 ```bash
 cp .env.tp4.example .env.tp4          # fill in HEAD_IP / WORKER_* / MODEL_DIR / fabric
-# production: uncomment IMAGE=dsv41-4x-spark:canary-roce and the last EXTRA_CONTAINER_ENV line,
+# production: uncomment IMAGE=dsv41-4x-spark:canary-roce, the last EXTRA_CONTAINER_ENV line and the v2.4 block below it,
 # set BUILD_DOCKERFILE=Dockerfile.canary-roce and EP_SIZE=1 (the file default EP_SIZE=2 is for the
 # base/canary images; the production line was measured at EP_SIZE=1)
 ./start-tp4.sh download               # 476 GiB at the pinned revision, needs the hf CLI; skips when complete
@@ -177,6 +199,8 @@ Every layer is an env change: `EP_SIZE=2` without `DSV41_MOE_B12X_NEXT` returns 
 - The numbers above are on a switched RoCE fabric. On a switchless ring RoCEnante needs a path to the opposite node, built in the neighbours' ConnectX-7 hardware ([docs/switchless-ring.md](docs/switchless-ring.md#rocenante-on-the-ring-hardware-forwarded-opposite-node-paths)); without it the collectives go through NCCL and decode is slower. Prefill is lower on a ring either way (one-link bisection).
 - The EP1 production line needs the `Dockerfile.canary-roce` image (it carries `runtime/b12x_next`). The routed MoE on b12x is numerically equivalent to FlashInfer's, not bit-identical (relative error against an fp32 reference 4.5–4.8 % for both); qeval and the needle tests are unchanged.
 - Prompt-token logprobs and all-token hidden states are not available: `boot.py` launches with `--enable-decoder-swa-bounded-replay` (Mia's recipe), so the 19 layers after the last KV-source layer run only over the last 128 rows of each prefill, and such requests get HTTP 400. Output logprobs work. Cache hits are exact: a hit that lands on a prefill chunk boundary gives bit-identical logprobs to a cold request; a hit elsewhere computes the tail with a different batch shape, which moves low-probability logprobs by the same amount as the run-to-run nondeterminism of cold prefills on some prompts (`scripts/prefix_scan.py`, `docs/results/validation-20260929-v23.txt`).
+- v2.4's KV pool is 3.67M tokens instead of ~5.8M: the 0.78 memory fraction and the larger SWA prefix-tail reserve both come out of it. That still holds three full 1M-token contexts; with fewer long sessions, `MEM_FRACTION_STATIC=0.80` with `CHUNKED_PREFILL_SIZE=4096` restores the pool at the v2.3 prefill speed. Never raise the chunk to 16384: at 1M it took a worker to 2.5 GiB available and hung the node on another fleet.
+- One of the eight v2.4 boots on 2026-10-12 hung in the server's internal warm-up request and was restarted by the boot timeout; the retry and the seven other boots were clean.
 - Single-stream prose speed is bounded by DSpark acceptance (~3 accepted tokens per step on prose against ~6 on code); no configuration changes that.
 - The fast loader leaves the KV pool 3–13 % smaller than the stock loader (6.7–7.3 M vs 7.5–7.8 M tokens) and more variable between boots; `DSV41_FAST_LOAD=0` restores it at ~220 s per boot ([docs/fast-load.md](docs/fast-load.md)).
 - RoCEnante is a new transport in the decode path; b12x has one open report of a rank wedging under long mixed-context traffic on an earlier revision ([b12x#313](https://github.com/local-inference-lab/b12x/issues/313)). The overlay's result-boundary health check fails the step instead of hanging, and NCCL is one env change away.

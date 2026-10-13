@@ -4,6 +4,39 @@ Every dated table, note and rejected experiment that used to live in the README,
 
 All rows below were taken with sparkDash up to 1.8.6. sparkDash 1.8.7 replaced the code prompts (c1 and the concurrent waves), so the code columns here are not comparable with the README's current table; the prose, structured and prefill prompts are unchanged.
 
+## Production 2026-09-29 (v2.3), sparkDash 1.8.8
+
+Production stack v2.3 (the last `EXTRA_CONTAINER_ENV` line of [`.env.tp4.example`](../.env.tp4.example) with `EP_SIZE=1`, `Dockerfile.canary-roce` image), built from a fresh clone of this repository on all four nodes, booted once with empty caches (healthy in 556 s; KV pool 6.80M tokens, 1M context), sparkDash 1.8.8: 256 new tokens, temperature 0, thinking off, idle fleet, 2026-09-29. Raw output: [`docs/results/validation-20260929-v23.txt`](results/validation-20260929-v23.txt). Measurements from other fleets are linked, with their dates, in [`docs/community-results.md`](community-results.md).
+
+#### sparkDash, GPU clock capped at 2200 MHz
+
+All results here are at the 2200 MHz SM clock cap this fleet runs with (`nvidia-smi -lgc 0,2200`, re-applied by a timer), which keeps the nodes cooler; DeepSeek-V4.1 decode gains almost nothing from higher clocks. SM clock under load median 2184 MHz (p90 2190), hottest GPU 68 °C, no throttling samples.
+
+**Decode, aggregate tok/s (per stream in brackets)**
+
+| prompt type | c1 | c2 | c4 | c8 | c16 |
+|---|---:|---:|---:|---:|---:|
+| prose | **89.7** | 125.2 (64.2) | 165.9 (41.9) | 244.6 (31.7) | 357.2 (23.2) |
+| code | 131.9 | 181.4 (91.7) | 248.0 (63.5) | 328.6 (44.0) | 456.3 (30.5) |
+| structured | 157.8 | 184.6 (106.9) | 242.1 (70.6) | 300.6 (44.6) | 603.4 (47.1) |
+| json | 130.4 | 179.9 (92.8) | 319.8 (80.9) | 477.3 (61.0) | 693.2 (44.8) |
+
+**Prefill, cold, tok/s**
+
+| 4k | 16k | 32k | 64k | 128k |
+|---:|---:|---:|---:|---:|
+| 4688 | 5583 | 5650 | 5664 | 5398 |
+
+**How these were measured.** sparkDash DecodeBench after two discarded warm-up prose c1 runs; c1 is the median of three runs, c4 the median of two, c2 / c8 / c16 one run each (c1 runs: prose 89.7 / 89.0 / 90.2; code 131.5 / 131.9 / 132.1; structured 157.8 / 160.1 / 155.7; json 130.7 / 130.4 / 130.3). sparkDash's prose c1 is one prompt: greedy text is identical run to run on this stack, but a change in rounding anywhere (another stack, another clock) can follow a different greedy text there, so compare step time or many prompts across stacks. The non-prose types use a different prompt at each concurrency, so per-stream values are not comparable across columns. Prefill: sparkDash prefill bench, cold (salted prompts), after a 4k warm-up, median of the second and third of three runs per length. sparkDash's prefill filler is one repeated token, so every filler token hits the same Engram row and the row cache inflates these numbers ([MiaAI-Lab#21](https://github.com/MiaAI-Lab/DeepSeek-v4.1-Flash-DGX-Sparks/issues/21)); on real text v2.2 measured 3915 / 4743 / 4822 / 4946 / 4800 tok/s at ~4k / ~15k / ~30k / ~56k / ~123k tokens, and v2.3 does not change prefill.
+
+**Quality and correctness gates** (same boot, against the v2.2 production tree booted the same afternoon as the reference):
+
+- `scripts/qeval.py` (75 auto-scored tasks: code run against hidden asserts, JSON schema checks, numeric answers, format constraints; no LLM judge; c1, temperature 0, number extractor fixed in this release): 72 / 75 on v2.3; the v2.2 reference scored 72 / 72 / 72 in three runs. Both miss the same three tasks (`code_interval_intersect`, `json_escape`, `json_count`).
+- Greedy-continuation KL against the reference (`scripts/ds_gate.py kld`, 256 greedy tokens after cold prompts of 16.5k-40k tokens and of 1-3k tokens, KL up to and including the first divergent token): mean 0.0031 over 178 positions (long) and 0.0071 over 190 positions (short), PASS against a 0.035 limit and at the A/A floor: the same candidate collected twice in one boot gives 0.0046 / 0.0035, because cold prefills of these prompts are not bit-reproducible run to run and the greedy texts part within a few tokens either way. Prompt-token logprobs are not available on this launch (see Known limits), so the panel scores the continuation.
+- T > 0 scan (`ds_gate.py tscan`, 35 outputs at T 1.0 / 0.6 and mixed c4 batches, thinking on): 0 garbled outputs, 0 errors (reference: 0 of 35).
+- Prefix cache (`scripts/prefix_scan.py`, ~100k-token shared prefix, c8 cold then warm at T 0.8, plus a greedy drift test with 4 full and 4 mid-document cache hits): PASS; cold-vs-warm logprob drift 0.0 over 128 greedy tokens on all eight hits, 0 degenerate outputs.
+- The certified head is exact by construction and was checked on the device: its exact kernel matches the stock matmul bit for bit on every logit of all four rank shards, and check mode counted 0 mismatches over 3,355 live verify steps; armed on all four ranks in this boot. Prompt-logprob requests answered HTTP 400 and the server kept serving.
+
 ## Production 2026-09-25 (v2.2), sparkDash 1.8.8 (GPU clock cap then at 3003 MHz, effectively the driver default boost)
 
 Production stack v2.2 (the last `EXTRA_CONTAINER_ENV` line of [`.env.tp4.example`](../.env.tp4.example) with `EP_SIZE=1`, `Dockerfile.canary-roce` image), built from a fresh clone of this repository on all four nodes and measured on that image with sparkDash 1.8.8: 256 new tokens, temperature 0, thinking off, idle fleet, 2026-09-25. Two boots, both healthy on the first try in 180 s and 160 s; KV pool 5.98-6.49M tokens (1M context). Raw output: [`docs/results/validation-20260925-v22.txt`](results/validation-20260925-v22.txt).

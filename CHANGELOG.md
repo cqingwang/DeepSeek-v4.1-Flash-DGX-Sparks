@@ -37,6 +37,37 @@ raw results live under `docs/results/`.
   same port index at both ends. The generated dry-run plan passed sparkring `f16b5f4`; no host rules,
   markers, NIC parameters, service, or container RoCEnante variables were applied. The planner also
   writes through `Path.write_text(..., encoding="utf-8")` for the Python 3.9 control host.
+## 2026-10-12 v2.4
+
+Long context and multi-user behaviour; decode unchanged (same-session A/B within noise). Release gate on the final
+image against the v2.3 settings booted the same morning, raw output:
+[`docs/results/validation-20261012-v24.txt`](docs/results/validation-20261012-v24.txt).
+
+- **Prefill chunk 4096 -> 8192 with `MEM_FRACTION_STATIC=HEAD_MEM_FRACTION_STATIC=0.78`.** Cold 388K prompt
+  93.4 -> 77.8 s, 969K needle 325 -> 235 s. At 0.80 the larger chunk left the head with 2.7 GiB available during
+  a 1M prefill. 0.78 restores 5.7 GiB, at the cost of KV pool. Reported by hushengkai (MiaAI-Lab#44).
+- **`--prefill-decode-interval 2` + `DSV41_PREFILL_BYPASS=256` (`adapter/prefill_bypass.py`).** A short request
+  arriving during a long cold prefill is answered in 4.6 s instead of 80 s at 400K. The adapter is our own
+  implementation of hushengkai's diagnosis (#9, MiaAI-Lab#44). It admits small requests beside the in-flight chunk
+  only after the engine's memory check and only from rank-identical state, and it refuses to arm on source drift or
+  with the prefill delayer.
+- **`--swa-prefix-tails 128`.** A 388K session stays cached while another 388K session runs: the revisit takes
+  1.5 s instead of an 89 s re-prefill. The default of 64 tails evicted it (MiaAI-Lab#43, LECYWZA). KV pool
+  5.77M -> 3.67M tokens with both settings.
+- **Images.** `runtime/patch_encoding_dsv41.py` sanitizes the image placeholder token in message text instead of
+  failing the request (MiaAI-Lab PR #15, hushengkai). `/v1/messages` accepts `thinking: {"type": "enabled"}`
+  without `budget_tokens` (MiaAI-Lab PR #47, 100menotu001). Both are fingerprinted against the pinned source.
+- **Launcher.**
+  - The required `--fp8-gemm-backend flashinfer_cutlass` survives a custom `EXTRA_SGLANG_ARGS` (MiaAI-Lab#31).
+  - `doctor` checks every node's listed RDMA ports are ACTIVE and the socket interfaces exist (MiaAI-Lab PR #10, #45).
+  - `SKIP_PULL=1` builds from a local base tag; a dead docker proxy is reported before a pull (#10).
+  - SSH public-key recovery (MiaAI-Lab PR #46).
+  - NFS and `remote.py` fixes (MiaAI-Lab PRs #4, #5, #8, #26).
+  - Opt-in `DSV41_TRITON_CACHE=1` and `NCCL_IB_GID_AUTO=1`.
+- **Gate.** qeval 72/72/72 (reference 72/72/72), KL 0.0045 / 0.0061 (limit 0.035), T > 0 scan 0/35, prefix scan
+  PASS, 60-minute c16 soak with 2,285 completions and 0 errors / restarts / OOM / Xid. The new long-context probes
+  are `scripts/v24_probe.py` and `scripts/v24_soak.py`.
+
 ## 2026-09-29 v2.3
 
 Lossless: the certified head returns the stock argmax (in-boot A/B: greedy outputs identical 24/24), the guard only
