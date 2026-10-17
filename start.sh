@@ -11,7 +11,7 @@
 #   over NFSv4 on ConnectX (vllm-fn-nfs / dsv41-nfs) — no local 476 GiB copy.
 #
 # Usage:
-#   ./start.sh                 doctor → image → share → serve (default)
+#   ./start.sh                 validate pre-initialized assets → serve (default)
 #   ./start.sh doctor          connectivity + GPU + checkpoint report
 #   ./start.sh pull            pull lmsysorg/sglang:dev-dsv41 on all 3 nodes
 #   ./start.sh build           docker build the Engram overlay image everywhere
@@ -793,36 +793,34 @@ cmd_serve() {
     nccl_validate_config || die "invalid NCCL/loader configuration"
   fi
   DOCTOR_STRICT=0 cmd_doctor || true
-  [[ -f "$MODEL_DIR/config.json" ]] || cmd_download
-  ln -sfn "$MODEL_DIR" "$COMMON_MODEL"
+  local_model_has_weights || die "head: $MODEL_DIR is missing/incomplete; run ./start.sh download separately"
 
   if _busy_gpu && [[ "${FORCE:-0}" != "1" ]]; then
     die "GPU is busy (glm53-exl3 or similar). Stop the other stack, or FORCE=1 ./start.sh serve"
   fi
 
   if ! overlay_image_present; then
-    info "overlay image $IMAGE missing or is only the base SGLang image — building from local source"
-    cmd_build
+    die "overlay image $IMAGE is missing or is only the base SGLang image; run ./start.sh build separately"
   fi
 
   local h
   for h in "${WORKER_HOSTS[@]}"; do
     if ! remote_ok_on "$h" "docker image inspect $(printf '%q' "$IMAGE") --format '{{index .Config.Labels \"com.spark.dsv41.overlay\"}}' 2>/dev/null | grep -qx 1"; then
-      info "image missing on $h — building"
-      cmd_build
-      break
+      die "overlay image $IMAGE is missing on $h; initialize it on every node before serve"
     fi
   done
   preflight_all_nodes || die "NCCL preflight failed; see files/nccl.sh"
   if [[ "$WEIGHTS_MODE" == "local" ]]; then
     info "WEIGHTS_MODE=local — workers read node-local weights, NFS skipped"
-    local_model_has_weights || die "head: $MODEL_DIR is missing/incomplete; local weights are required"
     for h in "${WORKER_HOSTS[@]}"; do
       remote_ok_on "$h" "test -f $WORKER_MODEL_DIR/config.json" \
         || die "$h: local weights $WORKER_MODEL_DIR are missing/incomplete"
     done
   elif [[ "$NFS_SHARE" == "1" ]]; then
-    cmd_share
+    for h in "${WORKER_HOSTS[@]}"; do
+      nfs_worker_has_model "$h" \
+        || die "$h: NFS volume $NFS_VOLUME is missing/incomplete; run ./start.sh share separately"
+    done
   else
     for h in "${WORKER_HOSTS[@]}"; do
       nfs_worker_has_model "$h" || die "$h: local volume $NFS_VOLUME is missing/incomplete; NFS_SHARE=0 disables NFS setup"
@@ -1118,8 +1116,7 @@ cmd_pack() {
       nfs_worker_has_model "$h" || need_share=1
     done
     if [[ "$need_share" == 1 ]]; then
-      info "a worker cannot see the checkpoint over NFS — running share first"
-      cmd_share
+      die "a worker cannot see the checkpoint over NFS; run ./start.sh share separately before pack"
     fi
   fi
   info "packing Engram shards: head $ENGRAM_DIR, workers $WORKER_ENGRAM_DIR"
