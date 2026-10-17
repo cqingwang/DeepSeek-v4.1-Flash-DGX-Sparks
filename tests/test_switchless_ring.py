@@ -603,11 +603,21 @@ class NfsShareOffTests(unittest.TestCase):
 
     def test_status_reads_the_volume_not_the_head_symlink(self):
         source = (ROOT / "start.sh").read_text()
-        status = source[source.index("cmd_status()"):]
+        status = source[source.index("cmd_status()") :]
         status = status[:status.index("\n}\n")]
         worker = status[status.index("for h in"):]
         self.assertNotIn("$COMMON_MODEL/config.json", worker)
         self.assertIn("nfs_worker_has_model", worker)
+
+    def test_status_prefers_authenticated_api_probe_when_key_exists(self):
+        source = (ROOT / "start.sh").read_text()
+        status = source[source.index("cmd_status()") :]
+        status = status[:status.index("\n}\n")]
+        key_read = status.index('key=$(cat "$STATE_DIR/api-key"')
+        auth_probe = status.index('curl -fsS --max-time 5 -H "Authorization: Bearer $key"')
+        anonymous_probe = status.index('curl -fsS --max-time 5 "http://127.0.0.1:${PORT}/v1/models"')
+        self.assertLess(key_read, auth_probe)
+        self.assertLess(auth_probe, anonymous_probe)
 
     def test_example_configures_local_weights_for_the_ring(self):
         example = (ROOT / ".env.tp4.example").read_text()

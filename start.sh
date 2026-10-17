@@ -1063,12 +1063,21 @@ cmd_status() {
   echo "== API =="
   local key
   key=$(cat "$STATE_DIR/api-key" 2>/dev/null || true)
-  if curl -fsS --max-time 5 "http://127.0.0.1:${PORT}/v1/models" \
-     || { [[ -n "$key" ]] && curl -fsS --max-time 5 -H "Authorization: Bearer $key" "http://127.0.0.1:${PORT}/v1/models"; }; then
-    echo
+  # The API key is the launcher-owned authentication contract. Probe with it
+  # first so an expected anonymous 401 does not pollute a successful status
+  # check or make `deploy.sh start` look failed.
+  if [[ -n "$key" ]]; then
+    if curl -fsS --max-time 5 -H "Authorization: Bearer $key" "http://127.0.0.1:${PORT}/v1/models"; then
+      echo
+      return 0
+    fi
   else
-    echo "(not responding on :$PORT)"
+    if curl -fsS --max-time 5 "http://127.0.0.1:${PORT}/v1/models"; then
+      echo
+      return 0
+    fi
   fi
+  echo "(not responding on :$PORT)"
 }
 
 cmd_logs() {
