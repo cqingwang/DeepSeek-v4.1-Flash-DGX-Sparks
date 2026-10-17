@@ -99,8 +99,9 @@ IMAGE="${IMAGE:-dsv41-3x-spark:local}"
 # are managed values, not a second deployment path.
 BUILD_DOCKERFILE="${BUILD_DOCKERFILE:-Dockerfile}"
 BUILD_ARGS="${BUILD_ARGS:-}"
-HEAD_CTN="${HEAD_CTN:-dsv41-head}"
-WORKER_CTN="${WORKER_CTN:-dsv41-worker}"
+TARGET_CONTAINER_PREFIX="${TARGET_CONTAINER_PREFIX:-deepseek_v4.1_flash_switchless}"
+container_name_for_rank() { printf '%s-r%s' "$TARGET_CONTAINER_PREFIX" "$1"; }
+HEAD_CTN="$(container_name_for_rank 0)"
 WORKER_DIR="${WORKER_DIR:-/home/${WORKER_USER}/dsv41-3x-spark}"
 
 NNODES="${NNODES:-$(( ${#WORKER_IPS[@]} + 1 ))}"
@@ -861,13 +862,17 @@ cmd_serve() {
   fi
 
   docker rm -f "$HEAD_CTN" >/dev/null 2>&1 || true
+  local cleanup_idx=0 cleanup_rank cleanup_ctn
   for h in "${WORKER_HOSTS[@]}"; do
-    remote_on "$h" "docker rm -f $WORKER_CTN >/dev/null 2>&1 || true" || true
+    cleanup_rank=$((cleanup_idx + 1))
+    cleanup_ctn="$(container_name_for_rank "$cleanup_rank")"
+    remote_on "$h" "docker rm -f $(printf '%q' "$cleanup_ctn") >/dev/null 2>&1 || true" || true
+    cleanup_idx=$((cleanup_idx + 1))
   done
 
   push_spec_tables
   info "Starting workers (ranks 1..${#WORKER_IPS[@]}) first..."
-  local idx=0 wip wgid rank
+  local idx=0 wip wgid rank worker_ctn
   local NCCL_LIBRARY_PATH="$NCCL_HOST_DIR/libnccl.so.2"
   if [[ -f "$NCCL_HOST_DIR/libnccl.so.2.30.7" ]]; then
     NCCL_LIBRARY_PATH="$NCCL_HOST_DIR/libnccl.so.2.30.7"
@@ -879,6 +884,7 @@ cmd_serve() {
     wip="${WORKER_IPS[$idx]}"
     wgid="${WORKER_GIDS[$idx]}"
     rank=$((idx + 1))
+    worker_ctn="$(container_name_for_rank "$rank")"
     # The worker payload below is the remote equivalent of
     # $(nccl_worker_settings), nccl_mount_args nccl_args, and ${nccl_args[@]};
     # it is kept explicit so the local-weight and PEER_HCA mounts are visible in
@@ -906,7 +912,7 @@ cmd_serve() {
       fi
       MODEL_SRC='$NFS_VOLUME'
       if [ '$WEIGHTS_MODE' = 'local' ]; then MODEL_SRC='$WORKER_MODEL_DIR'; fi
-      docker run -d --name $WORKER_CTN \
+      docker run -d --name $(printf '%q' "$worker_ctn") \
         --network host --ipc host --privileged --cap-add IPC_LOCK --gpus all \
         --shm-size ${SHM_SIZE:-32g} \
         --ulimit memlock=-1:-1 --ulimit stack=67108864 \
@@ -975,10 +981,13 @@ $(worker_env_lines "$wip" "$wgid" "$rank")
     echo "---- $SERVE_LOG (tail) ----"
     tail -n 120 "$SERVE_LOG" 2>/dev/null || true
     echo "---- workers ----"
-    local wh
+    local wh worker_index=0 worker_rank worker_ctn
     for wh in "${WORKER_HOSTS[@]}"; do
-      echo "== $wh =="
-      remote_on "$wh" "docker ps -a --filter name=$WORKER_CTN --format '{{.Names}} {{.Status}}'; docker logs --tail=40 $WORKER_CTN 2>/dev/null | tail -40" || true
+      worker_rank=$((worker_index + 1))
+      worker_ctn="$(container_name_for_rank "$worker_rank")"
+      echo "== $wh (rank $worker_rank) =="
+      remote_on "$wh" "docker ps -a --filter name=$(printf '%q' "$worker_ctn") --format '{{.Names}} {{.Status}}'; docker logs --tail=40 $(printf '%q' "$worker_ctn") 2>/dev/null | tail -40" || true
+      worker_index=$((worker_index + 1))
     done
   }
 
@@ -1040,12 +1049,15 @@ cmd_status() {
   echo "== head =="
   docker ps --filter "name=$HEAD_CTN" --format 'table {{.Names}}\t{{.Status}}\t{{.Image}}' || true
   echo
-  local h
+  local h worker_index=0 worker_rank worker_ctn
   for h in "${WORKER_HOSTS[@]}"; do
+    worker_rank=$((worker_index + 1))
+    worker_ctn="$(container_name_for_rank "$worker_rank")"
     echo "== worker $h =="
     # nfs_worker_has_model is the local-side contract; the remote probe uses
     # the resolved node-local path and never follows the head symlink.
-    remote_on "$h" "docker ps --filter name=$WORKER_CTN --format 'table {{.Names}}\t{{.Status}}\t{{.Image}}' ; test -f $WORKER_MODEL_DIR/config.json && echo weights:OK || echo weights:MISSING" || warn "status SSH $h failed"
+    remote_on "$h" "docker ps --filter name=$(printf '%q' "$worker_ctn") --format 'table {{.Names}}\t{{.Status}}\t{{.Image}}' ; test -f $WORKER_MODEL_DIR/config.json && echo weights:OK || echo weights:MISSING" || warn "status SSH $h failed"
+    worker_index=$((worker_index + 1))
     echo
   done
   echo "== API =="
@@ -1069,7 +1081,7 @@ cmd_logs() {
     worker*|w[0-9]*)
       local n="${who#worker}"; n="${n#w}"; n="${n:-1}"
       [[ "$n" =~ ^[0-9]+$ && "$n" -ge 1 && "$n" -le ${#WORKER_HOSTS[@]} ]] || die "no such worker: $who (1..${#WORKER_HOSTS[@]})"
-      remote_on "${WORKER_HOSTS[$((n - 1))]}" "docker logs --tail=$lines $WORKER_CTN" || true
+      remote_on "${WORKER_HOSTS[$((n - 1))]}" "docker logs --tail=$lines $(printf '%q' "$(container_name_for_rank "$n")")" || true
       ;;
     -f|follow)
       docker logs -f "$HEAD_CTN"

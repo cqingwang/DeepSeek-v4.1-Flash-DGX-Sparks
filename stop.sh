@@ -2,8 +2,8 @@
 # stop.sh — tear down DeepSeek-V4.1-Flash SGLang on all 3 Sparks.
 #
 # Stops:
-#   - dsv41-head on spark1 (rank 0 + API :8888)
-#   - dsv41-worker on spark2 and spark3
+#   - deepseek_v4.1_flash_switchless-r0 on spark1 (rank 0 + API :8888)
+#   - deepseek_v4.1_flash_switchless-r1..r3 on workers
 #   - log-tail helper
 #   - leftover sglang.launch_server in those containers
 #
@@ -49,8 +49,9 @@ fi
 
 _abs() { readlink -f "$1" 2>/dev/null || echo "$1"; }
 
-HEAD_CTN="${HEAD_CTN:-dsv41-head}"
-WORKER_CTN="${WORKER_CTN:-dsv41-worker}"
+TARGET_CONTAINER_PREFIX="${TARGET_CONTAINER_PREFIX:-deepseek_v4.1_flash_switchless}"
+container_name_for_rank() { printf '%s-r%s' "$TARGET_CONTAINER_PREFIX" "$1"; }
+HEAD_CTN="$(container_name_for_rank 0)"
 PORT="${PORT:-8888}"
 _list() { tr ',' ' ' <<<"$1"; }
 if [[ -n "${WORKER_IPS:-}" ]]; then
@@ -118,26 +119,20 @@ pkill -f "docker logs -f ${HEAD_CTN}" >/dev/null 2>&1 || true
 info "head: SIGTERM sglang in $HEAD_CTN, then remove"
 _stop_sglang_in "$HEAD_CTN"
 _rm_ctn "$HEAD_CTN"
-# anything else this recipe named
-ids=$(docker ps -aq --filter "name=dsv41-" 2>/dev/null || true)
-if [[ -n "$ids" ]]; then
-  # shellcheck disable=SC2086
-  timeout "$RM_TIMEOUT" docker rm -f $ids >/dev/null 2>&1 || true
-fi
-
-for h in "${WORKER_HOSTS[@]}"; do
-  info "worker $WORKER_USER@$h: stop $WORKER_CTN"
+for idx in "${!WORKER_HOSTS[@]}"; do
+  h="${WORKER_HOSTS[$idx]}"
+  rank=$((idx + 1))
+  worker_ctn="$(container_name_for_rank "$rank")"
+  info "worker $WORKER_USER@$h: stop $worker_ctn"
   if remote_on "$h" "
-    if docker ps --format '{{.Names}}' | grep -qx $(printf '%q' "$WORKER_CTN"); then
-      docker exec $(printf '%q' "$WORKER_CTN") bash -lc '
+    if docker ps --format '{{.Names}}' | grep -qx $(printf '%q' "$worker_ctn"); then
+      docker exec $(printf '%q' "$worker_ctn") bash -lc '
         pkill -TERM -f \"[s]glang.launch_server\" >/dev/null 2>&1 || true
         sleep 1
         pkill -KILL -f \"[s]glang.launch_server\" >/dev/null 2>&1 || true
       ' 2>/dev/null || true
     fi
-    timeout ${RM_TIMEOUT} docker rm -f $(printf '%q' "$WORKER_CTN") >/dev/null 2>&1 || docker rm -f $(printf '%q' "$WORKER_CTN") >/dev/null 2>&1 || true
-    ids=\$(docker ps -aq --filter name=dsv41- 2>/dev/null || true)
-    [ -n \"\$ids\" ] && docker rm -f \$ids >/dev/null 2>&1 || true
+    timeout ${RM_TIMEOUT} docker rm -f $(printf '%q' "$worker_ctn") >/dev/null 2>&1 || docker rm -f $(printf '%q' "$worker_ctn") >/dev/null 2>&1 || true
     echo STOPPED_$h
   " 2>/dev/null | grep -q "STOPPED_$h"; then
     info "  $h: container gone"
@@ -158,11 +153,11 @@ else
   info "API down on :${PORT}"
 fi
 
-left=$(docker ps --format '{{.Names}}' 2>/dev/null | grep -E '^dsv41-' || true)
+left=$(docker ps --format '{{.Names}}' 2>/dev/null | grep -E "^${TARGET_CONTAINER_PREFIX}-r[0-9]+$" || true)
 if [[ -n "$left" ]]; then
   warn "still running on head: $left"
 else
-  info "no dsv41-* containers on head"
+  info "no ${TARGET_CONTAINER_PREFIX}-r* containers on head"
 fi
 
 info "kept: spark1 weights, $IMAGE overlay, vllm-fn-nfs exporter"
