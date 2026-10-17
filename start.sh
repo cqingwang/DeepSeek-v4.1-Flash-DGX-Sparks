@@ -127,7 +127,7 @@ DSPARK_STS_TABLE="${DSPARK_STS_TABLE:-/state/dspark_sts.json}"
 ENGRAM_DIR="${ENGRAM_DIR:-$HOME/dsv41-engram}"
 WORKER_ENGRAM_DIR="${WORKER_ENGRAM_DIR:-$WORKER_DIR/engram}"
 DSV41_PACKED_DIR="${DSV41_PACKED_DIR:-/engram}"
-CONTEXT_LENGTH="${CONTEXT_LENGTH:-409600}"
+MAX_TOKEN="${MAX_TOKEN:-409600}"
 MEM_FRACTION_STATIC="${MEM_FRACTION_STATIC:-0.95}"
 # Rank 0 also carries the HTTP server, tokenizer and detokenizer (~1.3 GiB the
 # workers never pay) and serves the checkpoint over NFS, so it runs out of host
@@ -314,7 +314,7 @@ docker_common_args() {
     -e "TP_SIZE=$TP_SIZE"
     -e "EP_SIZE=$EP_SIZE"
     -e "DIST_INIT_ADDR=${HEAD_IP}:${DIST_PORT}"
-    -e "CONTEXT_LENGTH=$CONTEXT_LENGTH"
+    -e "MAX_TOKEN=$MAX_TOKEN"
     -e "MEM_FRACTION_STATIC=$HEAD_MEM_FRACTION_STATIC"
     -e "MAX_RUNNING_REQUESTS=$MAX_RUNNING_REQUESTS"
     -e "CHUNKED_PREFILL_SIZE=$CHUNKED_PREFILL_SIZE"
@@ -489,7 +489,7 @@ worker_env_lines() {
         -e DSV41_SOURCE=/models/DeepSeek-V4.1-Flash \\
         -e MODEL_PATH=/models/DeepSeek-V4.1-Flash -e STATE_PATH=/state \\
         -e SERVER_PORT=$PORT -e HOST=${HOST:-0.0.0.0} \\
-        -e CONTEXT_LENGTH=$CONTEXT_LENGTH \\
+        -e MAX_TOKEN=$MAX_TOKEN \\
         -e MEM_FRACTION_STATIC=$MEM_FRACTION_STATIC \\
         -e MAX_RUNNING_REQUESTS=$MAX_RUNNING_REQUESTS \\
         -e CHUNKED_PREFILL_SIZE=$CHUNKED_PREFILL_SIZE \\
@@ -565,7 +565,7 @@ cmd_doctor() {
   echo "workers:  ${WORKER_USER}@${WORKER_HOSTS[*]}  (${WORKER_IPS[*]})"
   echo "image:    $IMAGE  (base $BASE_IMAGE)"
   echo "model:    $MODEL_DIR"
-  echo "parallel: nnodes=$NNODES TP=$TP_SIZE EP=$EP_SIZE  ctx=$CONTEXT_LENGTH  util=$MEM_FRACTION_STATIC (head $HEAD_MEM_FRACTION_STATIC)"
+  echo "parallel: nnodes=$NNODES TP=$TP_SIZE EP=$EP_SIZE  max_token=$MAX_TOKEN  util=$MEM_FRACTION_STATIC (head $HEAD_MEM_FRACTION_STATIC)"
   echo "offload:  $OFFLOAD_MODE  cache=${DSV41_CACHE_GIB}GiB  spec=$SPEC_ALGO-$DSPARK_BLOCK_SIZE  port=$PORT"
   echo
   local ok=0
