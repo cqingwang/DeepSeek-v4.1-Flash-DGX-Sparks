@@ -296,7 +296,7 @@ def required_sglang_args(args, backend):
 def serve():
     mode = os.environ.get('OFFLOAD_MODE', 'nvme')
     assert mode in ('nvme', 'ram'), 'OFFLOAD_MODE must be nvme or ram'
-    context = int(os.environ.get('MAX_TOKEN', '409600'))
+    context = int(os.environ.get('CONTEXT_LENGTH', '409600'))
     assert 4096 <= context <= 1048576, 'Context must be 4096 through the model limit 1048576'
     gpu = _gpu_lines()
     assert gpu, gpu
