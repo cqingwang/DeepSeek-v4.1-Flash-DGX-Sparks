@@ -25,6 +25,7 @@ jobs:
       - name: Host-side patch and launcher regressions
         run: |
           python3 tests/test_patch_v41_tool_constraint.py
+          python3 tests/test_ring_mesh_pipefail.py
           python3 -m unittest \
             tests/test_sps_engram_guard.py \
             tests/test_stop_nfs_filter.py \

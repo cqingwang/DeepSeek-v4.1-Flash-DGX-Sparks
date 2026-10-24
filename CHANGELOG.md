@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Ring mesh (`scripts/ring_mesh/plan.py`, `hairpin.sh`): the generated `show | grep -q ... || add` checks
+  read the whole output (`grep ... >/dev/null`), so under `set -o pipefail` a show command that still had output when
+  `grep -q` exited no longer died of SIGPIPE and re-added an existing rule ("Filter already exists", mesh-up aborted).
+  Test `tests/test_ring_mesh_pipefail.py` (stub `tc`/`ip`, output larger than a pipe buffer), now in CI. Credits:
+  joeym82956 ([#54](https://github.com/knapcio/DeepSeek-V4.1-Flash-4x-DGX-Spark-TP4/pull/54)).
+
 - Engram NVMe keepalive (`adapter/row_store.cpp`, `DSV41_ENGRAM_KEEPALIVE_MS`, default 25, 0 = off).
   Under Linux APST the GB10's Samsung drive enters a low-power state after ~100 ms without commands
   and the next read pays ~10 ms to wake it (bursts of 200 random 4 KiB O_DIRECT reads on 96 threads:
