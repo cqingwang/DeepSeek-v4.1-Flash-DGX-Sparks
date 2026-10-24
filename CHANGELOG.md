@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- `stop.sh`: the shared NFS exporter it keeps (`dsv41-nfs`, or a reused `vllm-fn-nfs`/`glm53-nfs`) is no longer
+  reported as "still running", the `kept:` line names the exporter it found, and the banner counts the head plus the
+  configured workers instead of a fixed 3x. Report only; cleanup unchanged. Tests in `tests/test_stop_nfs_filter.py`;
+  checked live on four Sparks. Credits: SvangenStudios
+  ([#57](https://github.com/knapcio/DeepSeek-V4.1-Flash-4x-DGX-Spark-TP4/pull/57)).
+
 - Ring mesh (`scripts/ring_mesh/plan.py`, `hairpin.sh`): the generated `show | grep -q ... || add` checks
   read the whole output (`grep ... >/dev/null`), so under `set -o pipefail` a show command that still had output when
   `grep -q` exited no longer died of SIGPIPE and re-added an existing rule ("Filter already exists", mesh-up aborted).
