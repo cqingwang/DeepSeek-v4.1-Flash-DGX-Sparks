@@ -1,20 +1,20 @@
 #!/usr/bin/env bash
-# stop.sh — tear down DeepSeek-V4.1-Flash SGLang on all 3 Sparks.
+# stop.sh — tear down DeepSeek-V4.1-Flash SGLang on the head and every worker.
 #
 # Stops:
 #   - dsv41-head on spark1 (rank 0 + API :8888)
-#   - dsv41-worker on spark2 and spark3
+#   - dsv41-worker on each WORKER_HOSTS node
 #   - log-tail helper
 #   - leftover sglang.launch_server in those containers
 #
 # Keeps:
 #   - checkpoint on spark1
 #   - overlay image dsv41-3x-spark:local
-#   - shared NFSv4 exporter (vllm-fn-nfs) — Qwen/GLM still use it
+#   - shared NFSv4 exporter (dsv41-nfs, or a reused vllm-fn-nfs/glm53-nfs)
 #   - docker volume dsv41-weights unless you pass --unmount
 #
 # Usage:
-#   ./stop.sh              stop serve on all 3 nodes
+#   ./stop.sh              stop serve on every node
 #   ./stop.sh --unmount    also drop worker NFS volumes (weights stay on spark1)
 #   ./start.sh stop        same
 #
@@ -107,7 +107,7 @@ _stop_sglang_in() {
   ' 2>/dev/null || true
 }
 
-info "=== stop DeepSeek-V4.1-Flash (3× Spark SGLang) ==="
+info "=== stop DeepSeek-V4.1-Flash ($(( ${#WORKER_HOSTS[@]} + 1 ))× Spark SGLang) ==="
 
 if [[ -f "$LOG_DIR/logtail.pid" ]]; then
   kill "$(cat "$LOG_DIR/logtail.pid")" 2>/dev/null || true
@@ -163,13 +163,17 @@ else
   info "API down on :${PORT}"
 fi
 
-left=$(docker ps --format '{{.Names}}' 2>/dev/null | grep -E '^dsv41-' || true)
+# the shared exporter is kept on purpose (above), so it is not "still running"
+left=$(docker ps --format '{{.Names}}' 2>/dev/null | grep -E '^dsv41-' | grep -vx 'dsv41-nfs' || true)
 if [[ -n "$left" ]]; then
   warn "still running on head: $left"
 else
-  info "no dsv41-* containers on head"
+  info "no dsv41-* serving containers on head"
 fi
 
-info "kept: spark1 weights, $IMAGE overlay, vllm-fn-nfs exporter"
+nfs=$(docker ps --format '{{.Names}}' 2>/dev/null | grep -E '^(vllm-fn-nfs|glm53-nfs|dsv41-nfs)$' | head -1 || true)
+kept="kept: spark1 weights, $IMAGE overlay"
+[[ -z "$nfs" ]] || kept+=", shared NFS exporter ($nfs)"
+info "$kept"
 [[ "$UNMOUNT" == "1" ]] || info "worker NFS volume $NFS_VOLUME kept (./stop.sh --unmount to drop it)"
 info "start again with: ./start.sh"
