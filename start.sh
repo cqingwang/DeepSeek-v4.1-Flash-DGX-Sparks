@@ -47,7 +47,11 @@ set -a
 source "$ENV_FILE"
 set +a
 
-HEAD_IP="${HEAD_IP:-10.0.0.1}"
+if [[ "${DSV41_LAUNCHER:-}" == tp4 ]]; then
+  HEAD_IP="${HEAD_IP:-}"
+else
+  HEAD_IP="${HEAD_IP:-10.0.0.1}"
+fi
 # Workers: WORKER_IPS="10.0.0.2 10.0.0.3 ..." (space or comma separated) and
 # optionally WORKER_HOSTS="spark2 spark3 ..." (ssh names); the legacy
 # WORKER1_IP/WORKER2_IP/WORKER1_HOST/WORKER2_HOST pairs still work for 3 nodes.
@@ -55,7 +59,11 @@ _list() { tr ',' ' ' <<<"$1"; }
 if [[ -n "${WORKER_IPS:-}" ]]; then
   read -r -a WORKER_IPS <<<"$(_list "$WORKER_IPS")"
 else
-  WORKER_IPS=("${WORKER1_IP:-10.0.0.2}" "${WORKER2_IP:-10.0.0.3}")
+  if [[ "${DSV41_LAUNCHER:-}" == tp4 ]]; then
+    WORKER_IPS=()
+  else
+    WORKER_IPS=("${WORKER1_IP:-10.0.0.2}" "${WORKER2_IP:-10.0.0.3}")
+  fi
 fi
 if [[ -n "${WORKER_HOSTS:-}" ]]; then
   read -r -a WORKER_HOSTS <<<"$(_list "$WORKER_HOSTS")"
@@ -68,24 +76,64 @@ else
 fi
 [[ ${#WORKER_HOSTS[@]} -eq ${#WORKER_IPS[@]} ]] || { echo "WORKER_HOSTS and WORKER_IPS differ in length" >&2; exit 1; }
 WORKER1_IP="${WORKER_IPS[0]}"; WORKER2_IP="${WORKER_IPS[1]:-}"   # legacy names, still read by files/nfs-share.sh
-WORKER_USER="${WORKER_USER:-zurih}"
-SSH_IDENTITY="${SSH_IDENTITY:-$HOME/.ssh/id_ed25519}"
-FABRIC_IFACE="${FABRIC_IFACE:-enp1s0f1np1}"
-GLOO_SOCKET_IFNAME="${GLOO_SOCKET_IFNAME:-enP7s7}"
-NCCL_SOCKET_IFNAME="${NCCL_SOCKET_IFNAME:-enP7s7}"
-IB_HCA="${IB_HCA:-rocep1s0f0,rocep1s0f1}"
-NCCL_NET="${NCCL_NET:-IB}"
-NCCL_IB_DISABLE="${NCCL_IB_DISABLE:-0}"
-NCCL_P2P_DISABLE="${NCCL_P2P_DISABLE:-1}"
-NCCL_SHM_DISABLE="${NCCL_SHM_DISABLE:-1}"
+if [[ "${DSV41_LAUNCHER:-}" == tp4 ]]; then
+  WORKER_USER="${WORKER_USER:-}"
+  SSH_IDENTITY="${SSH_IDENTITY:-}"
+  FABRIC_IFACE="${FABRIC_IFACE:-}"
+  GLOO_SOCKET_IFNAME="${GLOO_SOCKET_IFNAME:-}"
+  NCCL_SOCKET_IFNAME="${NCCL_SOCKET_IFNAME:-}"
+  IB_HCA="${IB_HCA:-}"
+else
+  WORKER_USER="${WORKER_USER:-zurih}"
+  SSH_IDENTITY="${SSH_IDENTITY:-$HOME/.ssh/id_ed25519}"
+  FABRIC_IFACE="${FABRIC_IFACE:-enp1s0f1np1}"
+  GLOO_SOCKET_IFNAME="${GLOO_SOCKET_IFNAME:-enP7s7}"
+  NCCL_SOCKET_IFNAME="${NCCL_SOCKET_IFNAME:-enP7s7}"
+  IB_HCA="${IB_HCA:-rocep1s0f0,rocep1s0f1}"
+fi
 NCCL_DEBUG="${NCCL_DEBUG:-WARN}"
-NCCL_HOST_DIR="${NCCL_HOST_DIR:-$HOME/nccl-2.30.7}"
-NCCL_CONTAINER_DIR="${NCCL_CONTAINER_DIR:-/nccl}"
-# Optional switchless-ring overlay. The production TP4/EP2 profile keeps this
-# disabled and uses the local ring-only library injection below.
-NCCL_PIP_SO="${NCCL_PIP_SO:-/opt/sglang/lib/python3.12/site-packages/nvidia/nccl/lib/libnccl.so.2}"
+if [[ "${DSV41_LAUNCHER:-}" == tp4 ]]; then
+  # Parent config owns managed TP4 NCCL policy and the pip-overlay destination.
+  # Keep missing values empty so the ring gate can reject a stale env file.
+  NCCL_NET="${NCCL_NET:-}"
+  NCCL_IB_DISABLE="${NCCL_IB_DISABLE:-}"
+  NCCL_P2P_DISABLE="${NCCL_P2P_DISABLE:-}"
+  NCCL_SHM_DISABLE="${NCCL_SHM_DISABLE:-}"
+  NCCL_HOST_DIR="${NCCL_HOST_DIR:-}"
+  NCCL_PIP_SO="${NCCL_PIP_SO:-}"
+  NCCL_SKIP_TREE_CONNECT="${NCCL_SKIP_TREE_CONNECT:-}"
+  NCCL_IB_EXTENDED_IPV4_GIDS="${NCCL_IB_EXTENDED_IPV4_GIDS:-}"
+else
+  NCCL_NET="${NCCL_NET:-IB}"
+  NCCL_IB_DISABLE="${NCCL_IB_DISABLE:-0}"
+  NCCL_P2P_DISABLE="${NCCL_P2P_DISABLE:-1}"
+  NCCL_SHM_DISABLE="${NCCL_SHM_DISABLE:-1}"
+  NCCL_HOST_DIR="${NCCL_HOST_DIR:-$HOME/nccl-2.30.7}"
+  NCCL_PIP_SO="${NCCL_PIP_SO:-/opt/sglang/lib/python3.12/site-packages/nvidia/nccl/lib/libnccl.so.2}"
+fi
+NCCL_CONTAINER_DIR="${NCCL_CONTAINER_DIR:-}"
+if [[ "${DSV41_LAUNCHER:-}" == tp4 ]]; then
+  NCCL_SO_NAME="${NCCL_SO_NAME:-}"
+else
+  NCCL_SO_NAME="${NCCL_SO_NAME:-libnccl.so.2}"
+fi
+NCCL_PIN_HOST="${NCCL_PIN_HOST:-}"
+NCCL_PIN_CONTAINER="${NCCL_PIN_CONTAINER:-}"
+NCCL_SHA256="${NCCL_SHA256:-}"
 NCCL_SWITCHLESS_RING_ONLY="${NCCL_SWITCHLESS_RING_ONLY:-0}"
+NCCL_IB_SUBNET_PREFIX_LEN="${NCCL_IB_SUBNET_PREFIX_LEN:-}"
 NCCL_OVERLAY_PIP="${NCCL_OVERLAY_PIP:-$NCCL_SWITCHLESS_RING_ONLY}"
+
+if [[ "$NCCL_SWITCHLESS_RING_ONLY" == 1 ]]; then
+  [[ "$NCCL_IB_SUBNET_PREFIX_LEN" =~ ^[1-9][0-9]?$ ]] \
+    && (( NCCL_IB_SUBNET_PREFIX_LEN <= 32 )) \
+    || { echo "ring-only 缺少 common.ring 派生的有效 NCCL_IB_SUBNET_PREFIX_LEN" >&2; exit 1; }
+  for required in NCCL_HOST_DIR NCCL_PIP_SO NCCL_SHA256; do
+    [[ -n "${!required:-}" ]] || { echo "ring-only 缺少 parent config 管理的 $required" >&2; exit 1; }
+  done
+  [[ "$NCCL_SHA256" =~ ^[a-f0-9]{64}$ ]] \
+    || { echo "ring-only 的 NCCL_SHA256 格式无效" >&2; exit 1; }
+fi
 
 MODEL_DIR="${MODEL_DIR:-$HOME/NewModels/DeepSeek-V4.1-Flash}"
 COMMON_MODEL="${COMMON_MODEL:-/var/tmp/DeepSeek-V4.1-Flash}"
@@ -108,6 +156,13 @@ NNODES="${NNODES:-$(( ${#WORKER_IPS[@]} + 1 ))}"
 [[ "$NNODES" -eq $(( ${#WORKER_IPS[@]} + 1 )) ]] || { echo "NNODES=$NNODES but ${#WORKER_IPS[@]} workers are configured" >&2; exit 1; }
 TP_SIZE="${TP_SIZE:-3}"
 EP_SIZE="${EP_SIZE:-$TP_SIZE}"
+if [[ "${DSV41_LAUNCHER:-}" == tp4 ]]; then
+  [[ "$NNODES" == 4 && "$TP_SIZE" == 4 && "${#WORKER_IPS[@]}" == 3 ]] \
+    || { echo "TP4 ring requires NNODES=4, TP_SIZE=4 and three common.ring workers" >&2; exit 1; }
+  for required in HEAD_IP WORKER_USER SSH_IDENTITY FABRIC_IFACE GLOO_SOCKET_IFNAME NCCL_SOCKET_IFNAME IB_HCA NCCL_HOST_DIR; do
+    [[ -n "${!required:-}" ]] || { echo "TP4 ring missing config.yaml-derived value: $required" >&2; exit 1; }
+  done
+fi
 DIST_PORT="${DIST_PORT:-20000}"
 PORT="${PORT:-8888}"
 OFFLOAD_MODE="${OFFLOAD_MODE:-nvme}"
@@ -241,17 +296,6 @@ api_key() {
   esac
 }
 
-resolved_gid() {
-  local detected="$1"
-  if [[ -n "${NCCL_IB_GID_INDEX:-}" ]]; then
-    echo "$NCCL_IB_GID_INDEX"
-  elif [[ -n "$detected" ]]; then
-    echo "$detected"
-  elif [[ "${NCCL_IB_GID_AUTO:-0}" != 1 ]]; then
-    echo 3
-  fi
-}
-
 gid_index_local() {
   local ip="$1" hex hca g i
   hex=$(printf '%02x%02x:%02x%02x' $(echo "$ip" | tr . ' '))
@@ -338,16 +382,22 @@ docker_common_args() {
     -e "GLOO_SOCKET_IFNAME=$GLOO_SOCKET_IFNAME"
     -e "NCCL_P2P_DISABLE=$NCCL_P2P_DISABLE"
     -e "NCCL_SHM_DISABLE=$NCCL_SHM_DISABLE"
-    -e "NCCL_CROSS_NIC=${NCCL_CROSS_NIC:-1}"
-    -e "NCCL_IB_MERGE_NICS=${NCCL_IB_MERGE_NICS:-0}"
-    -e "NCCL_IB_SUBNET_AWARE_ROUTING=${NCCL_IB_SUBNET_AWARE_ROUTING:-1}"
-    -e "NCCL_CUMEM_ENABLE=0"
-    -e "NCCL_DEBUG=$NCCL_DEBUG"
-    -e "NCCL_BUFFSIZE=${NCCL_BUFFSIZE:-4194304}"
-    -e "NCCL_LL128_BUFFSIZE=${NCCL_LL128_BUFFSIZE:--2}"
-    -e "NCCL_PROTO=${NCCL_PROTO:-LL,LL128,Simple}"
-    -e "NCCL_MAX_NCHANNELS=${NCCL_MAX_NCHANNELS:-32}"
-    -e "NCCL_DEBUG_SUBSYS=${NCCL_DEBUG_SUBSYS:-INIT}"
+  )
+  if [[ "${DSV41_LAUNCHER:-}" != tp4 || "$NCCL_SWITCHLESS_RING_ONLY" != 1 ]]; then
+    _a+=(
+      -e "NCCL_CROSS_NIC=${NCCL_CROSS_NIC:-1}"
+      -e "NCCL_IB_MERGE_NICS=${NCCL_IB_MERGE_NICS:-0}"
+      -e "NCCL_IB_SUBNET_AWARE_ROUTING=${NCCL_IB_SUBNET_AWARE_ROUTING:-1}"
+      -e "NCCL_CUMEM_ENABLE=0"
+      -e "NCCL_DEBUG=$NCCL_DEBUG"
+      -e "NCCL_BUFFSIZE=${NCCL_BUFFSIZE:-4194304}"
+      -e "NCCL_LL128_BUFFSIZE=${NCCL_LL128_BUFFSIZE:--2}"
+      -e "NCCL_PROTO=${NCCL_PROTO:-LL,LL128,Simple}"
+      -e "NCCL_MAX_NCHANNELS=${NCCL_MAX_NCHANNELS:-32}"
+      -e "NCCL_DEBUG_SUBSYS=${NCCL_DEBUG_SUBSYS:-INIT}"
+    )
+  fi
+  _a+=(
     -e "DSV41_MXFP8_BACKEND=${DSV41_MXFP8_BACKEND:-b12x}"
     -e "SGLANG_FLASHINFER_MOE_FUSED_FINALIZE=${SGLANG_FLASHINFER_MOE_FUSED_FINALIZE:-1}"
     -e "PYTORCH_CUDA_ALLOC_CONF=${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:False}"
@@ -379,22 +429,28 @@ docker_common_args() {
   fi
   if [[ "$NCCL_OVERLAY_PIP" == 1 ]]; then
     nccl_mount_args _a || die "NCCL overlay library is unavailable"
-  elif [[ -f "$NCCL_HOST_DIR/libnccl.so.2.30.7" || -f "$NCCL_HOST_DIR/libnccl.so.2" ]]; then
+  elif [[ -f "$NCCL_HOST_DIR/libnccl.so.2.30.7" || -f "$NCCL_HOST_DIR/$NCCL_SO_NAME" ]]; then
     _a+=(-v "$NCCL_HOST_DIR:$NCCL_CONTAINER_DIR:ro" -e "LD_LIBRARY_PATH=$NCCL_CONTAINER_DIR")
   fi
-  # Ring adaptation: host ring-only NCCL + core-pinning shim (same LD_PRELOAD
-  # pair as the vLLM production stack), and the NCCL debug-log取证 mount.
-  if [[ -f /opt/aicad-prod/lib/libncclpin.so && -d /opt/nccl-ringonly ]]; then
+  # The patched switchless library is loaded through the pip path; do not
+  # preload the legacy host ring-only NCCL or its core-pinning shim.
+  if [[ "$NCCL_SWITCHLESS_RING_ONLY" == 1 ]]; then
     mkdir -p "$HOME/nccl-debug"
-    _a+=(-v "/opt/aicad-prod/lib/libncclpin.so:/opt/libncclpin.so:ro" \
-         -v "/opt/nccl-ringonly:/opt/nccl-ringonly:ro" \
+    _a+=(-v "$HOME/nccl-debug:/nccl-debug:rw")
+  elif [[ -f "$NCCL_PIN_HOST" && -d "$NCCL_HOST_DIR" ]]; then
+    mkdir -p "$HOME/nccl-debug"
+    _a+=(-v "$NCCL_PIN_HOST:$NCCL_PIN_CONTAINER:ro" \
+         -v "$NCCL_HOST_DIR:$NCCL_CONTAINER_DIR:ro" \
          -v "$HOME/nccl-debug:/nccl-debug:rw" \
-         -e 'LD_PRELOAD=/opt/libncclpin.so /opt/nccl-ringonly/libnccl.so.2')
+         -e "LD_PRELOAD=$NCCL_PIN_CONTAINER $NCCL_CONTAINER_DIR/$NCCL_SO_NAME")
   fi
-  # Ring adaptation: per-rank PEER_HCA for rank 0 (workers get theirs in
-  # worker_env_lines via PEER_HCA_RANK<n>).
-  if [[ -n "${PEER_HCA_RANK0:-}" ]]; then
-    _a+=(-e "NCCL_IB_PEER_HCA=${PEER_HCA_RANK0}")
+  # Legacy standalone profiles may still pass PEER_HCA_RANK values. The
+  # managed switchless target rejects them because its pinned NCCL selects a
+  # local port from the peer RoCE GID subnet and does not consume this override.
+  if [[ "${DSV41_LAUNCHER:-}" != tp4 || "$NCCL_SWITCHLESS_RING_ONLY" != 1 ]]; then
+    if [[ -n "${PEER_HCA_RANK0:-}" ]]; then
+      _a+=(-e "NCCL_IB_PEER_HCA=${PEER_HCA_RANK0}")
+    fi
   fi
   # Ring adaptation: generic passthrough, appended last so it overrides any
   # default set above (docker keeps the last -e for a duplicated key).
@@ -438,19 +494,21 @@ push_spec_tables() {
 
 worker_env_lines() {
   local wip="$1" wgid="$2" rank="$3"
-  # Ring adaptation: generic env passthrough + per-rank PEER_HCA
-  # (PEER_HCA_RANK<n> from .env). Emitted as single-quoted lines so values
-  # with commas/semicolons survive the remote bash -lc round trip.
-  local _ed _extra=""
+  # Ring adaptation: generic env passthrough; standalone peer-HCA values are legacy-only.
+  # Values use single-quoted lines so commas/semicolons survive remote bash -lc.
+  local _ed _extra="" _compat_nccl_env="" _ring_prefix
   _extra+="        -e DSV41_EXTRA_ENV=1 \\"$'\n'
   if [[ "$NCCL_SWITCHLESS_RING_ONLY" != 1 && "$NCCL_OVERLAY_PIP" != 1 &&
         ( -f "$NCCL_HOST_DIR/libnccl.so.2.30.7" || -f "$NCCL_HOST_DIR/libnccl.so.2" ) ]]; then
     _extra+="        -e LD""_LIBRARY_PATH=$NCCL_CONTAINER_DIR \\"$'\n'
   fi
-  # LD_PRELOAD must be a literal single-quoted line here: embedding it in a
-  # remote variable (SHIM_VOL) breaks word splitting (quotes are not
-  # re-parsed after variable expansion).
-  _extra+="        -e 'LD_PRELOAD=${LD_PRELOAD_SHIM:-/opt/libncclpin.so /opt/nccl-ringonly/libnccl.so.2}' \\"$'\n'
+  # The switchless NCCL library is overlaid at the SGLang pip path, so only an
+  # explicitly requested shim may preload in that mode.
+  if [[ -n "${LD_PRELOAD_SHIM:-}" ]]; then
+    _extra+="        -e 'LD_PRELOAD=$LD_PRELOAD_SHIM' \\"$'\n'
+  elif [[ "$NCCL_SWITCHLESS_RING_ONLY" != 1 ]]; then
+    _extra+="        -e 'LD_PRELOAD=$NCCL_PIN_CONTAINER $NCCL_CONTAINER_DIR/$NCCL_SO_NAME' \\"$'\n'
+  fi
   for _ed in ${EXTRA_DOCKER_ENV:-}; do
     [[ -z "$_ed" ]] && continue
     _extra+="        -e '$_ed' \\"$'\n'
@@ -463,16 +521,45 @@ worker_env_lines() {
   done
   local _ph_var="PEER_HCA_RANK${rank}"
   local _ph="${!_ph_var:-}"
-  if [[ -n "$_ph" ]]; then
+  if [[ -n "$_ph" && ( "${DSV41_LAUNCHER:-}" != tp4 || "$NCCL_SWITCHLESS_RING_ONLY" != 1 ) ]]; then
     _extra+="        -e 'NCCL_IB_PEER_HCA=$_ph' \\"$'\n'
   fi
   if [[ "$NCCL_SWITCHLESS_RING_ONLY" == 1 ]]; then
+    if [[ "${DSV41_LAUNCHER:-}" == tp4 ]]; then
+      nccl_validate_managed_tp4_transport_policy || return 1
+      _ring_prefix="$(nccl_ring_subnet_prefix)" || return 1
+      _extra+="        -e 'NCCL_SWITCHLESS_RING_ONLY=1' \\"$'\n'
+      _extra+="        -e 'NCCL_SKIP_TREE_CONNECT=$NCCL_SKIP_TREE_CONNECT' \\"$'\n'
+      _extra+="        -e 'NCCL_IB_SUBNET_PREFIX_LEN=$_ring_prefix' \\"$'\n'
+    else
     _extra+="        -e 'NCCL_SWITCHLESS_RING_ONLY=1' \\"$'\n'
-    _extra+="        -e 'NCCL_ALGO=${NCCL_ALGO:-Ring}' \\"$'\n'
+    nccl_extra_docker_env_has_key NCCL_ALGO \
+      || _extra+="        -e 'NCCL_ALGO=${NCCL_ALGO:-Ring}' \\"$'\n'
     _extra+="        -e 'NCCL_SKIP_TREE_CONNECT=${NCCL_SKIP_TREE_CONNECT:-1}' \\"$'\n'
-    _extra+="        -e 'NCCL_IB_SUBNET_PREFIX_LEN=${NCCL_IB_SUBNET_PREFIX_LEN:-24}' \\"$'\n'
-    _extra+="        -e 'NCCL_MIN_NCHANNELS=${NCCL_MIN_NCHANNELS:-4}' \\"$'\n'
-    _extra+="        -e 'NCCL_P2P_LEVEL=${NCCL_P2P_LEVEL:-SYS}' \\"$'\n'
+    _extra+="        -e 'NCCL_IB_SUBNET_PREFIX_LEN=$NCCL_IB_SUBNET_PREFIX_LEN' \\"$'\n'
+    nccl_extra_docker_env_has_key NCCL_MIN_NCHANNELS \
+      || _extra+="        -e 'NCCL_MIN_NCHANNELS=${NCCL_MIN_NCHANNELS:-4}' \\"$'\n'
+    nccl_extra_docker_env_has_key NCCL_P2P_LEVEL \
+      || _extra+="        -e 'NCCL_P2P_LEVEL=${NCCL_P2P_LEVEL:-SYS}' \\"$'\n'
+    fi
+  fi
+  if [[ "${NCCL_IB_EXTENDED_IPV4_GIDS:-0}" == 1 ]]; then
+    local _dual_pci_env
+    _dual_pci_env="$(dual_pci_domain_env_string)"
+    [[ -z "$_dual_pci_env" ]] || _extra+="        $_dual_pci_env \\"$'\n'
+  fi
+  if [[ "${DSV41_LAUNCHER:-}" != tp4 || "$NCCL_SWITCHLESS_RING_ONLY" != 1 ]]; then
+    _compat_nccl_env=$(cat <<EOF
+        -e NCCL_CROSS_NIC=${NCCL_CROSS_NIC:-1} \\
+        -e NCCL_IB_MERGE_NICS=${NCCL_IB_MERGE_NICS:-0} \\
+        -e NCCL_IB_SUBNET_AWARE_ROUTING=${NCCL_IB_SUBNET_AWARE_ROUTING:-1} \\
+        -e NCCL_CUMEM_ENABLE=0 -e NCCL_DEBUG=$NCCL_DEBUG \\
+        -e NCCL_BUFFSIZE=${NCCL_BUFFSIZE:-4194304} -e NCCL_LL128_BUFFSIZE=${NCCL_LL128_BUFFSIZE:--2} \\
+        -e NCCL_PROTO=${NCCL_PROTO:-LL,LL128,Simple} -e NCCL_MAX_NCHANNELS=${NCCL_MAX_NCHANNELS:-32} \\
+        -e NCCL_DEBUG_SUBSYS=${NCCL_DEBUG_SUBSYS:-INIT} \\
+EOF
+)
+    _compat_nccl_env+=$'\n'
   fi
   cat <<EOF
         -e NODE_RANK=$rank -e NNODES=$NNODES \\
@@ -506,14 +593,7 @@ worker_env_lines() {
         -e NCCL_IB_HCA=$IB_HCA -e NCCL_SOCKET_IFNAME=$NCCL_SOCKET_IFNAME \\
         -e GLOO_SOCKET_IFNAME=$GLOO_SOCKET_IFNAME \\
         -e NCCL_P2P_DISABLE=$NCCL_P2P_DISABLE -e NCCL_SHM_DISABLE=$NCCL_SHM_DISABLE \\
-        -e NCCL_CROSS_NIC=${NCCL_CROSS_NIC:-1} \\
-        -e NCCL_IB_MERGE_NICS=${NCCL_IB_MERGE_NICS:-0} \\
-        -e NCCL_IB_SUBNET_AWARE_ROUTING=${NCCL_IB_SUBNET_AWARE_ROUTING:-1} \\
-        -e NCCL_CUMEM_ENABLE=0 -e NCCL_DEBUG=$NCCL_DEBUG \\
-        -e NCCL_BUFFSIZE=${NCCL_BUFFSIZE:-4194304} -e NCCL_LL128_BUFFSIZE=${NCCL_LL128_BUFFSIZE:--2} \\
-        -e NCCL_PROTO=${NCCL_PROTO:-LL,LL128,Simple} -e NCCL_MAX_NCHANNELS=${NCCL_MAX_NCHANNELS:-32} \\
-        -e NCCL_DEBUG_SUBSYS=${NCCL_DEBUG_SUBSYS:-INIT} \\
-        -e DSV41_MXFP8_BACKEND=${DSV41_MXFP8_BACKEND:-b12x} \\
+${_compat_nccl_env}        -e DSV41_MXFP8_BACKEND=${DSV41_MXFP8_BACKEND:-b12x} \\
         -e SGLANG_FLASHINFER_MOE_FUSED_FINALIZE=${SGLANG_FLASHINFER_MOE_FUSED_FINALIZE:-1} \\
         -e PYTORCH_CUDA_ALLOC_CONF=${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:False} \\
         ${wgid:+-e NCCL_IB_GID_INDEX=$wgid} \\
@@ -788,7 +868,82 @@ _start_detached_head_log_follower() {
   ) 2>/dev/null
 }
 
+ready_banner_seen() {
+  [[ -n "${SERVE_LOG:-}" && -f "$SERVE_LOG" && -n "${PORT:-}" ]] \
+    && grep -Fq -- "Ready: API on port ${PORT}" "$SERVE_LOG"
+}
+
+managed_container_env_value() {
+  local wanted="$1" token count=0 value=""
+  for token in ${EXTRA_CONTAINER_ENV:-}; do
+    [[ "$token" == *=* ]] || continue
+    [[ "${token%%=*}" == "$wanted" ]] || continue
+    count=$((count + 1))
+    value="${token#*=}"
+  done
+  [[ "$count" == 1 ]] || return 1
+  printf '%s' "$value"
+}
+
+validate_tp4_ring_policy() {
+  [[ "${DSV41_LAUNCHER:-}" == tp4 ]] || return 0
+  local required b12x_hca b12x_gid b12x_next_gid b12x_peer_maps
+  [[ "${TARGET_ENGINE_ID:-}" == deepseek_v4.1_flash_switchless ]] \
+    || { echo "TP4 launcher requires the deepseek_v4.1_flash_switchless managed target ID" >&2; return 1; }
+  for required in NCCL_NET NCCL_IB_DISABLE NCCL_P2P_DISABLE NCCL_SHM_DISABLE NCCL_PIP_SO \
+    NCCL_SKIP_TREE_CONNECT NCCL_IB_EXTENDED_IPV4_GIDS; do
+    [[ -n "${!required:-}" ]] \
+      || { echo "TP4 ring requires config.yaml-managed $required" >&2; return 1; }
+  done
+  [[ "$NCCL_SWITCHLESS_RING_ONLY" == 1 ]] \
+    || { echo "TP4 switchless requires target-owned NCCL_SWITCHLESS_RING_ONLY=1" >&2; return 1; }
+  [[ "$NCCL_SKIP_TREE_CONNECT" == 1 && "$NCCL_IB_EXTENDED_IPV4_GIDS" == 1 ]] \
+    || { echo "TP4 switchless requires config.yaml-managed skip-tree and extended IPv4 GID policy" >&2; return 1; }
+  [[ "$NCCL_PIP_SO" == /* ]] \
+    || { echo "TP4 switchless requires an absolute config.yaml-managed NCCL_PIP_SO" >&2; return 1; }
+  [[ "${NCCL_IB_GID_INDEX_FORCE:-}" =~ ^-?[0-9]+$ ]] \
+    || { echo "TP4 switchless requires config.yaml-derived NCCL_IB_GID_INDEX_FORCE" >&2; return 1; }
+  [[ "$NCCL_IB_SUBNET_PREFIX_LEN" =~ ^[1-9][0-9]?$ ]] \
+    && (( NCCL_IB_SUBNET_PREFIX_LEN <= 32 )) \
+    || { echo "TP4 ring-only mode requires a valid common.ring subnet prefix" >&2; return 1; }
+  local peer_rank peer_var
+  for peer_rank in 0 1 2 3; do
+    peer_var="PEER_HCA_RANK$peer_rank"
+    [[ -z "${!peer_var:-}" ]] \
+      || { echo "TP4 switchless NCCL does not consume $peer_var; remove the stale peer-HCA override" >&2; return 1; }
+  done
+  local env_name env_item
+  for env_name in EXTRA_DOCKER_ENV EXTRA_CONTAINER_ENV; do
+    for env_item in ${!env_name:-}; do
+      case "${env_item%%=*}" in
+        NCCL_IB_PEER_HCA|NCCL_IB_ADDR_RANGE)
+          echo "TP4 switchless NCCL does not consume ${env_item%%=*}; remove the stale route override" >&2
+          return 1
+          ;;
+      esac
+    done
+  done
+  b12x_hca="$(managed_container_env_value B12X_ROCE_HCA)" \
+    || { echo "TP4 B12X ring requires exactly one config.yaml-derived B12X_ROCE_HCA" >&2; return 1; }
+  b12x_gid="$(managed_container_env_value B12X_ROCE_GID_INDEX)" \
+    || { echo "TP4 B12X ring requires exactly one config.yaml-derived B12X_ROCE_GID_INDEX" >&2; return 1; }
+  b12x_next_gid="$(managed_container_env_value B12X_NEXT_ROCE_GID_INDEX)" \
+    || { echo "TP4 B12X ring requires exactly one config.yaml-derived B12X_NEXT_ROCE_GID_INDEX" >&2; return 1; }
+  b12x_peer_maps="$(managed_container_env_value B12X_ROCE_PEER_HCA_MAPS)" \
+    || { echo "TP4 B12X ring requires exactly one config.yaml-derived B12X_ROCE_PEER_HCA_MAPS" >&2; return 1; }
+  [[ -n "${IB_HCA:-}" && "$b12x_hca" == "$IB_HCA" ]] \
+    || { echo "TP4 B12X HCA order must match config.yaml-derived IB_HCA" >&2; return 1; }
+  [[ "$b12x_gid" =~ ^[0-9]+$ && "$b12x_next_gid" == "$b12x_gid" ]] \
+    || { echo "TP4 B12X and B12X_NEXT require the same non-negative config.yaml GID index" >&2; return 1; }
+  local -a b12x_rank_maps=()
+  IFS=';' read -r -a b12x_rank_maps <<<"$b12x_peer_maps"
+  [[ "${#b12x_rank_maps[@]}" == 4 && -n "${b12x_rank_maps[0]}" && -n "${b12x_rank_maps[1]}" && \
+     -n "${b12x_rank_maps[2]}" && -n "${b12x_rank_maps[3]}" ]] \
+    || { echo "TP4 B12X peer map must contain four config.yaml-derived rank maps" >&2; return 1; }
+}
+
 cmd_serve() {
+  validate_tp4_ring_policy || die "invalid config.yaml-derived TP4 ring policy"
   _validate_d2_recovery_lock_fd
   if switchless_ring_enabled || [[ "${NCCL_OVERLAY_PIP:-0}" == 1 ]]; then
     nccl_validate_config || die "invalid NCCL/loader configuration"
@@ -841,8 +996,7 @@ cmd_serve() {
 
   local GID_HEAD gi g
   local -a WORKER_GIDS=()
-  # Ring adaptation: kernel-1031 GID-table reorder makes auto-detection
-  # untrustworthy here; the fleet runs NCCL_IB_GID_INDEX=-1 as a hard rule.
+  # The ring-only preflight resolves each node's current RoCEv2 GID for worker launch.
   if [[ "$NCCL_SWITCHLESS_RING_ONLY" == 1 ]]; then
     GID_HEAD="$RING_GID_HEAD"
     WORKER_GIDS=("${RING_WORKER_GIDS[@]}")
@@ -853,10 +1007,19 @@ cmd_serve() {
     info "RoCEv2 GID indexes: FORCED head=$GID_HEAD workers=${WORKER_GIDS[*]} (NCCL_IB_GID_INDEX_FORCE)"
   else
     GID_HEAD=$(gid_index_local "$HEAD_IP" 2>/dev/null || true)
-    GID_HEAD="${GID_HEAD:-${NCCL_IB_GID_INDEX:-3}}"
+    if [[ -z "$GID_HEAD" ]]; then
+      [[ "${NCCL_IB_GID_INDEX:-}" =~ ^[0-9]+$ ]] \
+        || die "head 未检测到 RoCEv2 GID 且没有显式 NCCL_IB_GID_INDEX"
+      GID_HEAD="$NCCL_IB_GID_INDEX"
+    fi
     for gi in "${!WORKER_IPS[@]}"; do
       g=$(gid_index_remote "${WORKER_HOSTS[$gi]}" "${WORKER_IPS[$gi]}" | tr -d '\r' || true)
-      WORKER_GIDS+=("${g:-${NCCL_IB_GID_INDEX:-3}}")
+      if [[ -z "$g" ]]; then
+        [[ "${NCCL_IB_GID_INDEX:-}" =~ ^[0-9]+$ ]] \
+          || die "worker=${WORKER_HOSTS[$gi]} 未检测到 RoCEv2 GID 且没有显式 NCCL_IB_GID_INDEX"
+        g="$NCCL_IB_GID_INDEX"
+      fi
+      WORKER_GIDS+=("$g")
     done
     info "RoCEv2 GID indexes: head=$GID_HEAD workers=${WORKER_GIDS[*]}"
   fi
@@ -873,7 +1036,7 @@ cmd_serve() {
   push_spec_tables
   info "Starting workers (ranks 1..${#WORKER_IPS[@]}) first..."
   local idx=0 wip wgid rank worker_ctn
-  local NCCL_LIBRARY_PATH="$NCCL_HOST_DIR/libnccl.so.2"
+  local NCCL_LIBRARY_PATH="$NCCL_HOST_DIR/$NCCL_SO_NAME"
   if [[ -f "$NCCL_HOST_DIR/libnccl.so.2.30.7" ]]; then
     NCCL_LIBRARY_PATH="$NCCL_HOST_DIR/libnccl.so.2.30.7"
   fi
@@ -904,10 +1067,13 @@ cmd_serve() {
         NCCL_ARGS=(-v $nccl_host_mount_arg)
       fi
       SHIM_ARGS=()
-      if [ -f /opt/aicad-prod/lib/libncclpin.so ] && [ -d /opt/nccl-ringonly ]; then
+      if [ \"${NCCL_SWITCHLESS_RING_ONLY:-0}\" = 1 ]; then
         mkdir -p \$HOME/nccl-debug
-        SHIM_ARGS+=(-v /opt/aicad-prod/lib/libncclpin.so:/opt/libncclpin.so:ro
-          -v /opt/nccl-ringonly:/opt/nccl-ringonly:ro
+        SHIM_ARGS+=(-v \"\$HOME/nccl-debug:/nccl-debug:rw\")
+      elif [ -f $(printf '%q' "$NCCL_PIN_HOST") ] && [ -d $(printf '%q' "$NCCL_HOST_DIR") ]; then
+        mkdir -p \$HOME/nccl-debug
+        SHIM_ARGS+=(-v $(printf '%q' "$NCCL_PIN_HOST:$NCCL_PIN_CONTAINER:ro")
+          -v $(printf '%q' "$NCCL_HOST_DIR:$NCCL_CONTAINER_DIR:ro")
           -v \"\$HOME/nccl-debug:/nccl-debug:rw\")
       fi
       MODEL_SRC='$NFS_VOLUME'
@@ -995,7 +1161,9 @@ $(worker_env_lines "$wip" "$wgid" "$rank")
   while (( i < ${READY_TIMEOUT:-360} )); do
     # Ready = boot.py printed its banner, i.e. /health answered AND the smoke test
     # and warm-up passed (WARMUP=0 / SKIP_SMOKE=1 skip them; then it is /health alone).
-    if docker logs "$HEAD_CTN" 2>&1 | grep -q "^Ready: API on port ${PORT}" \
+    # Read the tee'd log file: grep -q on the long-running docker-logs pipe
+    # closes its input early, so pipefail can mistake docker's SIGPIPE for no READY.
+    if ready_banner_seen \
        || { [[ "${SKIP_SMOKE:-0}" == "1" ]] && curl -fsS --max-time 3 "http://127.0.0.1:${PORT}/health" >/dev/null 2>&1; }; then
       _stop_logtail
       trap - EXIT
@@ -1006,8 +1174,7 @@ $(worker_env_lines "$wip" "$wgid" "$rank")
       _start_detached_head_log_follower
       echo
       info "API is up on :$PORT (smoke + warm-up passed) — engine keeps running, this script is done."
-      # Ring adaptation: verify NCCL came up ring-only (RING-ONLY patch present,
-      # Tree disabled in the algorithm matrix, expected RoCE devices in use).
+      # Compare runtime NCCL evidence with the target policy and common.ring HCA list.
       # Non-fatal: a report is printed, the engine keeps running either way.
       "$ROOT/scripts/nccl_selfcheck.sh" || warn "NCCL 自检未通过 — 见上（./start.sh ncclcheck 可重跑）"
       cmd_status

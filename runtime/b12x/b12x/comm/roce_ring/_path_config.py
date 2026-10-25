@@ -11,20 +11,6 @@ MAX_PATH_COUNT = 4
 PEER_HCA_MAP_ENV = "B12X_ROCE_PEER_HCA_MAP"
 PEER_HCA_MAPS_ENV = "B12X_ROCE_PEER_HCA_MAPS"
 OPPOSITE_PATHS_ENV = "B12X_ROCE_OPPOSITE_PATHS"
-CANONICAL_TP4_HCAS = (
-    "rocep1s0f0",
-    "rocep1s0f1",
-    "roceP2p1s0f0",
-    "roceP2p1s0f1",
-)
-CANONICAL_TP4_FOUR_PATH_MAP = (
-    ((-1, -1), (0, 2), (0, 3, 2, 1), (1, 3)),
-    ((1, 3), (-1, -1), (0, 2), (0, 3, 2, 1)),
-    ((1, 2, 3, 0), (1, 3), (-1, -1), (0, 2)),
-    ((0, 2), (1, 2, 3, 0), (1, 3), (-1, -1)),
-)
-
-
 def opposite_path_count(world_size: int, hca_count: int) -> int:
     """Resolve the research-only opposite-rank path count from the environment."""
 
@@ -149,24 +135,47 @@ def validate_four_path_tp4_mapping(
     mapping: tuple[tuple[int, ...], ...],
     opposite_paths: int,
 ) -> None:
-    """Require the measured four-rank HCA order and reciprocal four-path map."""
+    """Validate the configured four-path structure without pinning site HCA names."""
 
     if opposite_paths != MAX_PATH_COUNT:
         return
-    if (
-        world_size != 4
-        or tuple(hca_names) != CANONICAL_TP4_HCAS
-        or mapping != CANONICAL_TP4_FOUR_PATH_MAP[rank]
-    ):
+    if world_size != 4 or len(hca_names) != MAX_PATH_COUNT or len(set(hca_names)) != MAX_PATH_COUNT:
         raise RuntimeError(
-            f"{OPPOSITE_PATHS_ENV}=4 requires the canonical four-rank HCA order "
-            "and peer-path mapping"
+            f"{OPPOSITE_PATHS_ENV}=4 requires four ranks and four distinct configured RDMA devices"
+        )
+    if rank < 0 or rank >= world_size or len(mapping) != world_size:
+        raise RuntimeError(f"{OPPOSITE_PATHS_ENV}=4 requires a complete configured rank map")
+    direct_hcas: set[int] = set()
+    for peer, paths in enumerate(mapping):
+        distance = (peer - rank) % world_size
+        expected_path_count = 0 if peer == rank else (
+            MAX_PATH_COUNT if distance == 2 else PATH_COUNT
+        )
+        if peer == rank:
+            valid = paths == (-1, -1)
+        else:
+            valid = (
+                len(paths) == expected_path_count
+                and len(set(paths)) == expected_path_count
+                and all(0 <= hca < MAX_PATH_COUNT for hca in paths)
+            )
+            if distance == 2:
+                valid = valid and set(paths) == set(range(MAX_PATH_COUNT))
+            else:
+                overlap = direct_hcas.intersection(paths)
+                valid = valid and not overlap
+                direct_hcas.update(paths)
+        if not valid:
+            raise RuntimeError(
+                f"{OPPOSITE_PATHS_ENV}=4 has an invalid configured peer map for rank {rank}, peer {peer}"
+            )
+    if direct_hcas != set(range(MAX_PATH_COUNT)):
+        raise RuntimeError(
+            f"{OPPOSITE_PATHS_ENV}=4 requires the configured direct-neighbor paths to cover four distinct RDMA devices"
         )
 
 
 __all__ = [
-    "CANONICAL_TP4_FOUR_PATH_MAP",
-    "CANONICAL_TP4_HCAS",
     "MAX_PATH_COUNT",
     "OPPOSITE_PATHS_ENV",
     "PATH_COUNT",

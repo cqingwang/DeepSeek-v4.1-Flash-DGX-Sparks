@@ -1,5 +1,7 @@
 # Build identity — what the reference fleet actually runs
 
+This is a historical reference-fleet snapshot for comparing the measured profile. It is not the active workspace ring configuration: the parent Spark repository owns physical topology in `spark/config.yaml.common.ring` and generates managed target environments.
+
 Recorded 2026-09-13 from the live deployment. Use this to tell whether your
 build is the same one the `[measured]` numbers in `.env.tp4.ring.example`
 and `README-dsv41.md` came from.

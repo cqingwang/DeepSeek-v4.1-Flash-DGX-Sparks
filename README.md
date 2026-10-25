@@ -2,6 +2,8 @@
 
 <p align="center">A measured TP4 serving profile for <a href="https://huggingface.co/deepseek-ai/DeepSeek-V4.1-Flash">deepseek-ai/DeepSeek-V4.1-Flash</a> (native weights, SGLang, DSpark) on four NVIDIA DGX Spark (GB10) nodes, built on top of the MiaAI-Lab recipe.</p>
 
+> In this workspace, the Spark parent repository manages deployment. The active physical topology lives in `spark/config.yaml.common.ring`; target/backend policy lives on the corresponding engine entry and `spark/program.py` derives the managed launcher values. The checked-in `.env` examples and measurements are reference-fleet/standalone material, not a second source of site ring settings. Use the parent `spark/deploy.sh` entry point for the managed target.
+
 ## Credits
 
 This repository is a downstream profile of **[MiaAI-Lab/DeepSeek-v4.1-Flash-DGX-Sparks](https://github.com/MiaAI-Lab/DeepSeek-v4.1-Flash-DGX-Sparks)** by Mia (MiaAI-Lab). The launcher (`start.sh`, `start-tp4.sh`, `boot.py`), the Engram NVMe row store, the MXFP8 b12x routing, the memory model in `docs/chunked-prefill-memory.md`, the thinking alias, the output cap, the loop abort and the overall deployment design are her work, kept here with full git history and under the same licence. The original README is preserved as [`docs/README-upstream.md`](docs/README-upstream.md); read it first for the fleet setup (NFS share, Engram packing, fabric, 3-node profile).
@@ -89,7 +91,7 @@ Every earlier measurement, the per-stage tables and the experiments that were tr
 | Verify length | `DSV41_VERIFY_CAP=conf:0.1`, `DSV41_ROUTER_LIVE=1` | verifies only the drafts the confidence head expects to survive; the other verify rows reuse the anchor row's experts inside the router kernel, so they read no extra weights; greedy outputs identical |
 | Kernels | `DSV41_SHARED_PAD_K=1`, `DSV41_WO_A_W8=1`, `DSV41_WO_A_W8_MID=1`, `DSV41_WO_A_W8_DROP=1`, `DSV41_DRAFT_HEAD_FP8=1` | shared expert kept on the b12x kernel; `wo_a` and the draft LM head read exact fp8 twins of their weights |
 | Replicated linears | `DSV41_REPLICATED_SPLIT=wqkv_a,engram.wkv`, `DSV41_DRAFT_MAIN_PROJ_SPLIT=1`, `DSV41_SPLIT_COMPACT_GATHER=1` | layers every rank computed in full are split by columns across ranks and all-gathered; enabled only where bit-identical on all ranks. A rank with a narrower slice runs its GEMM on a window of the widest slice's width, so no pad precedes the gather, and with the compact gather each rank sends only its own columns, which RoCEnante writes in place (no pad, reorder or cat; checked byte for byte against the old path per layer and row count at boot) |
-| Transport | `SGLANG_ROCE_ALLREDUCE=1`, `SGLANG_ROCE_MAX_SIZE=2097152`, `DSV41_ROCE_GATHER=2097152`, `B12X_ROCE_HCA=rocep1s0f0,roceP2p1s0f0` | TP all-reduces and all-gathers up to 2 MiB over the one-shot RDMA kernel on both rails |
+| Transport | The managed target reads
 | Prefill | `CHUNKED_PREFILL_SIZE=8192`, `MEM_FRACTION_STATIC=HEAD_MEM_FRACTION_STATIC=0.78`, `DSV41_INDEXER_CHUNKED=1`, `SPARK_PREFILL_TP_SPLIT=1` | bounded indexer transient (sglang#39187) plus the SG18 row split across ranks from 32k context; 8192-token chunks are 17-28 % faster on 400K-1M cold prompts, and the 0.78 fraction gives back the ~3 GiB the larger chunk costs at 1M (at 0.80 the head dropped to 2.7 GiB available) |
 | Multi-user | `--prefill-decode-interval 2`, `DSV41_PREFILL_BYPASS=256` | a short request that arrives during a long cold prefill is admitted next to the in-flight chunk and decoded between chunks: answered in 4.6 s instead of after the prefill (80 s at 400K); the admission adapter only acts after the engine's own memory check and reads only rank-identical state |
 | Prefix cache | `--swa-prefix-tails 128` | room for 128 sliding-window prefix tails instead of 64: a long session stays cached when another long session runs (388K revisit 1.5 s instead of an 89 s re-prefill); costs KV pool |
@@ -147,7 +149,7 @@ With `NFS_REUSE_EXPORT=1` the checkpoint is published into the export with hardl
 
 ## Quick start
 
-Same launcher as upstream; read [`docs/README-upstream.md`](docs/README-upstream.md) first for the fleet setup (NFS share, Engram packing, fabric). `pack` needs the checkpoint, so download it before the first `pack`.
+For an independent clone, the launcher follows upstream; read [`docs/README-upstream.md`](docs/README-upstream.md) first for the fleet setup (NFS share, Engram packing, fabric). In this workspace, use the parent `spark/deploy.sh` so topology and network values come from the shared config. `pack` needs the checkpoint, so download it before the first `pack`.
 
 ```bash
 cp .env.tp4.example .env.tp4          # fill in HEAD_IP / WORKER_* / MODEL_DIR / fabric

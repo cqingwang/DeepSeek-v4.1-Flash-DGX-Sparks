@@ -1,5 +1,7 @@
 # DeepSeek-V4.1-Flash（SGLang）· 4× DGX Spark TP4 · 无交换机环网
 
+> 本仓库在当前工作区由 Spark 父仓受管部署。活动拓扑与网络参数的唯一来源是 `spark/config.yaml.common.ring`，target/backend 策略在对应 engine 项中声明，再由 `spark/program.py` 和 `spark/deploy.sh` 派生并写入受管 `.env`。物理布线与所有 TP4 runtime rank 固定为 A→B→C→D→A，不允许 target 置换节点。下方 `.env` 示例和历史测量记录用于独立部署参考，不是当前站点的第二份环网配置；使用本工作区时从父仓部署入口启动。
+
 在 **4× NVIDIA DGX Spark（GB10）无交换机 RoCE 环网**上以 **SGLang TP4** 部署
 **deepseek-ai/DeepSeek-V4.1-Flash**（552B MoE、8B/16B 激活、MXFP4 experts、
 1M 上下文、DSpark 投机解码）的生产方案。
@@ -53,7 +55,7 @@
 
 **传输 / 拓扑**
 
-- ring-only NCCL 2.30.7 + libncclpin 核绑定 shim（`LD_PRELOAD`）；`NCCL_IB_GID_INDEX=-1` 铁律；四边接线的 per-rank `PEER_HCA`（`./start-tp4.sh ncclcheck` 可自检 ring-only 是否真的生效）。该库是 **LuZ 谱系**构建（靠 NCCL 算法矩阵 `Tree=0 / Ring=1` 实现 ring-only），**不是** SparkRing 的补丁库——见 [BUILD-IDENTITY.md](BUILD-IDENTITY.md)
+- 当前受管 target 的 NCCL bundle 路径与 SHA-256 来自父仓 engine 配置，并以只读方式挂载。物理网卡和子网来自 `common.ring`；该 LuZ/SparkRing NCCL build 按 peer RoCE GID 子网选择端口，不消费 `NCCL_IB_PEER_HCA`，因此受管 DeepSeek NCCL 环境不注入 per-rank peer-HCA 覆盖。`NCCL_IB_GID_INDEX_FORCE=-1` 是 target 的 GID 自动选择策略，最终使用的 GID index 由父仓环网配置校验。B12X 对端路径表是独立 backend 合同，仍从同一 `common.ring` 派生。独立运行示例与 [BUILD-IDENTITY.md](BUILD-IDENTITY.md) 的 reference-fleet build 均为历史资料，不代表当前站点配置。
 - 节点本地权重（无 NFS）、loopback 引擎 + 并发代理、多别名 served name（旧名保留，消费端零改动）
 
 **为环网做的调优**（每项单独 A/B，`[measured]` 数据见配置示例头部注释）
@@ -77,7 +79,7 @@
 - `runtime/` — 构建期补丁（`patch_encoding_dsv41.py`：容忍文本里的 image 占位 token——上游会抛 500 且自我持续）
 - `scripts/` — SSH 助手、verify/ 探针集、自愈监控 + systemd 单元、`gate.sh`、`nccl_selfcheck.sh`
 - `bench/` — 门禁套件、vision 门禁、事件矩阵 + 重叠窗分析、散文、GSM8K、第三方形状并发扫描
-- `.env.tp4.ring.example` — **本仓库实际运行的配置**（脱敏，每处偏离上游都带实测理由）
+- `.env.tp4.ring.example` — 历史参考机队的 serving 配置快照；当前工作区的站点拓扑由 Spark 父仓管理
 - `BUILD-IDENTITY.md` — 镜像 ID、SGLang commit、组件版本、逐文件 md5
 - `docs/` — 部署方案、上游 ISSUE/PR 调研、基准横向对比
 

@@ -9,6 +9,8 @@ Default-off is the property that matters most here: with NCCL_SWITCHLESS_RING_ON
 unset every generated argument list must be byte-identical to before this change.
 """
 import os
+import re
+import hashlib
 import subprocess
 
 import tempfile
@@ -22,22 +24,58 @@ NCCL_SH = ROOT / "files" / "nccl.sh"
 def launcher_source():
     """start.sh from the variable defaults through the helper functions, no dispatch."""
     source = (ROOT / "start.sh").read_text()
-    start = source.index("HEAD_IP=")
+    start = source.index('if [[ "${DSV41_LAUNCHER:-}" == tp4 ]]; then')
     end = source.index('case "$CMD" in')
     return "set -euo pipefail\n" + source[start:end]
 
 
 BASE_SETTINGS = {
     "NCCL_HOST_DIR": "/nonexistent",
+    "NCCL_CONTAINER_DIR": "/nccl",
+    "NCCL_SO_NAME": "libnccl.so.2",
+    "NCCL_PIN_HOST": "/nonexistent/libncclpin.so",
+    "NCCL_PIN_CONTAINER": "/opt/libncclpin.so",
     "NNODES": "4",
     "TP_SIZE": "4",
     "EP_SIZE": "2",
     # 该 fixture 模拟 start-tp4.sh；普通 start.sh 的 EP1/2 拒绝由集成测试覆盖。
     "DSV41_LAUNCHER": "tp4",
+    "WORKER_USER": "chan",
+    "FABRIC_IFACE": "enp1s0f0np0",
+    "GLOO_SOCKET_IFNAME": "wlP9s9",
+    "NCCL_SOCKET_IFNAME": "wlP9s9",
+    "NCCL_IB_SUBNET_PREFIX_LEN": "30",
     "NCCL_NET": "IB",
     "NCCL_IB_DISABLE": "0",
     "IB_HCA": "rocep1s0f0,rocep1s0f1",
+    "TARGET_ENGINE_ID": "deepseek_v4.1_flash_switchless",
 }
+
+MANAGED_TP4_ENV = {
+    "NCCL_NET": "IB",
+    "NCCL_IB_DISABLE": "0",
+    "NCCL_P2P_DISABLE": "1",
+    "NCCL_SHM_DISABLE": "1",
+    "NCCL_PIP_SO": "/opt/sglang/lib/python3.12/site-packages/nvidia/nccl/lib/libnccl.so.2",
+    "NCCL_SKIP_TREE_CONNECT": "1",
+    "NCCL_IB_EXTENDED_IPV4_GIDS": "1",
+    "NCCL_IB_GID_INDEX_FORCE": "-1",
+    "EXTRA_DOCKER_ENV": " ".join((
+        "NCCL_ALGO=RING", "NCCL_CROSS_NIC=1", "NCCL_IB_MERGE_NICS=0",
+        "NCCL_IB_SUBNET_AWARE_ROUTING=1", "NCCL_CUMEM_ENABLE=0", "NCCL_DEBUG=INFO",
+        "NCCL_BUFFSIZE=8388608", "NCCL_LL128_BUFFSIZE=262144", "NCCL_PROTO=^LL128",
+        "NCCL_MAX_NCHANNELS=4", "NCCL_DEBUG_SUBSYS=INIT,ENV", "NCCL_MIN_NCHANNELS=4",
+        "NCCL_P2P_LEVEL=SYS", "NCCL_IB_TC=106", "NCCL_IB_PRESERVE_PCI_DOMAIN=1",
+        "NCCL_IB_ROUTE_DIAGNOSTICS=1", "NCCL_IB_QPS_PER_CONNECTION=1",
+    )),
+}
+
+B12X_RING_ENV = " ".join((
+    "B12X_ROCE_HCA=rocep1s0f0,rocep1s0f1,roceP2p1s0f0,roceP2p1s0f1",
+    "B12X_ROCE_GID_INDEX=7",
+    "B12X_NEXT_ROCE_GID_INDEX=7",
+    "B12X_ROCE_PEER_HCA_MAPS=0=1/3,2=0/3,3=0/2;0=1/3,2=0/2,3=0/3;0=1/2,1=0/2,3=1/3;0=0/2,1=1/2,2=1/3",
+))
 
 
 def shell(code, directory, settings=None):
@@ -64,6 +102,7 @@ def nccl_shell(code, settings=None):
     """Run a snippet with files/nccl.sh sourced (no launcher)."""
     env = dict(os.environ)
     env.update(BASE_SETTINGS)
+    env.update(MANAGED_TP4_ENV)
     env.update(settings or {})
     return subprocess.run(
         ["bash", "-c", 'set -uo pipefail\nsource "$0"\n' + code, str(NCCL_SH)],
@@ -145,14 +184,81 @@ class SwitchOffByDefaultTests(unittest.TestCase):
         self.assertNotIn("NCCL_PIP_SO", out)
 
 
+class ManagedB12xPolicyTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(dir=ROOT / "tests")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def run_policy(self, extra_container_env=B12X_RING_ENV, **overrides):
+        settings = {
+            **BASE_SETTINGS,
+            **MANAGED_TP4_ENV,
+            "NCCL_SWITCHLESS_RING_ONLY": "1",
+            "NCCL_IB_GID_INDEX_FORCE": "-1",
+            "NCCL_SHA256": "a" * 64,
+            "IB_HCA": "rocep1s0f0,rocep1s0f1,roceP2p1s0f0,roceP2p1s0f1",
+            "EXTRA_CONTAINER_ENV": extra_container_env,
+        }
+        settings.update(overrides)
+        return shell("validate_tp4_ring_policy", Path(self.tmp.name), settings)
+
+    def test_managed_tp4_requires_generated_b12x_ring_values(self):
+        result = self.run_policy()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+        missing = B12X_RING_ENV.replace("B12X_ROCE_PEER_HCA_MAPS=", "UNMANAGED_PEER_MAP=")
+        result = self.run_policy(extra_container_env=missing)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("B12X_ROCE_PEER_HCA_MAPS", result.stderr)
+
+    def test_managed_tp4_rejects_b12x_values_that_diverge_from_ring_source(self):
+        result = self.run_policy(TARGET_ENGINE_ID="wrong-target")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("managed target ID", result.stderr)
+
+        result = self.run_policy(IB_HCA="wrong0,wrong1,wrong2,wrong3")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("B12X HCA order must match", result.stderr)
+
+        mismatch = B12X_RING_ENV.replace("B12X_NEXT_ROCE_GID_INDEX=7", "B12X_NEXT_ROCE_GID_INDEX=3")
+        result = self.run_policy(extra_container_env=mismatch)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("same non-negative config.yaml GID index", result.stderr)
+
+    def test_managed_tp4_rejects_duplicate_or_incomplete_rank_maps(self):
+        duplicate = B12X_RING_ENV + " B12X_ROCE_GID_INDEX=7"
+        result = self.run_policy(extra_container_env=duplicate)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("exactly one config.yaml-derived B12X_ROCE_GID_INDEX", result.stderr)
+
+        incomplete = B12X_RING_ENV.rsplit(";", 1)[0]
+        result = self.run_policy(extra_container_env=incomplete)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("four config.yaml-derived rank maps", result.stderr)
+
+
 class SwitchOnTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(dir=ROOT / "tests")
-        self.on = dict(BASE_SETTINGS)
+        self.on = dict(BASE_SETTINGS, **MANAGED_TP4_ENV)
         self.on.update({
             "NCCL_SWITCHLESS_RING_ONLY": "1",
             "NCCL_OVERLAY_PIP": "1",
             "NCCL_HOST_DIR": "/nonexistent",
+            "NCCL_SHA256": "a" * 64,
+            "NCCL_SKIP_TREE_CONNECT": "1",
+            "IB_HCA": "rocep1s0f0,rocep1s0f1,roceP2p1s0f0,roceP2p1s0f1",
+            "EXTRA_CONTAINER_ENV": B12X_RING_ENV,
+            "EXTRA_DOCKER_ENV": " ".join((
+                "NCCL_ALGO=RING", "NCCL_CROSS_NIC=1", "NCCL_IB_MERGE_NICS=0",
+                "NCCL_IB_SUBNET_AWARE_ROUTING=1", "NCCL_CUMEM_ENABLE=0", "NCCL_DEBUG=INFO",
+                "NCCL_BUFFSIZE=8388608", "NCCL_LL128_BUFFSIZE=262144", "NCCL_PROTO=^LL128",
+                "NCCL_MAX_NCHANNELS=4", "NCCL_DEBUG_SUBSYS=INIT,ENV", "NCCL_MIN_NCHANNELS=4",
+                "NCCL_P2P_LEVEL=SYS", "NCCL_IB_TC=106", "NCCL_IB_PRESERVE_PCI_DOMAIN=1",
+                "NCCL_IB_ROUTE_DIAGNOSTICS=1", "NCCL_IB_QPS_PER_CONNECTION=1",
+            )),
         })
 
     def tearDown(self):
@@ -162,10 +268,122 @@ class SwitchOnTests(unittest.TestCase):
         out = check(nccl_shell('''
           a=(); switchless_ring_args a; printf '%s\\n' "${a[@]}"
         ''', self.on))
-        for expected in ("NCCL_SWITCHLESS_RING_ONLY=1", "NCCL_ALGO=Ring",
-                         "NCCL_SKIP_TREE_CONNECT=1", "NCCL_IB_SUBNET_PREFIX_LEN=24",
-                         "NCCL_MIN_NCHANNELS=4", "NCCL_P2P_LEVEL=SYS"):
+        for expected in ("NCCL_SWITCHLESS_RING_ONLY=1", "NCCL_SKIP_TREE_CONNECT=1",
+                         "NCCL_IB_SUBNET_PREFIX_LEN=30"):
             self.assertIn(expected, out)
+        for config_owned in ("NCCL_ALGO=", "NCCL_MIN_NCHANNELS=", "NCCL_P2P_LEVEL="):
+            self.assertNotIn(config_owned, out)
+
+    def test_managed_transport_env_is_injected_once_per_rank(self):
+        library_dir = Path(self.tmp.name) / "managed-nccl"
+        library_dir.mkdir()
+        (library_dir / "libnccl.so.2.30.7").write_text("ring-only fixture")
+        managed = " ".join((
+            "NCCL_ALGO=RING", "NCCL_IB_TIMEOUT=1000", "NCCL_IB_RETRY_CNT=7",
+            "NCCL_IGNORE_CPU_AFFINITY=1", "NCCL_MIN_NCHANNELS=4",
+            "NCCL_MAX_NCHANNELS=4", "NCCL_NET_PLUGIN=none", "NCCL_CUMEM_ENABLE=0", "NCCL_P2P_LEVEL=SYS",
+            "NCCL_BUFFSIZE=8388608", "NCCL_LL128_BUFFSIZE=262144", "NCCL_PROTO=^LL128",
+            "NCCL_CROSS_NIC=1", "NCCL_IB_MERGE_NICS=0", "NCCL_DEBUG=INFO",
+            "NCCL_DEBUG_SUBSYS=INIT,ENV", "NCCL_IB_SUBNET_AWARE_ROUTING=1",
+            "NCCL_IB_TC=106", "NCCL_IB_PRESERVE_PCI_DOMAIN=1",
+            "NCCL_IB_ROUTE_DIAGNOSTICS=1", "NCCL_IB_QPS_PER_CONNECTION=1",
+        ))
+        settings = dict(self.on, NCCL_HOST_DIR=str(library_dir), NCCL_SKIP_TREE_CONNECT="1",
+                        NCCL_IB_EXTENDED_IPV4_GIDS="1", EXTRA_DOCKER_ENV=managed)
+        head = check(shell('''
+          a=(); docker_common_args a "$HEAD_IP" 3
+          printf '%s\\n' "${a[@]}"
+        ''', Path(self.tmp.name), settings))
+        worker = check(shell('worker_env_lines "$HEAD_IP" 3 1', Path(self.tmp.name), settings))
+        for rank_name, output in (("head", head), ("worker", worker)):
+            keys = re.findall(r"(?:^|\s)-e\s+[\"']?([A-Z][A-Z0-9_]*)=", output)
+            duplicate_keys = sorted({key for key in keys if keys.count(key) > 1})
+            self.assertEqual(duplicate_keys, [], f"{rank_name} duplicates managed NCCL keys")
+            for key in ("NCCL_ALGO", "NCCL_MIN_NCHANNELS", "NCCL_MAX_NCHANNELS",
+                        "NCCL_CROSS_NIC", "NCCL_DEBUG", "NCCL_IB_SUBNET_AWARE_ROUTING",
+                        "NCCL_IB_EXTENDED_IPV4_GIDS", "NCCL_IB_TC",
+                        "NCCL_IB_PRESERVE_PCI_DOMAIN", "NCCL_IB_ROUTE_DIAGNOSTICS",
+                        "NCCL_IB_QPS_PER_CONNECTION"):
+                self.assertIn(key, keys)
+
+    def test_tp4_managed_nccl_rejects_unconsumed_peer_hca_overrides(self):
+        for rank in range(4):
+            with self.subTest(rank=rank):
+                settings = dict(self.on, **{f"PEER_HCA_RANK{rank}": "1=rocep1s0f0;3=rocep1s0f1"})
+                result = shell("validate_tp4_ring_policy", Path(self.tmp.name), settings)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(f"does not consume PEER_HCA_RANK{rank}", result.stderr)
+        for setting in (
+            {"EXTRA_DOCKER_ENV": "NCCL_IB_PEER_HCA=1=rocep1s0f0"},
+            {"EXTRA_CONTAINER_ENV": "NCCL_IB_ADDR_RANGE=10.0.0.0/24"},
+        ):
+            with self.subTest(setting=setting):
+                result = shell("validate_tp4_ring_policy", Path(self.tmp.name), dict(self.on, **setting))
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("does not consume", result.stderr)
+
+    def test_managed_head_and_worker_do_not_emit_peer_hca_override(self):
+        stale_peer = "1=rocep1s0f0;3=rocep1s0f1"
+        library_dir = Path(self.tmp.name) / "managed-nccl"
+        library_dir.mkdir()
+        (library_dir / "libnccl.so.2.30.7").write_text("ring-only fixture")
+        settings = dict(self.on, NCCL_HOST_DIR=str(library_dir), PEER_HCA_RANK0=stale_peer,
+                        PEER_HCA_RANK1=stale_peer)
+        head = check(shell('''
+          a=(); docker_common_args a "$HEAD_IP" 3
+          printf '%s\n' "${a[@]}"
+        ''', Path(self.tmp.name), settings))
+        worker = check(shell('worker_env_lines "$HEAD_IP" 3 1', Path(self.tmp.name), settings))
+        self.assertNotIn("NCCL_IB_PEER_HCA", head)
+        self.assertNotIn("NCCL_IB_PEER_HCA", worker)
+
+    def test_tp4_ring_policy_requires_values_from_parent_config(self):
+        settings = dict(
+            self.on,
+            NCCL_NET="IB",
+            NCCL_IB_DISABLE="0",
+            NCCL_P2P_DISABLE="1",
+            NCCL_SHM_DISABLE="1",
+            NCCL_PIP_SO="/sglang/nvidia/nccl/lib/libnccl.so.2",
+            NCCL_SKIP_TREE_CONNECT="1",
+            NCCL_IB_EXTENDED_IPV4_GIDS="1",
+            NCCL_IB_GID_INDEX_FORCE="-1",
+        )
+        check(shell("validate_tp4_ring_policy", Path(self.tmp.name), settings))
+
+        for key in (
+            "NCCL_NET",
+            "NCCL_IB_DISABLE",
+            "NCCL_P2P_DISABLE",
+            "NCCL_SHM_DISABLE",
+            "NCCL_PIP_SO",
+            "NCCL_SKIP_TREE_CONNECT",
+            "NCCL_IB_EXTENDED_IPV4_GIDS",
+        ):
+            missing = dict(settings)
+            missing.pop(key)
+            result = shell("validate_tp4_ring_policy", Path(self.tmp.name), missing)
+            self.assertNotEqual(result.returncode, 0, f"TP4 accepted missing config value {key}")
+
+    def test_tp4_ring_policy_rejects_missing_target_transport_map_values(self):
+        settings = dict(
+            self.on,
+            NCCL_NET="IB",
+            NCCL_IB_DISABLE="0",
+            NCCL_P2P_DISABLE="1",
+            NCCL_SHM_DISABLE="1",
+            NCCL_PIP_SO="/sglang/nvidia/nccl/lib/libnccl.so.2",
+            NCCL_SKIP_TREE_CONNECT="1",
+            NCCL_IB_EXTENDED_IPV4_GIDS="1",
+            NCCL_IB_GID_INDEX_FORCE="-1",
+            EXTRA_DOCKER_ENV="NCCL_IB_TIMEOUT=1000",
+        )
+        result = nccl_shell("nccl_validate_config", settings)
+        self.assertNotEqual(
+            result.returncode,
+            0,
+            "managed TP4 accepted absent NCCL transport values by using helper defaults",
+        )
 
     def test_env_string_and_array_agree(self):
         """The worker heredoc and the head array must inject the same variables."""
@@ -184,13 +402,36 @@ class SwitchOnTests(unittest.TestCase):
           eval "set -- $(switchless_ring_env_string)"
           printf '[%s]\\n' "$@"
         ''', self.on))
-        self.assertIn("[NCCL_ALGO=Ring]", out)
+        self.assertIn("[NCCL_SKIP_TREE_CONNECT=1]", out)
+        self.assertNotIn("[NCCL_ALGO=", out)
 
     def test_worker_env_mirrors_the_ring_environment(self):
         out = check(shell('worker_env_lines "$HEAD_IP" 3 1', Path(self.tmp.name), self.on))
-        for expected in ("NCCL_SWITCHLESS_RING_ONLY=1", "NCCL_ALGO=Ring",
+        for expected in ("NCCL_SWITCHLESS_RING_ONLY=1", "NCCL_ALGO=RING",
                          "NCCL_SKIP_TREE_CONNECT=1", "NCCL_P2P_LEVEL=SYS"):
             self.assertIn(expected, out)
+
+    def test_switchless_worker_does_not_preload_the_legacy_NCCL_path(self):
+        settings = dict(self.on, NCCL_CONTAINER_DIR="/opt/nccl-ringonly",
+                        NCCL_SO_NAME="libnccl.so.2", NCCL_PIN_CONTAINER="/opt/libncclpin.so",
+                        NCCL_SHA256="a" * 64)
+        out = check(shell('worker_env_lines "$HEAD_IP" 3 1', Path(self.tmp.name), settings))
+        self.assertNotIn("LD_PRELOAD=", out)
+
+    def test_extended_gid_worker_flags_match_the_target_transport_once(self):
+        settings = dict(self.on, NCCL_IB_EXTENDED_IPV4_GIDS="1")
+        out = check(shell(
+            'source "$ROOT/files/nccl.sh"; worker_env_lines "$HEAD_IP" 3 1',
+            Path(self.tmp.name), settings,
+        ))
+        keys = re.findall(r"(?:^|\s)-e\s+[\"']?([A-Z][A-Z0-9_]*)=", out)
+        for key in (
+            "NCCL_IB_EXTENDED_IPV4_GIDS",
+            "NCCL_IB_PRESERVE_PCI_DOMAIN",
+            "NCCL_IB_ROUTE_DIAGNOSTICS",
+            "NCCL_IB_QPS_PER_CONNECTION",
+        ):
+            self.assertEqual(keys.count(key), 1, out)
 
     def test_head_uses_the_overlay_mount_not_ld_library_path(self):
         nccl_dir = Path(self.tmp.name) / "nccl"
@@ -219,6 +460,26 @@ class ValidationTests(unittest.TestCase):
                 check(self.run_validation({"NCCL_SWITCHLESS_RING_ONLY": "1",
                                            "NCCL_OVERLAY_PIP": "1", "EP_SIZE": ep}))
 
+    def test_ring_requires_a_valid_common_subnet_prefix(self):
+        for prefix in ("", "0", "33", "auto"):
+            with self.subTest(prefix=prefix):
+                result = self.run_validation({"NCCL_SWITCHLESS_RING_ONLY": "1",
+                                              "NCCL_OVERLAY_PIP": "1",
+                                              "NCCL_IB_SUBNET_PREFIX_LEN": prefix})
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("common.ring", result.stderr)
+
+    def test_ring_launcher_requires_parent_managed_library_identity(self):
+        with tempfile.TemporaryDirectory(dir=ROOT / "tests") as directory:
+            for name in ("NCCL_HOST_DIR", "NCCL_SHA256"):
+                with self.subTest(name=name):
+                    settings = dict(BASE_SETTINGS)
+                    settings.update(MANAGED_TP4_ENV)
+                    settings.update(NCCL_SWITCHLESS_RING_ONLY="1", **{name: ""})
+                    result = shell("true", Path(directory), settings)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn(name, result.stderr)
+
     def test_rejects_ep_above_tp_and_zero(self):
         for ep in ("5", "0", "x"):
             with self.subTest(ep=ep):
@@ -235,7 +496,8 @@ class ValidationTests(unittest.TestCase):
                 self.assertNotEqual(result.returncode, 0)
 
     def test_rejects_transport_that_is_not_the_ring(self):
-        for settings in ({"NCCL_ALGO": "Tree"}, {"NCCL_NET": "Socket"},
+        bad_algo = MANAGED_TP4_ENV["EXTRA_DOCKER_ENV"].replace("NCCL_ALGO=RING", "NCCL_ALGO=Tree")
+        for settings in ({"EXTRA_DOCKER_ENV": bad_algo}, {"NCCL_NET": "Socket"},
                          {"NCCL_IB_DISABLE": "1"}, {"NCCL_OVERLAY_PIP": "0"}):
             with self.subTest(**settings):
                 result = self.run_validation(dict({"NCCL_SWITCHLESS_RING_ONLY": "1",
@@ -243,8 +505,9 @@ class ValidationTests(unittest.TestCase):
                 self.assertNotEqual(result.returncode, 0)
 
     def test_rejects_channel_range_that_is_empty(self):
+        bad_channels = MANAGED_TP4_ENV["EXTRA_DOCKER_ENV"].replace("NCCL_MIN_NCHANNELS=4", "NCCL_MIN_NCHANNELS=8")
         result = self.run_validation({"NCCL_SWITCHLESS_RING_ONLY": "1", "NCCL_OVERLAY_PIP": "1",
-                                      "NCCL_MIN_NCHANNELS": "8", "NCCL_MAX_NCHANNELS": "4"})
+                                      "EXTRA_DOCKER_ENV": bad_channels})
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("NCCL_MIN_NCHANNELS", result.stderr)
 
@@ -349,13 +612,32 @@ class PreflightTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("no readable library", result.stderr)
 
+    def test_rejects_a_library_with_the_wrong_pinned_sha256(self):
+        result = nccl_shell("docker() { return 0; }; nccl_preflight",
+                            {"NCCL_SWITCHLESS_RING_ONLY": "0", "NCCL_OVERLAY_PIP": "1",
+                             "NCCL_HOST_DIR": self.library("SWITCHLESS_RING_ONLY"),
+                             "NCCL_PIP_SO": "/sglang/nvidia/nccl/lib/libnccl.so.2",
+                             "NCCL_SHA256": "0" * 64, "IMAGE": "fixture-image"})
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("NCCL_SHA256 mismatch", result.stderr)
+
+    def test_accepts_a_library_matching_the_pinned_sha256(self):
+        contents = "SWITCHLESS_RING_ONLY"
+        result = nccl_shell("docker() { return 0; }; nccl_preflight",
+                            {"NCCL_SWITCHLESS_RING_ONLY": "0", "NCCL_OVERLAY_PIP": "1",
+                             "NCCL_HOST_DIR": self.library(contents),
+                             "NCCL_PIP_SO": "/sglang/nvidia/nccl/lib/libnccl.so.2",
+                             "NCCL_SHA256": hashlib.sha256(contents.encode()).hexdigest(),
+                             "IMAGE": "fixture-image"})
+        check(result)
+
     def test_is_free_when_the_switch_is_off(self):
         """A switched fabric may legitimately have no patched library at all."""
         check(nccl_shell("nccl_preflight",
                          {"NCCL_SWITCHLESS_RING_ONLY": "0", "NCCL_HOST_DIR": "/nonexistent"}))
 
     def test_worker_settings_maps_the_home_relative_path(self):
-        out = check(nccl_shell('nccl_worker_settings | head -1',
+        out = check(nccl_shell('nccl_worker_settings | sed -n \'1p\'',
                               {"NCCL_HOST_DIR": os.environ["HOME"] + "/nccl-2.30.7"}))
         self.assertIn('NCCL_HOST_DIR="$HOME"/nccl-2.30.7', out)
 
@@ -365,7 +647,8 @@ class PreflightTests(unittest.TestCase):
         self.assertIn("NCCL_HOST_DIR=/opt/nccl", out)
 
     def test_worker_settings_exports_the_ring_functions(self):
-        out = check(nccl_shell("nccl_worker_settings"))
+        out = check(nccl_shell("nccl_worker_settings", {"NCCL_SHA256": "a" * 64}))
+        self.assertIn(f"NCCL_SHA256={'a' * 64}", out)
         for function in ("switchless_ring_enabled", "nccl_library", "nccl_mount_args",
                          "ring_gid_index", "nccl_preflight"):
             self.assertIn(f"{function} ()", out)
@@ -382,6 +665,26 @@ class PreflightTests(unittest.TestCase):
 
 
 class SourceHygieneTests(unittest.TestCase):
+    def test_readiness_gate_checks_saved_log_without_sigpipe_pipeline(self):
+        source = (ROOT / "start.sh").read_text()
+        serve = source[source.index("cmd_serve()") :]
+        serve = serve[: serve.index("\n}\n")]
+        self.assertIn("if ready_banner_seen", serve)
+        self.assertNotIn('docker logs "$HEAD_CTN" 2>&1 | grep -q', serve)
+
+        with tempfile.TemporaryDirectory(dir=ROOT / "tests") as tmp:
+            log_path = Path(tmp) / "serve.log"
+            log_path.write_text(
+                "Ready: API on port 8888 (rank 0)\n" + "log line\n" * 20000
+            )
+            result = shell(
+                "ready_banner_seen && echo READY",
+                Path(tmp),
+                {"PORT": "8888", "SERVE_LOG": str(log_path)},
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn("READY", result.stdout)
+
     def test_nccl_sh_is_side_effect_free(self):
         """Sourcing it must not probe sysfs, docker or the filesystem."""
         result = subprocess.run(
@@ -430,6 +733,72 @@ class SourceHygieneTests(unittest.TestCase):
         self.assertIn("nccl_mount_args nccl_args", workers)
         self.assertIn("${nccl_args[@]}", workers)
         self.assertNotIn("LD_LIBRARY_PATH", workers)
+
+    def test_tp4_worker_docker_command_keeps_image_when_compat_env_is_empty(self):
+        with tempfile.TemporaryDirectory(dir=ROOT / "tests") as tmp:
+            directory = Path(tmp)
+            nccl_dir = directory / "nccl"
+            nccl_dir.mkdir()
+            (nccl_dir / "libnccl.so.2").write_text("fixture")
+            image = "dsv41-test:ring"
+            capture_path = directory / "worker-command.sh"
+            settings = {
+                **BASE_SETTINGS,
+                **MANAGED_TP4_ENV,
+                "NCCL_HOST_DIR": str(nccl_dir),
+                "NCCL_SHA256": "0" * 64,
+                "NCCL_SO_NAME": "libnccl.so.2",
+                "NCCL_CONTAINER_DIR": "/nccl",
+                "NCCL_PIN_HOST": "/unused/pin.so",
+                "NCCL_PIN_CONTAINER": "/pin.so",
+                "NCCL_SWITCHLESS_RING_ONLY": "1",
+                "NCCL_OVERLAY_PIP": "1",
+                "NCCL_IB_SUBNET_PREFIX_LEN": "30",
+                "IB_HCA": "rocep1s0f0,rocep1s0f1,roceP2p1s0f0,roceP2p1s0f1",
+                "IMAGE": image,
+                "WEIGHTS_MODE": "local",
+                "WORKER_MODEL_DIR": "/models/worker",
+                "WORKER_DIR": str(directory / "worker"),
+                "EXTRA_CONTAINER_ENV": B12X_RING_ENV,
+                "CAPTURE_PATH": str(capture_path),
+            }
+            script = r'''
+cmd_doctor() { return 0; }
+local_model_has_weights() { return 0; }
+_busy_gpu() { return 1; }
+overlay_image_present() { return 0; }
+nccl_validate_config() { return 0; }
+preflight_all_nodes() { RING_GID_HEAD=3; RING_WORKER_GIDS=(3 3 3); }
+push_spec_tables() { :; }
+api_key() { :; }
+docker() { :; }
+dual_pci_domain_env_string() { :; }
+remote_on() {
+  if [[ "$*" == *"docker run -d --name"* ]]; then
+    printf '%s' "$2" > "$CAPTURE_PATH"
+    exit 97
+  fi
+  return 0
+}
+remote_ok_on() { remote_on "$@" >/dev/null 2>&1; }
+cmd_serve
+'''
+            launched = shell(script, directory, settings)
+            self.assertEqual(launched.returncode, 97, launched.stdout + launched.stderr)
+            remote_command = capture_path.read_text()
+            docker_start = remote_command.index("docker run -d --name ")
+            docker_end = remote_command.index(f" {image} run\n", docker_start) + len(f" {image} run")
+            docker_command = remote_command[docker_start:docker_end]
+            probe = r'''docker() { printf '%s\0' "$@"; }
+NCCL_ARGS=()
+SHIM_ARGS=()
+MODEL_SRC=/models/worker
+''' + docker_command
+            parsed = subprocess.run(["bash", "-c", probe], text=True, capture_output=True, timeout=10)
+            self.assertEqual(parsed.returncode, 0, parsed.stderr)
+            args = parsed.stdout.split("\0")[:-1]
+            self.assertEqual(args[0], "run")
+            self.assertEqual(args[-2:], [image, "run"])
 
 
 class LocalWeightsTests(unittest.TestCase):
@@ -664,17 +1033,19 @@ class DualPciDomainTests(unittest.TestCase):
                              "IB_HCA": "a,b,c,d", "NCCL_IB_EXTENDED_IPV4_GIDS": "0"})
         self.assertEqual(result.stderr.strip(), "")
 
-    def test_extension_flags_reach_both_rank_paths(self):
-        """Head and workers build their own environment; both must carry the flags."""
-        on = dict(BASE_SETTINGS, NCCL_SWITCHLESS_RING_ONLY="1",
-                  IB_HCA="rocep1s0f0,rocep1s0f1,roceP2p1s0f0,roceP2p1s0f1",
-                  NCCL_IB_EXTENDED_IPV4_GIDS="1")
+    def test_target_owned_extension_policy_is_not_synthesized_twice(self):
+        on = dict(BASE_SETTINGS, **MANAGED_TP4_ENV)
+        on.update(NCCL_SWITCHLESS_RING_ONLY="1",
+                  IB_HCA="rocep1s0f0,rocep1s0f1,roceP2p1s0f0,roceP2p1s0f1")
         argv = check(nccl_shell('a=(); switchless_ring_args a; printf "%s\\n" "${a[@]}"', on))
         envs = check(nccl_shell('switchless_ring_env_string', on))
-        for name in ("NCCL_IB_EXTENDED_IPV4_GIDS=1", "NCCL_IB_PRESERVE_PCI_DOMAIN=1",
-                     "NCCL_IB_ROUTE_DIAGNOSTICS=1", "NCCL_IB_QPS_PER_CONNECTION=1"):
-            self.assertIn(name, argv, name)
-            self.assertIn(name, envs, name)
+        for output in (argv, envs):
+            self.assertIn("NCCL_IB_EXTENDED_IPV4_GIDS=1", output)
+        for name in ("NCCL_IB_PRESERVE_PCI_DOMAIN=1", "NCCL_IB_ROUTE_DIAGNOSTICS=1",
+                     "NCCL_IB_QPS_PER_CONNECTION=1"):
+            self.assertIn(name.split("=", 1)[0], on["EXTRA_DOCKER_ENV"])
+            self.assertNotIn(name, argv)
+            self.assertNotIn(name, envs)
 
     def test_head_and_worker_extension_parity(self):
         on = dict(BASE_SETTINGS, NCCL_SWITCHLESS_RING_ONLY="1",
@@ -690,11 +1061,13 @@ class DualPciDomainTests(unittest.TestCase):
 
     def test_extension_is_off_by_default(self):
         """Byte-identical off: no extension flag may appear unless asked for."""
+        settings = dict(BASE_SETTINGS, **MANAGED_TP4_ENV)
+        settings.update(NCCL_SWITCHLESS_RING_ONLY="1", NCCL_IB_EXTENDED_IPV4_GIDS="0")
         out = check(nccl_shell('''
           a=(); switchless_ring_args a
           printf '%s\\n' "${a[@]}"
           switchless_ring_env_string
-        ''', dict(BASE_SETTINGS, NCCL_SWITCHLESS_RING_ONLY="1")))
+        ''', settings))
         self.assertNotIn("NCCL_IB_EXTENDED_IPV4_GIDS", out)
         self.assertNotIn("NCCL_IB_PRESERVE_PCI_DOMAIN", out)
 

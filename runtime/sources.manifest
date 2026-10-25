@@ -19,8 +19,8 @@ sglang-canary  f80c91a4b97e52e17fbcff088aa6b47b6270f6b9  9968fcff7fa8218b8246a45
 b12x-sg17  66aa6bd5085e63bbb011557075765e3191e807b2  4922d0db9395fb8b537d7e216d509a5747867a45f20c18290e385786609dd05f  https://raw.githubusercontent.com/rhys101/DeepSeek-V4.1-Flash-vLLM-DGX-Spark-8/66aa6bd5085e63bbb011557075765e3191e807b2/sglang/experiments/sg17-rocenante/b12x-source.tar.gz
 
 # b12x.comm.roce_ring: FujitsuPolycom/sparkring's path-aware RoCEnante (frozen release copy),
-# added beside b12x.comm.roce; then scripts/roce_ring-sparkring-f16b5f4.patch (package rename,
-# per-rank peer maps, proxy idle spins; runtime/b12x/roce_ring-provenance.json). Apache-2.0.
+# added beside b12x.comm.roce; then package rename/map patch and local TP4 SSOT patch.
+# runtime/b12x/roce_ring-provenance.json records upstream provenance. Apache-2.0.
 roce-ring/__init__.py  f16b5f43208c188c018c43820ccf52955006d1a5  d1eabaa9395bbdc568d503c79cc1a57ab74626feed0c67851a00be0ba2718a7e  https://raw.githubusercontent.com/FujitsuPolycom/sparkring/f16b5f43208c188c018c43820ccf52955006d1a5/runtime/glm53-spark-mtp3-mesh/performance/transport/bundle-source/b12x_overlay/b12x/comm/roce/__init__.py
 roce-ring/_allgather_cute.py  f16b5f43208c188c018c43820ccf52955006d1a5  e26ab2e7cce1cff334452ea237b1c0db8ab11ecba8e0a933f5cad35075a37f0f  https://raw.githubusercontent.com/FujitsuPolycom/sparkring/f16b5f43208c188c018c43820ccf52955006d1a5/runtime/glm53-spark-mtp3-mesh/performance/transport/bundle-source/b12x_overlay/b12x/comm/roce/_allgather_cute.py
 roce-ring/_cute_intrinsics.py  f16b5f43208c188c018c43820ccf52955006d1a5  ff0847d986243bf92444cd4c3db9156a6fc10d8c2e1a16d54761375e6aa7a78e  https://raw.githubusercontent.com/FujitsuPolycom/sparkring/f16b5f43208c188c018c43820ccf52955006d1a5/runtime/glm53-spark-mtp3-mesh/performance/transport/bundle-source/b12x_overlay/b12x/comm/roce/_cute_intrinsics.py
@@ -43,4 +43,6 @@ b12x-main  a7d7d29b2ef8869086e0ceaa787321f17544e3c9  e2d070850d50fb365a01f82f16e
 local  runtime/sglang-rocenante.patch  e813f97a87539681a5951f055b4d0b78f14630437f7c0adaa7e012f7adc5c704  -
 local  runtime/flash_mla_sm120.canary.py  2fe25ba5e2ff91f6028b6a32c315ba8875d8780b9341bae9411af1cc927885bf  -
 local  scripts/b12x_next-compact-n64-m64.patch  1fb1f1eca87206618115f57f9303860bf7a3be8700356bca91ca87a2ba57b701  -
-local  scripts/roce_ring-sparkring-f16b5f4.patch  4479d3d0fc847c787234ebd043890d1f4fd53fcee689f1cbfd14217215a7b6bf  -
+local  scripts/b12x-required-gid.patch  cdbd7424ef580649a7cca0d29dca38acd89efbf81c031b84ccc95736a1b7ab7d  -
+local  scripts/roce_ring-sparkring-f16b5f4.patch  93a6e5662ce9c2516b29a6a653ccf4784ed70f0c59cef3e34de7506c03a3d0a9  -
+local  scripts/roce_ring-tp4-ssot.patch  7b2905eb72532c54f9ba16d77874041952016f0e7a360db33f18671bf2f51025  -

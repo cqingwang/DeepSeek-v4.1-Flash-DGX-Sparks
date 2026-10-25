@@ -1,5 +1,7 @@
 # Switchless ring: four Sparks, no RoCE switch
 
+> **Workspace boundary:** this document preserves the target's standalone/upstream recipe and uses illustrative `/24` examples below. In the parent Spark workspace, the active topology and all host-specific values come from `spark/config.yaml.common.ring`; the current physical order is A→B→C→D→A. Do not copy the example addresses, HCA/GID indexes, or launcher values into the managed target. `spark/program.py` derives NCCL and B12X maps, and the TP4 launcher requires those generated B12X values.
+
 `NCCL_SWITCHLESS_RING_ONLY=1` boots this stack on four DGX Sparks cabled as a ring
 (a-b-c-d-a, one DAC per adjacency per rail, no switch in between). It is **off by
 default and changes nothing when off**: the switch only decides whether the ring
@@ -596,6 +598,8 @@ the two before it (the fast loader's boot-to-boot spread).
 
 ### Setup
 
+> **Workspace-managed deployment:** this checkout is managed by the parent Spark repository. Use `spark/config.yaml.common.ring` for the physical fabric and the target engine entry for backend policy; `program.py query-model` and `deploy.sh` generate the launcher environment. The manual `.env.tp4` edits below apply only to an independent standalone clone. In this workspace, do not copy `env.txt` into a managed `.env` by hand.
+
 1. **The ring as above**, with both planes addressed (four RDMA functions per node, MTU 9000, the
    RoCEv2 GID at index 3), and the NIC profile sparkring's hardware forwarding was qualified on:
    `hairpin_num_queues` 4, `flow_steering_mode` `hmfs`, eswitch `legacy`, `hw-tc-offload on` on all
@@ -612,20 +616,20 @@ the two before it (the fast loader's boot-to-boot spread).
    cc -O2 -Wall -Wextra ~/sparkring/spark_transport/fabric/cx7_hairpin_diagonal/native/mlx5_rdma_tx_rewrite_probe.c \
       -o /tmp/mlx5-rdma-tx-rewrite-probe -libverbs -lmlx5 && sudo install -m 755 /tmp/mlx5-rdma-tx-rewrite-probe /opt/dsv41-mesh/bin/
    ```
-3. **The plan**, from the head, with the hosts in TP rank order (the head, then `WORKER_HOSTS`):
+3. **The plan**, from the head. In the managed workspace, topology and SSH endpoints are read from the parent Spark config; specify the target whose runtime rank order and B12X contract must be checked:
 
    ```bash
-   python3 scripts/ring_mesh/plan.py --sparkring ~/sparkring --out ring-mesh spark1 spark2 spark3 spark4
+   python3 scripts/ring_mesh/plan.py --sparkring ~/sparkring --target deepseek_v4.1_luzi_switchless --out ring-mesh
    ```
 
-   It inventories the nodes over SSH, reads the cabling from the fabric subnets, derives each host's
-   clockwise/counter-clockwise ports independently, and requires both PCIe domains to reach the same
-   neighbor on each side. This supports rings whose port numbering changes direction by node while
-   still refusing mismatched planes. It then has sparkring's planner build the RoCEnante selection:
+   `plan.py` reads the configured physical order, both port planes and target settings through
+   `spark/program.py`; live SSH inventory checks the configured interfaces, IPs, HCA, MTU, GID,
+   hairpin and steering state. A mismatch stops planning. The planner does not infer a replacement
+   topology from live addresses. Once inventory matches, it has sparkring build the RoCEnante selection:
    per node two `/32` routes, two
    tc rules and two markers. It writes `mesh-up-<host>.sh` / `mesh-down-<host>.sh` and `env.txt`,
-   the `EXTRA_CONTAINER_ENV` additions with the per-rank peer maps already translated to the TP rank
-   order (sparkring numbers the ring by cabling direction, which need not match it).
+   including a diagnostic `EXTRA_CONTAINER_ENV` string whose B12X peer paths use the physical A→B→C→D ranks and are checked against `query-model` output. NCCL peer-HCA variables are not injected for the current LuZ/SparkRing build because it selects local ports by peer RoCE GID subnet. `env.txt` is for parity review;
+   the parent deployment remains the only writer of the active managed environment.
 4. **Install on every node** with the engine stopped (applying the hairpin size re-initialises each
    fabric function); `$HOST` is that node's name as given to `plan.py`:
 
@@ -651,8 +655,11 @@ the two before it (the fast loader's boot-to-boot spread).
    the peer's management IP (the perftest control socket); `-d` and `-x` select the RoCE data path.
    A's `rocep1s0f0` to D's `rocep1s0f1` measured 10.17-11.86 us here, versus 8.5 us direct; the
    neighbour's hardware rule counters rise and its `IpForwDatagrams` stays flat.
-6. **`.env.tp4`**: build `Dockerfile.canary-roce` as usual and append `env.txt` to the production
-   `EXTRA_CONTAINER_ENV`, replacing its `B12X_ROCE_HCA`, `SGLANG_ROCE_MAX_SIZE` and `DSV41_ROCE_GATHER`.
+6. **Standalone `.env.tp4` only:** for an independent clone, build `Dockerfile.canary-roce` and use
+   the generated backend values according to that clone's configuration. In the managed Spark
+   workspace, `query-model` and `deploy.sh` already provide `B12X_ROCE_HCA`, GID and peer maps from
+   `common.ring`; keep target serving limits such as `SGLANG_ROCE_MAX_SIZE` and `DSV41_ROCE_GATHER`
+   in the target configuration. Do not append `env.txt` to the active managed `.env`.
    The boot log shows `RoCEnante ready: world=4 hcas=rocep1s0f0,rocep1s0f1,roceP2p1s0f0,roceP2p1s0f1`
    and `DSV41_L2_PREFETCH: RoCE collectives prefetch the next weights into L2`.
 

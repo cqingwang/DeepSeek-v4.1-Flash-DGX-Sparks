@@ -1,87 +1,97 @@
 #!/usr/bin/env python3
-"""CPU checks for RoCEnante on a switchless ring (b12x.comm.roce_ring + scripts/ring_mesh/plan.py).
+"""CPU contracts for RoCEnante and the shared Spark ring configuration."""
 
-- B12X_ROCE_PEER_HCA_MAPS: one ';'-separated map per rank is picked by rank, B12X_ROCE_PEER_HCA_MAP
-  still wins, a wrong count refuses.
-- plan.py orients the ring from the fabric subnets (sparkring numbers it with physical port f0
-  clockwise), refuses a cable that breaks that contract, and translates sparkring's per-rank
-  paths into peer maps for the TP rank order. The fixtures are a real four-Spark ring whose TP
-  order runs the other way round the cables (TP 0,1,2,3 = ring 0,3,2,1).
-- every map pairs path i at both ends on the same PCIe domain, and a neighbour's paths cross the
-  cable (f0 at one end, f1 at the other).
-- in the image: the RoCEnante overlay selects the package from DSV41_ROCE_RING.
-
-No GPU, torch or network. usage: python3 tests/test_roce_ring.py
-"""
 import importlib.util
 import os
 import tempfile
 import unittest
 from pathlib import Path
 
+
 ROOT = Path(__file__).resolve().parents[1]
+CONFIG = ROOT.parent / "config.yaml"
 
 
 def _load(name, *candidates):
-    for c in candidates:
-        if c.is_file():
-            spec = importlib.util.spec_from_file_location(name, c)
+    for candidate in candidates:
+        if candidate.is_file():
+            spec = importlib.util.spec_from_file_location(name, candidate)
             module = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(module)
             return module
     raise FileNotFoundError(candidates)
 
 
-paths = _load("roce_ring_paths", ROOT / "runtime/b12x/b12x/comm/roce_ring/_path_config.py",
-              Path("/opt/b12x/b12x/comm/roce_ring/_path_config.py"))
+paths = _load(
+    "roce_ring_paths",
+    ROOT / "runtime/b12x/b12x/comm/roce_ring/_path_config.py",
+    Path("/opt/b12x/b12x/comm/roce_ring/_path_config.py"),
+)
 plan = _load("ring_mesh_plan", ROOT / "scripts/ring_mesh/plan.py")
 
-HOSTS = ["s1", "s2", "s3", "s4"]  # TP rank order
-# netdev -> IPv4 per host; each DAC is its own /24, f0 of every node cabled to the f1 of the node before it in TP order
-ADDR = {
-    "s1": {"enp1s0f0np0": "10.10.3.11/24", "enp1s0f1np1": "10.10.0.10/24", "enP2p1s0f0np0": "10.20.3.11/24", "enP2p1s0f1np1": "10.20.0.10/24"},
-    "s2": {"enp1s0f0np0": "10.10.0.11/24", "enp1s0f1np1": "10.10.1.10/24", "enP2p1s0f0np0": "10.20.0.11/24", "enP2p1s0f1np1": "10.20.1.10/24"},
-    "s3": {"enp1s0f0np0": "10.10.1.11/24", "enp1s0f1np1": "10.10.2.10/24", "enP2p1s0f0np0": "10.20.1.11/24", "enP2p1s0f1np1": "10.20.2.10/24"},
-    "s4": {"enp1s0f0np0": "10.10.2.11/24", "enp1s0f1np1": "10.10.3.10/24", "enP2p1s0f0np0": "10.20.2.11/24", "enP2p1s0f1np1": "10.20.3.10/24"},
-}
-# sparkring rocenante_native_path_arguments() for that ring (ring rank -> "dest,function,rdma,gid,hops")
+# CPU fixture captured from sparkring's rocenante_native_path_arguments for the configured ring.
 NATIVE = {
-    "0": ["1,0,rocep1s0f0,3,1", "1,1,roceP2p1s0f0,3,1", "2,0,rocep1s0f0,3,2", "2,1,roceP2p1s0f1,3,2", "3,0,rocep1s0f1,3,1", "3,1,roceP2p1s0f1,3,1"],
-    "1": ["0,0,rocep1s0f1,3,1", "0,1,roceP2p1s0f1,3,1", "2,0,rocep1s0f0,3,1", "2,1,roceP2p1s0f0,3,1", "3,0,rocep1s0f0,3,2", "3,1,roceP2p1s0f1,3,2"],
-    "2": ["0,0,rocep1s0f1,3,2", "0,1,roceP2p1s0f0,3,2", "1,0,rocep1s0f1,3,1", "1,1,roceP2p1s0f1,3,1", "3,0,rocep1s0f0,3,1", "3,1,roceP2p1s0f0,3,1"],
-    "3": ["0,0,rocep1s0f0,3,1", "0,1,roceP2p1s0f0,3,1", "1,0,rocep1s0f1,3,2", "1,1,roceP2p1s0f0,3,2", "2,0,rocep1s0f1,3,1", "2,1,roceP2p1s0f1,3,1"],
+    "0": [
+        "1,0,rocep1s0f0,3,1", "1,1,roceP2p1s0f0,3,1",
+        "2,0,rocep1s0f0,3,2", "2,1,roceP2p1s0f1,3,2",
+        "3,0,rocep1s0f1,3,1", "3,1,roceP2p1s0f1,3,1",
+    ],
+    "1": [
+        "0,0,rocep1s0f0,3,1", "0,1,roceP2p1s0f0,3,1",
+        "2,0,rocep1s0f1,3,1", "2,1,roceP2p1s0f1,3,1",
+        "3,0,rocep1s0f1,3,2", "3,1,roceP2p1s0f0,3,2",
+    ],
+    "2": [
+        "0,0,rocep1s0f1,3,2", "0,1,roceP2p1s0f0,3,2",
+        "1,0,rocep1s0f1,3,1", "1,1,roceP2p1s0f1,3,1",
+        "3,0,rocep1s0f0,3,1", "3,1,roceP2p1s0f0,3,1",
+    ],
+    "3": [
+        "0,0,rocep1s0f1,3,1", "0,1,roceP2p1s0f1,3,1",
+        "1,0,rocep1s0f0,3,2", "1,1,roceP2p1s0f1,3,2",
+        "2,0,rocep1s0f0,3,1", "2,1,roceP2p1s0f0,3,1",
+    ],
 }
-MAPS = "1=1/3,2=0/3,3=0/2;0=0/2,2=1/3,3=1/2;0=1/2,1=0/2,3=1/3;0=1/3,1=0/3,2=0/2"
-LIVE_HOSTS = ["spark-a", "spark-c", "spark-b", "spark-d"]  # TP rank 顺序
-LIVE_ADDR = {
-    "spark-a": {"enp1s0f0np0": "10.251.20.1/30", "enp1s0f1np1": "10.251.20.14/30",
-                 "enP2p1s0f0np0": "10.100.241.1/30", "enP2p1s0f1np1": "10.100.241.14/30"},
-    "spark-b": {"enp1s0f0np0": "10.251.20.9/30", "enp1s0f1np1": "10.251.20.5/30",
-                 "enP2p1s0f0np0": "10.100.241.9/30", "enP2p1s0f1np1": "10.100.241.5/30"},
-    "spark-c": {"enp1s0f0np0": "10.251.20.10/30", "enp1s0f1np1": "10.251.20.13/30",
-                 "enP2p1s0f0np0": "10.100.241.10/30", "enP2p1s0f1np1": "10.100.241.13/30"},
-    "spark-d": {"enp1s0f0np0": "10.251.20.2/30", "enp1s0f1np1": "10.251.20.6/30",
-                 "enP2p1s0f0np0": "10.100.241.2/30", "enP2p1s0f1np1": "10.100.241.6/30"},
-}
+MAPS = "1=0/2,2=0/3,3=1/3;0=0/2,2=1/3,3=1/2;0=1/2,1=1/3,3=0/2;0=1/3,1=0/3,2=0/2"
 
 
-def inventory(addr):
-    return {h: {"ports": {nd: {"ipv4": ip} for nd, ip in ports.items()}} for h, ports in addr.items()}
+def synthetic_inventory(node, ring):
+    ports = {}
+    for prefix, rail in (("fabric", "ports"), ("fabric2", "ports2")):
+        for index in (0, 1):
+            netdev = node[f"{prefix}_if{index}"]
+            hca = node[f"{prefix}_hca{index}"]
+            address = node[f"{prefix}_ip{index}"]
+            ports[netdev] = {
+                "rdma": hca,
+                "ipv4": address,
+                "mac": "02:00:00:00:00:01",
+                "mtu": int(ring["mtu"]),
+                "roce_mtu": str(ring["roce_mtu"]),
+                "state": "up",
+                "gid": "0000:0000:0000:0000:0000:0000:" + plan._gid_tail(address),
+                "gid_netdev": netdev,
+                "tc_offload": str(ring["hw_tc_offload"]),
+                "hairpin_num_queues": str(ring["hairpin_num_queues"]),
+                "hairpin_queue_size": str(ring["hairpin_queue_size"]),
+                "flow_steering_mode": str(ring["flow_steering_mode"]),
+            }
+    return {"host": node["node"], "ports": ports}
 
 
 class PeerMapEnv(unittest.TestCase):
     def setUp(self):
-        self.saved = {k: os.environ.pop(k, None) for k in (paths.PEER_HCA_MAP_ENV, paths.PEER_HCA_MAPS_ENV)}
+        self.saved = {key: os.environ.pop(key, None) for key in (paths.PEER_HCA_MAP_ENV, paths.PEER_HCA_MAPS_ENV)}
 
     def tearDown(self):
-        for k, v in self.saved.items():
-            os.environ.pop(k, None)
-            if v is not None:
-                os.environ[k] = v
+        for key, value in self.saved.items():
+            os.environ.pop(key, None)
+            if value is not None:
+                os.environ[key] = value
 
     def test_per_rank_selection(self):
         os.environ[paths.PEER_HCA_MAPS_ENV] = MAPS
-        self.assertEqual(paths.peer_hca_map(4, 0, 4), ((-1, -1), (1, 3), (0, 3), (0, 2)))
+        self.assertEqual(paths.peer_hca_map(4, 0, 4), ((-1, -1), (0, 2), (0, 3), (1, 3)))
         self.assertEqual(paths.peer_hca_map(4, 3, 4), ((1, 3), (0, 3), (0, 2), (-1, -1)))
 
     def test_single_map_wins(self):
@@ -99,48 +109,61 @@ class PeerMapEnv(unittest.TestCase):
 
 
 class Plan(unittest.TestCase):
-    def test_ring_order(self):
-        self.assertEqual(plan.ring_order(inventory(ADDR), HOSTS), ["s1", "s4", "s3", "s2"])
+    @classmethod
+    def setUpClass(cls):
+        cls.snapshot = plan.load_ring_snapshot(CONFIG)
+        cls.nodes = cls.snapshot["nodes"]
+        cls.ring = cls.snapshot["ring"]
+        cls.order = plan.ring_order(cls.nodes)
+        cls.hcas = cls.nodes[cls.order[0]]["hca_all"].split(",")
 
-    def test_missing_peer_refuses(self):
-        bad = {h: dict(p) for h, p in ADDR.items()}
-        bad["s2"]["enp1s0f0np0"] = "10.99.0.1/24"
-        with self.assertRaises(SystemExit):
-            plan.ring_order(inventory(bad), HOSTS)
-
-    def test_live_ring_order_allows_per_node_port_orientation(self):
-        self.assertEqual(plan.ring_order(inventory(LIVE_ADDR), LIVE_HOSTS),
-                         ["spark-a", "spark-d", "spark-b", "spark-c"])
-
-    def test_live_ring_ports_follow_per_node_orientation(self):
-        order = plan.ring_order(inventory(LIVE_ADDR), LIVE_HOSTS)
-        oriented = plan.ring_ports(inventory(LIVE_ADDR), order)
+    def test_physical_order_and_oriented_ports_come_from_config(self):
+        self.assertEqual(self.order, ["spark-a", "spark-b", "spark-c", "spark-d"])
+        oriented = plan.ring_ports(self.ring["nodes"], self.order)
         self.assertEqual(oriented[("spark-a", "clockwise", 0)], "enp1s0f0np0")
-        self.assertEqual(oriented[("spark-d", "clockwise", 0)], "enp1s0f1np1")
-        self.assertEqual(oriented[("spark-b", "clockwise", 0)], "enp1s0f0np0")
-        self.assertEqual(oriented[("spark-c", "clockwise", 0)], "enp1s0f1np1")
-        self.assertEqual([oriented[(host, "clockwise", 0)] == "enp1s0f0np0" for host in order],
-                         [True, False, True, False])
+        self.assertEqual(oriented[("spark-a", "counter_clockwise", 0)], "enp1s0f1np1")
+        self.assertEqual(oriented[("spark-b", "clockwise", 1)], "enP2p1s0f1np1")
+
+    def test_live_inventory_is_compared_with_config(self):
+        node = self.nodes["spark-a"]
+        inv = synthetic_inventory(node, self.ring)
+        self.assertEqual(plan.check_host("spark-a", inv, node, self.ring), [])
+        inv["ports"][node["fabric_if0"]]["ipv4"] = "192.0.2.1/30"
+        problems = plan.check_host("spark-a", inv, node, self.ring)
+        self.assertTrue(any("IPv4" in problem and "spark-a" in problem for problem in problems))
+
+    def test_peer_maps_match_sparkring_fixture_and_physical_rank_order(self):
+        physical_maps = plan.peer_maps(NATIVE, self.order, self.order, self.hcas)
+        self.assertEqual(physical_maps, MAPS)
+        target = plan.query_target(CONFIG, "deepseek_v4.1_flash_switchless")
+        runtime_order = plan.physical_runtime_order(target, self.order)
+        self.assertEqual(runtime_order, ["spark-a", "spark-b", "spark-c", "spark-d"])
+        runtime_maps = plan.peer_maps(NATIVE, self.order, self.order, self.hcas)
+        self.assertEqual(runtime_maps, physical_maps)
+        ring_env = plan.ring_environment(target, runtime_maps, ",".join(self.hcas), str(self.ring["roce_gid_index"]))
+        self.assertIn(f"B12X_ROCE_PEER_HCA_MAPS={physical_maps}", ring_env)
+        self.assertIn(f"B12X_NEXT_ROCE_GID_INDEX={self.ring['roce_gid_index']}", ring_env)
+
+    def test_mesh_planner_rejects_nonphysical_target_rank_order(self):
+        with self.assertRaises(SystemExit):
+            plan.physical_runtime_order(
+                {"runtime_rank_order": "spark-a spark-d spark-c spark-b"},
+                self.order,
+            )
+
+    def test_topology_uses_shared_management_interface_and_ring_parameters(self):
+        inventories = {node: synthetic_inventory(record, self.ring) for node, record in self.nodes.items()}
+        document = plan.topology(inventories, self.order, self.snapshot)
+        self.assertEqual(document["ranks"][0]["management_netdev"], "wlP9s9")
+        self.assertEqual(document["expected_ethernet_mtu"], self.ring["mtu"])
+        self.assertEqual(document["roce_gid_index"], self.ring["roce_gid_index"])
+        self.assertEqual(document["expected_roce_mtu"], self.ring["roce_mtu"])
 
     def test_plan_writer_supports_runtime_pathlib(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             output = Path(temp_dir) / "env.txt"
             plan.write_text(output, "value=1\n")
             self.assertEqual(output.read_bytes(), b"value=1\n")
-
-    def test_peer_maps(self):
-        order = plan.ring_order(inventory(ADDR), HOSTS)
-        self.assertEqual(plan.peer_maps(NATIVE, order, HOSTS), MAPS)
-
-    def test_maps_pair_paths_consistently(self):
-        m = [dict((int(p), tuple(map(int, v.split("/")))) for p, v in (e.split("=") for e in r.split(","))) for r in MAPS.split(";")]
-        domain, port = (lambda h: h // 2), (lambda h: h % 2)
-        for r in range(4):
-            for p in m[r]:
-                for i in (0, 1):
-                    self.assertEqual(domain(m[r][p][i]), domain(m[p][r][i]), (r, p, i))
-                    if (p - r) % 4 in (1, 3):
-                        self.assertNotEqual(port(m[r][p][i]), port(m[p][r][i]), (r, p, i))
 
 
 class ImageOverlay(unittest.TestCase):

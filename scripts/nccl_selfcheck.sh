@@ -2,20 +2,43 @@
 # nccl_selfcheck.sh — 校验 NCCL 初始化是否符合无交换机环网预期
 #
 # 检查项（任一失败即非零退出）：
-#   1. RING-ONLY 补丁生效（日志出现 "RING-ONLY v"）
+#   1. 目标配置选择的 ring-only NCCL 路径在日志中有对应补丁证据
 #   2. 算法矩阵中 Tree 全部为 0、Ring 全部为 1（Tree 未参与，Ring 强制）
 #   3. 通道数 > 0
-#   4. 期望的 RoCE 设备全部被 NCCL 采用
+#   4. common.ring 派生的 HCA 全部被 NCCL 采用
 # 仅记录（不判失败）：GDR 状态、协议集。
 #
 # 用法：nccl_selfcheck.sh [debug_dir] [expected_hca_count]
-#   默认 debug_dir=$HOME/nccl-debug, expected_hca_count=4
+#   默认 debug_dir=$HOME/nccl-debug；HCA 数量从部署器写入的 IB_HCA 派生。
 
 set -uo pipefail
 
 DBG_DIR="${1:-$HOME/nccl-debug}"
-EXPECT_HCA="${2:-4}"
 fail=0
+
+if [[ -z "${NCCL_HOST_DIR:-}" ]]; then
+  echo "[x] NCCL_HOST_DIR 必须由受管 target 配置提供" >&2
+  exit 1
+fi
+
+managed_hcas="${IB_HCA:-${NCCL_IB_HCA:-}}"
+managed_hcas="${managed_hcas#=}"
+if [[ -z "$managed_hcas" ]]; then
+  echo "[x] IB_HCA 必须由 common.ring 派生的受管 target 配置提供" >&2
+  exit 1
+fi
+IFS=',' read -r -a managed_hca_list <<< "$managed_hcas"
+EXPECT_HCA="${#managed_hca_list[@]}"
+for hca in "${managed_hca_list[@]}"; do
+  if [[ -z "$hca" || "$hca" == *[[:space:]]* ]]; then
+    echo "[x] IB_HCA 不是有效的逗号分隔 HCA 清单: $managed_hcas" >&2
+    exit 1
+  fi
+done
+if [[ -n "${2:-}" && "$2" != "$EXPECT_HCA" ]]; then
+  echo "[x] expected_hca_count=$2 与 common.ring 派生的 IB_HCA 数量 $EXPECT_HCA 不一致" >&2
+  exit 1
+fi
 
 log=$(ls -t "$DBG_DIR"/*.log 2>/dev/null | head -1)
 if [[ -z "${log:-}" ]]; then
@@ -24,12 +47,16 @@ if [[ -z "${log:-}" ]]; then
 fi
 echo "[i] 检查日志: $log"
 
-# 1. RING-ONLY 补丁
+# 1. ring-only 补丁签名
 if grep -q 'RING-ONLY v' "$log"; then
   ver=$(grep -oE 'RING-ONLY v[0-9a-zA-Z._-]+' "$log" | head -1)
   echo "[+] $ver 补丁生效"
+elif [[ "${NCCL_SWITCHLESS_RING_ONLY:-0}" == 1 ]] \
+  && grep -q 'Tree transport setup disabled by NCCL_SWITCHLESS_RING_ONLY' "$log" \
+  && grep -q 'PAT transport setup disabled by NCCL_SWITCHLESS_RING_ONLY' "$log"; then
+  echo "[+] managed switchless ring policy 生效（Tree/PAT transport 已禁用）"
 else
-  echo "[x] 未发现 RING-ONLY 补丁标记——ring-only 未生效！"
+  echo "[x] 未发现与 target NCCL ring policy 相符的补丁签名"
   fail=1
 fi
 
@@ -60,12 +87,14 @@ else
   fail=1
 fi
 
-# 4. RoCE 设备采用数
-nics=$(grep 'NET/IB : Using' "$log" | head -1 | grep -oE '\[[0-9]+\]ro' | wc -l | tr -d ' ')
-if [[ "${nics:-0}" -ge "$EXPECT_HCA" ]]; then
-  echo "[+] NCCL 采用 RoCE 设备数: $nics（期望 >= $EXPECT_HCA）"
+# 4. RoCE 设备清单必须与 common.ring 派生的 HCA 顺序完全一致
+net_line=$(grep 'NET/IB : Using' "$log" | head -1 || true)
+actual_hcas=$(sed -E 's/^.*NET\/IB : Using //; s/ \[RO\].*$//; s/\[[0-9]+\]([^:]+):[^ ]+/\1/g' <<< "$net_line")
+actual_hcas="${actual_hcas// /,}"
+if [[ -n "$net_line" && "$actual_hcas" == "$managed_hcas" ]]; then
+  echo "[+] NCCL RoCE HCA 顺序与 common.ring 完全一致: $actual_hcas（$EXPECT_HCA 个）"
 else
-  echo "[x] NCCL 仅采用 $nics 个 RoCE 设备（期望 $EXPECT_HCA）——检查 NCCL_IB_HCA"
+  echo "[x] NCCL RoCE HCA 与 common.ring 不一致: actual=${actual_hcas:-缺失} expected=$managed_hcas"
   fail=1
 fi
 
@@ -73,19 +102,22 @@ fi
 gdr=$(grep -oE 'cuMemGdrSupport [0-9]+' "$log" | head -1 || true)
 echo "[i] ${gdr:-cuMemGdrSupport 未知}（GB10 预期 0 = 无 GDR，CPU-path）"
 
-# 6. 补丁谱系识别（仅记录）：区分两套已知的 switchless 补丁路线
-#    - SparkRing/PR#3：源码加 NCCL_PARAM(SwitchlessRingOnly,…)，运行期打印
-#      "Tree/PAT transport setup disabled by NCCL_SWITCHLESS_RING_ONLY"
-#    - LuZ 路线（本栈）：环邻过滤 + 算法矩阵 Tree=0（Tree 仍建连但永不被选中）
-lib="${NCCL_HOST_DIR:-/opt/nccl-ringonly}/libnccl.so.2.30.7"
-if [[ -f "$lib" ]]; then
+# 6. 补丁谱系识别（仅记录）
+lib=""
+for candidate in "$NCCL_HOST_DIR"/libnccl.so*; do
+  [[ -f "$candidate" ]] || continue
+  lib="$candidate"
+  break
+done
+if [[ -n "$lib" ]]; then
   # grep -c prints "0" and exits 1 on no match, so do not append another 0.
-  sw=$(strings "$lib" 2>/dev/null | grep -c SWITCHLESS_RING_ONLY)
   sk=$(strings "$lib" 2>/dev/null | grep -c SKIP_TREE_CONNECT)
   dis=$(grep -icE 'transport setup disabled' "$log")
-  sw=${sw:-0}; sk=${sk:-0}; dis=${dis:-0}
-  if [[ "$sw" -gt 0 ]]; then
-    echo "[i] NCCL 补丁谱系: SparkRing/PR#3 路线（SWITCHLESS_RING_ONLY>0, skip-tree=${sk}）"
+  sk=${sk:-0}; dis=${dis:-0}
+  if grep -q 'RING-ONLY v' "$log"; then
+    echo "[i] NCCL 补丁谱系: SparkRing/PR#3 路线（运行日志含 RING-ONLY 适配记录）"
+  elif [[ "$dis" -ge 2 && "${NCCL_SWITCHLESS_RING_ONLY:-0}" == 1 ]]; then
+    echo "[i] NCCL 补丁谱系: managed switchless 路线（Tree/PAT transport 禁用，skip-tree=${sk}）"
   elif [[ "$dis" -eq 0 ]]; then
     echo "[i] NCCL 补丁谱系: LuZ 路线（无 SWITCHLESS_RING_ONLY；靠算法矩阵 Tree=0 达成 ring-only）"
   else

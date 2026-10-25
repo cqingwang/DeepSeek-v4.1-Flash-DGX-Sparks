@@ -381,29 +381,36 @@ roce_ctx_t *roce_create(int world, int rank, const char *const *hca_names, int n
         c->physical_hops[p] = world == 4 && distance == 2 ? 2u : 1u;
     }
     if (opposite_paths == ROCE_MAX_PATHS || c->wave_mode != ROCE_WAVE_MODE_TWO) {
-        static const char *const canonical_hcas[4] = {
-            "rocep1s0f0", "rocep1s0f1", "roceP2p1s0f0", "roceP2p1s0f1"};
-        static const int canonical_map[4][4][ROCE_MAX_PATHS] = {
-            {{-1, -1, -1, -1}, {0, 2, -1, -1}, {0, 3, 2, 1}, {1, 3, -1, -1}},
-            {{1, 3, -1, -1}, {-1, -1, -1, -1}, {0, 2, -1, -1}, {0, 3, 2, 1}},
-            {{1, 2, 3, 0}, {1, 3, -1, -1}, {-1, -1, -1, -1}, {0, 2, -1, -1}},
-            {{0, 2, -1, -1}, {1, 2, 3, 0}, {1, 3, -1, -1}, {-1, -1, -1, -1}},
-        };
-        int canonical = world == 4 && n_hca == 4;
-        for (int h = 0; canonical && h < 4; h++) {
-            canonical = strcmp(hca_names[h], canonical_hcas[h]) == 0;
+        if (world != 4 || n_hca != 4) {
+            snprintf(err, err_len,
+                     "the selected RoCEnante path schedule requires four ranks "
+                     "and four configured RDMA devices");
+            roce_destroy(c);
+            return NULL;
         }
-        for (int p = 0; canonical && p < world; p++) {
-            int count = c->peer_path_count[p];
-            for (int path = 0; canonical && path < ROCE_MAX_PATHS; path++) {
-                int expected = path < count ? canonical_map[rank][p][path] : -1;
-                canonical = c->peer_hca[p][path] == expected;
+        uint32_t seen_direct_hcas = 0;
+        for (int p = 0; p < world; p++) {
+            int distance = (p - rank + world) % world;
+            if (distance == 0 || distance == 2) {
+                continue;
+            }
+            for (int path = 0; path < (int)c->peer_path_count[p]; path++) {
+                int h = c->peer_hca[p][path];
+                uint32_t bit = 1u << h;
+                if ((seen_direct_hcas & bit) != 0) {
+                    snprintf(err, err_len,
+                             "rank %d ring neighbors must use four distinct configured HCA paths",
+                             rank);
+                    roce_destroy(c);
+                    return NULL;
+                }
+                seen_direct_hcas |= bit;
             }
         }
-        if (!canonical) {
+        if (seen_direct_hcas != ((1u << n_hca) - 1u)) {
             snprintf(err, err_len,
-                     "the selected RoCEnante path schedule requires the canonical "
-                     "four-rank HCA order and peer-path mapping");
+                     "rank %d ring-neighbor paths must cover every configured HCA",
+                     rank);
             roce_destroy(c);
             return NULL;
         }
@@ -753,7 +760,7 @@ static int mixed_two_wave(roce_ctx_t *c, uint32_t seq, uint32_t slot,
                           const uint32_t stripe_bytes[ROCE_MAX_PATHS]) {
     // Bits enumerate (peer, path) in peer-rank order while omitting the local
     // rank.  Each mask contains three origin QPs and balances every directed
-    // physical edge across the two waves for the canonical four-rank mapping.
+    // physical edge across the two waves for the configured four-rank order.
     static const uint8_t masks[4][2] = {
         {0x0bu, 0x34u},
         {0x2cu, 0x13u},

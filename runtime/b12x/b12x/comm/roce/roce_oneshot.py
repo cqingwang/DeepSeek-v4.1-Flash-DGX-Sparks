@@ -32,6 +32,7 @@ from torch.distributed import ProcessGroup
 
 from . import _allgather_cute
 from ._oneshot_cute import PACK_BYTES, get_launcher, is_launcher_prepared
+from .roce_env import required_roce_gid_index
 from ._proxy import Layout, Proxy, load as _load_proxy_library
 
 logger = logging.getLogger(__name__)
@@ -45,7 +46,6 @@ DEFAULT_MAX_SIZE = 2 * 1024 * 1024
 DEFAULT_MAX_GATHER_BYTES = 16 * 1024 * 1024
 DEFAULT_THREADS = 512
 DEFAULT_BLOCKS = 8
-DEFAULT_GID_INDEX = 3
 # Polls of a peer flag before the kernel gives up (each poll is a system-scope
 # load of host memory, roughly a microsecond): about 20 s.
 DEFAULT_SPIN_LIMIT = 20_000_000
@@ -82,11 +82,9 @@ def _env_int(*names: str, default: int) -> int:
 
 
 def default_gid_index() -> int:
-    """``B12X_ROCE_GID_INDEX``, else NCCL's ``NCCL_IB_GID_INDEX``, else 3."""
+    """Read the GID index generated from the shared fabric configuration."""
 
-    return _env_int(
-        "B12X_ROCE_GID_INDEX", "NCCL_IB_GID_INDEX", default=DEFAULT_GID_INDEX
-    )
+    return required_roce_gid_index("B12X_ROCE_GID_INDEX", "NCCL_IB_GID_INDEX")
 
 
 def discover_hcas(gid_index: Optional[int] = None) -> tuple[str, ...]:

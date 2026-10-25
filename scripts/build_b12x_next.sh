@@ -28,6 +28,7 @@ cp "$tmp/src/LICENSE" "$OUT/LICENSE"
 find "$OUT/b12x_next" -name __pycache__ -type d -prune -exec rm -rf {} +
 find "$OUT/b12x_next" -type f \( -name '*.py' -o -name '*.c' -o -name '*.cpp' -o -name '*.h' \) -print0 \
   | xargs -0 perl -pi -e 's/\bb12x\b(?!-)/b12x_next/g; s/\bB12X_(?!NEXT_)/B12X_NEXT_/g'
+cp "$HERE/../runtime/b12x/b12x/comm/roce_env.py" "$OUT/b12x_next/comm/roce_env.py"
 echo "$COMMIT" > "$OUT/b12x_next/SOURCE_COMMIT"
 # ds41 patches, in order:
 #   compact-n64-m64: admit the M64 tile for compact-N64 (N=576, EP1) prefill capacities (b12x pins them to M16)
@@ -40,9 +41,10 @@ echo "$COMMIT" > "$OUT/b12x_next/SOURCE_COMMIT"
 #                    launches that use it skip the barrier fill above; outputs are bit-identical)
 HERE="$(cd "$(dirname "$0")" && pwd)"
 PATCHES=("$HERE/b12x_next-compact-n64-m64.patch" "$HERE/b12x_next-prequant-input.patch"
-         "$HERE/b12x_next-barrier-zero.patch" "$HERE/b12x_next-det-triton-planner.patch")
+         "$HERE/b12x_next-barrier-zero.patch" "$HERE/b12x_next-det-triton-planner.patch"
+         "$HERE/b12x_next-required-gid.patch")
 for PATCH in "${PATCHES[@]}"; do
-  (cd "$OUT" && patch -p0 --forward --quiet < "$PATCH")
+  (cd "$OUT" && patch -p0 --forward --quiet --no-backup-if-mismatch < "$PATCH")
 done
 grep -q "_compact_n64_tiles" "$OUT/b12x_next/moe/fused_moe/_tuning.py" || { echo "compact-n64-m64 patch did not apply" >&2; exit 1; }
 grep -q "def prequantized_input" "$OUT/b12x_next/moe/fused_moe/_impl.py" || { echo "prequant-input patch did not apply" >&2; exit 1; }

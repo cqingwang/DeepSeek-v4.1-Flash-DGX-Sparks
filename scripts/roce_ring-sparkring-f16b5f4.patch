@@ -48,14 +48,12 @@ diff -ruN a/roce_ring/_oneshot_cute.py b/roce_ring/_oneshot_cute.py
 diff -ruN a/roce_ring/_path_config.py b/roce_ring/_path_config.py
 --- a/roce_ring/_path_config.py
 +++ b/roce_ring/_path_config.py
-@@ -9,6 +9,7 @@
+@@ -9,4 +9,5 @@
  PATH_COUNT = 2
  MAX_PATH_COUNT = 4
  PEER_HCA_MAP_ENV = "B12X_ROCE_PEER_HCA_MAP"
 +PEER_HCA_MAPS_ENV = "B12X_ROCE_PEER_HCA_MAPS"
  OPPOSITE_PATHS_ENV = "B12X_ROCE_OPPOSITE_PATHS"
- CANONICAL_TP4_HCAS = (
-     "rocep1s0f0",
 @@ -67,6 +68,8 @@
      the opposite-rank entry has four distinct HCA indices. A two-HCA runtime
      defaults every non-local peer to ``0/1``; runtimes with more HCAs require

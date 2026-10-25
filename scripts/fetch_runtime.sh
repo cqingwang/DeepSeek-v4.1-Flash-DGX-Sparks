@@ -78,6 +78,10 @@ fetch_b12x() {
   tar -xzf "$tmp/b12x-sg17.tgz" -C "$tmp/sg17"
   [[ -d "$tmp/sg17/b12x/comm/roce" && -f "$tmp/sg17/LICENSE" ]] || die "b12x-sg17: unexpected archive layout"
   mv "$tmp/sg17/b12x" "$tmp/sg17/LICENSE" "$OUT/b12x/"
+  cp "$ROOT/runtime/b12x/b12x/comm/roce_env.py" "$OUT/b12x/b12x/comm/roce_env.py"
+  check_local scripts/b12x-required-gid.patch
+  (cd "$OUT/b12x" && patch -p1 --forward --quiet --no-backup-if-mismatch < "$ROOT/scripts/b12x-required-gid.patch") \
+    || die "b12x required-GID patch did not apply"
   # roce_ring: nine files, each pinned; sparkring stores some with CRLF line ends
   local ring="$tmp/ring/roce_ring" id f
   mkdir -p "$ring"
@@ -88,9 +92,12 @@ fetch_b12x() {
   done < <(awk '$1 ~ /^roce-ring\// { print $1 }' "$MANIFEST")
   [[ $(find "$ring" -type f | wc -l) -eq 9 ]] || die "roce-ring: expected 9 files"
   check_local scripts/roce_ring-sparkring-f16b5f4.patch
-  (cd "$tmp/ring" && patch -p1 --forward --quiet < "$ROOT/scripts/roce_ring-sparkring-f16b5f4.patch") \
+  (cd "$tmp/ring" && patch -p1 --forward --quiet --no-backup-if-mismatch < "$ROOT/scripts/roce_ring-sparkring-f16b5f4.patch") \
     || die "roce_ring patch did not apply"
   mv "$ring" "$OUT/b12x/b12x/comm/roce_ring"
+  check_local scripts/roce_ring-tp4-ssot.patch
+  (cd "$OUT/b12x" && patch -p1 --forward --quiet --no-backup-if-mismatch < "$ROOT/scripts/roce_ring-tp4-ssot.patch") \
+    || die "roce_ring TP4 SSOT patch did not apply"
 }
 
 fetch_b12x_next() {
