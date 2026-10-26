@@ -31,6 +31,13 @@ Third-party components and their licences:
   changes: runtime/b12x/roce_ring-provenance.json. scripts/ring_mesh/plan.py drives
   sparkring's fabric planner and the units run sparkring's RDMA-TX marker; neither is
   vendored here (both come from a sparkring checkout, Apache License 2.0).
+- runtime/b12x/b12x/comm/roce_twoshot is a copy of runtime/b12x/b12x/comm/roce with the
+  pipelined two-shot all-reduce of flashinfer-ai/flashinfer PR 6915 by Luke Alonso (head
+  effeb496, flashinfer/experimental/b12x/comm/roce, itself local-inference-lab/b12x's
+  RoCEnante) ported in; Apache License 2.0 (runtime/b12x/LICENSE). FlashInfer: Copyright
+  2025-2026 NVIDIA; Copyright 2023-2026 FlashInfer community (https://flashinfer.ai/).
+  Origin and local changes: runtime/b12x/twoshot-provenance.json. It is opt-in
+  (DSV41_ROCE_TWOSHOT=1); runtime/b12x/b12x/comm/roce is unchanged.
 - SGLang, FlashInfer, DeepGEMM, PyTorch, NVIDIA components and the DeepSeek model
   retain their respective upstream licences. This repository does not
   redistribute model weights.

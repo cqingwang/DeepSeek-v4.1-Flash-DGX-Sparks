@@ -284,6 +284,12 @@ def _b12x():
               f"det-triton-planner patch; deterministic plans use the internal planner", flush=True)
     _B.update(fm=fm, prep=prep, pkg=b12x_next,
               impl=fimpl if callable(getattr(fimpl, "prequantized_input", None)) else None)
+    # TEST ONLY, both gates checked before the import: prepared eager dynamic launch and launcher timing
+    # (adapter/moe_launch_prepared.py; refuses to arm on drifted b12x_next sources)
+    if any(_env(g, "0").lower() not in ("0", "", "off", "false", "no")
+           for g in ("DSV41_MOE_LAUNCH_PREPARED", "DSV41_MOE_LAUNCH_TIMING")):
+        from moe_launch_prepared import install as install_launch_prepared
+        install_launch_prepared(fimpl, sys.modules[__name__])
     _state["b12x_ready"] = True
     return _B
 

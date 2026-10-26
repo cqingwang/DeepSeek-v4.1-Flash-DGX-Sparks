@@ -20,11 +20,13 @@ RUN pip install --no-deps --no-cache-dir -i "$PIP_INDEX" "sglang-kernel==0.4.7" 
 RUN rm -rf /sgl-workspace/sglang/python
 COPY runtime/sglang-canary/python /sgl-workspace/sglang/python
 RUN python3 -c "import sglang, sglang.srt.models.deepseek_v4, sglang.srt.layers.attention.deepseek_v4_backend, sglang.srt.models.deepseek_v4_dspark; print('import ok')"
-# RoCEnante overlay (SG17, rhys101) applied to the branch tree with offsets, then adapted to TP4
-COPY runtime/sglang-rocenante.patch runtime/roce_tp4_adapt.py /tmp/
-RUN cd /sgl-workspace/sglang && patch -p1 -F3 < /tmp/sglang-rocenante.patch && python3 /tmp/roce_tp4_adapt.py && rm /tmp/sglang-rocenante.patch /tmp/roce_tp4_adapt.py
+# RoCEnante overlay (SG17, rhys101) applied to the branch tree with offsets, then adapted to TP4;
+# DSV41_ROCE_TWOSHOT=1 (opt-in, off by default) selects the two-shot copy b12x.comm.roce_twoshot
+# (flashinfer#6915 port, Luke Alonso)
+COPY runtime/sglang-rocenante.patch runtime/roce_tp4_adapt.py runtime/roce_twoshot_adapt.py /tmp/
+RUN cd /sgl-workspace/sglang && patch -p1 -F3 < /tmp/sglang-rocenante.patch && python3 /tmp/roce_tp4_adapt.py && python3 /tmp/roce_twoshot_adapt.py && rm /tmp/sglang-rocenante.patch /tmp/roce_tp4_adapt.py /tmp/roce_twoshot_adapt.py
 COPY runtime/b12x/b12x /opt/b12x/b12x
-RUN PYTHONPATH=/opt/b12x python3 -c "from b12x.comm import roce; print('roce', roce.API_VERSION)"
+RUN PYTHONPATH=/opt/b12x python3 -c "from b12x.comm import roce; print('roce', roce.API_VERSION); from b12x.comm.roce_twoshot import api, _twoshot_cute; print('roce_twoshot', api.API_VERSION)"
 # b12x main renamed to b12x_next (scripts/build_b12x_next.sh) for adapter/moe_b12x_next.py, beside
 # the SG17 b12x that RoCEnante needs; its JIT/tuning cache is B12X_NEXT_COMPILE_CACHE_DIR.
 COPY runtime/b12x_next/b12x_next /opt/b12x_next/b12x_next
@@ -133,6 +135,7 @@ RUN PYTHONPATH=/opt/dsv41/adapter python3 /opt/dsv41/tests/test_anthropic_thinki
  && CUDA_VISIBLE_DEVICES= PYTHONPATH=/opt/dsv41/adapter python3 /opt/dsv41/tests/test_eager_glue.py \
  && PYTHONPATH=/opt/dsv41/adapter python3 /opt/dsv41/tests/test_draft_head_fp8.py \
  && BV_TEST_N=60000 PYTHONPATH=/opt/dsv41/adapter python3 /opt/dsv41/tests/test_block_verify.py \
+ && PYTHONPATH=/opt/dsv41/adapter python3 /opt/dsv41/tests/test_block_verify_numerics.py \
  && PYTHONPATH=/opt/dsv41/adapter python3 /opt/dsv41/tests/test_autotune_keep.py \
  && PYTHONPATH=/opt/dsv41/adapter python3 /opt/dsv41/tests/test_ab_variant.py \
  && CUDA_VISIBLE_DEVICES= PYTHONPATH=/opt/dsv41/adapter python3 /opt/dsv41/tests/test_cert_head.py \
@@ -142,7 +145,10 @@ RUN PYTHONPATH=/opt/dsv41/adapter python3 /opt/dsv41/tests/test_anthropic_thinki
  && CUDA_VISIBLE_DEVICES= VC_TEST_N=60000 PYTHONPATH=/opt/dsv41/adapter python3 /opt/dsv41/tests/test_verify_cap.py \
  && CUDA_VISIBLE_DEVICES= PYTHONPATH=/opt/dsv41/adapter python3 /opt/dsv41/tests/test_spec_sync_free.py \
  && CUDA_VISIBLE_DEVICES= python3 /opt/dsv41/tests/test_roce_ring.py \
- && cd /opt/dsv41/tests && CUDA_VISIBLE_DEVICES= PYTHONPATH=/opt/dsv41/adapter python3 test_indexer_chunked_v3.py /sgl-workspace/sglang/python/sglang/srt/layers/attention/deepseek_v4_backend.py
+ && CUDA_VISIBLE_DEVICES= PYTHONPATH=/opt/dsv41/adapter python3 /opt/dsv41/tests/test_roce_twoshot.py \
+ && CUDA_VISIBLE_DEVICES= PYTHONPATH=/opt/dsv41/adapter:/opt/b12x_next python3 /opt/dsv41/tests/test_moe_launch_prepared.py \
+ && cd /opt/dsv41/tests && CUDA_VISIBLE_DEVICES= PYTHONPATH=/opt/dsv41/adapter python3 test_indexer_chunked_v3.py /sgl-workspace/sglang/python/sglang/srt/layers/attention/deepseek_v4_backend.py \
+ && CUDA_VISIBLE_DEVICES= PYTHONPATH=/opt/dsv41/adapter python3 test_indexer_nosync.py /sgl-workspace/sglang/python/sglang/srt/layers/attention/deepseek_v4_backend.py
 # SGLANG_RUST_BUILD_MODE=never still probes `cargo --version --verbose`, and rustup can
 # hang there for minutes trying to fetch a toolchain (a TP rank stuck before torch
 # distributed init). With no reachable dist server the probe fails at once and the

@@ -346,7 +346,8 @@ def test_config_hash_inputs():
         b.configure(dict(env))
         c.configure(dict(env, DSV41_AB_MAX_BS="4"))
         assert a.CONFIG_HASH == b.CONFIG_HASH != c.CONFIG_HASH and c._MAX_BS == 4
-        assert set(a.SOURCES) == {"ab_variant", "l2_prefetch", "fuse_quant", "sitecustomize", "cert_head"}
+        assert set(a.SOURCES) == {"ab_variant", "l2_prefetch", "fuse_quant", "sitecustomize", "cert_head",
+                                  "roce_twoshot", "indexer_chunked_v3", "moe_launch_prepared"}
         assert a.SOURCES["ab_variant"] != "missing" and a.SOURCES["l2_prefetch"] != "missing"
         # a different adapter file on one node changes that node's hash
         saved = sys.modules.get("fuse_quant")
@@ -393,6 +394,37 @@ def test_finder_wraps_only_its_modules():
         assert sum(type(f).__name__ == "_Finder" for f in sys.meta_path) == 1
         ab.configure({"DSV41_AB_VARIANTS": "2", "DSV41_AB_ALLOW_AA": "1"})
         assert sum(type(f).__name__ == "_Finder" for f in sys.meta_path) == 1
+    finally:
+        clean_meta_path()
+
+
+def test_short_prefill_knobs():
+    """perf/short-prefill-ttft: DSV41_INDEXER_NOSYNC is call-time only (never unioned); DSV41_MOE_LAUNCH_PREPARED is
+    unioned on (hooks installed) when any variant uses it, each variant reads its own mode, and off / plan /
+    plan,direct are three behaviours (no false A/A)."""
+    ab = fresh("ab_ttft")
+    env = {"DSV41_AB_VARIANTS": "3", "DSV41_AB_MAX_BS": "0",
+           "DSV41_AB_V0": "DSV41_INDEXER_NOSYNC=0;DSV41_MOE_LAUNCH_PREPARED=0",
+           "DSV41_AB_V1": "DSV41_INDEXER_NOSYNC=1;DSV41_MOE_LAUNCH_PREPARED=0",
+           "DSV41_AB_V2": "DSV41_INDEXER_NOSYNC=1;DSV41_MOE_LAUNCH_PREPARED=plan"}
+    try:
+        assert ab.configure(env) and ab.N == 3 and ab._MAX_BS == 0
+        assert env["DSV41_MOE_LAUNCH_PREPARED"] == "1" and "DSV41_INDEXER_NOSYNC" not in env
+        for v, (nosync, prep) in enumerate((("0", "0"), ("1", "0"), ("1", "plan"))):
+            ab.set_runtime(v)
+            assert ab.env("DSV41_INDEXER_NOSYNC") == nosync and ab.env("DSV41_MOE_LAUNCH_PREPARED") == prep
+        ab.set_runtime(0)
+        # MAX_BS=0: every graph shape is captured once (variant 0) and shared
+        assert ab._variants_for(types.SimpleNamespace(size=1)) == 1
+        norm = [ab._norm({"DSV41_MOE_LAUNCH_PREPARED": v})["DSV41_MOE_LAUNCH_PREPARED"]
+                for v in ("0", "off", "1", "plan", "plan,direct", "direct")]
+        assert norm == ["off", "off", "plan", "plan", "plan,direct", "plan,direct"], norm
+        try:   # plan vs 1 is the same behaviour: refused as an A/A
+            fresh("ab_ttft_aa").configure({"DSV41_AB_VARIANTS": "2", "DSV41_AB_V0": "DSV41_MOE_LAUNCH_PREPARED=1",
+                                           "DSV41_AB_V1": "DSV41_MOE_LAUNCH_PREPARED=plan"})
+            raise AssertionError("plan vs 1 accepted as an A/B")
+        except RuntimeError:
+            pass
     finally:
         clean_meta_path()
 

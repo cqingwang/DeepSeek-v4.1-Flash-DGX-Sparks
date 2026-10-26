@@ -133,9 +133,11 @@ _state = {"lib": None, "learning": {}, "plans": {}, "sig": None, "idx": 0, "lin"
           "installed": set(), "logged": set(), "frozen": set(), "keepalive": [], "lm_head": {},
           "woa_depth": 0}
 _CHUNK = 16384
-# RoCEnante packages whose collectives fork the prefetch: the stock one and the switchless-ring
-# one (DSV41_ROCE_RING=1, runtime/b12x/b12x/comm/roce_ring); runtime/roce_tp4_adapt.py picks one.
-_ROCE_MODULES = ("b12x.comm.roce.roce_oneshot", "b12x.comm.roce_ring.roce_oneshot")
+# RoCEnante packages whose collectives fork the prefetch: the stock one, the switchless-ring
+# one (DSV41_ROCE_RING=1, runtime/b12x/b12x/comm/roce_ring) and the two-shot copy
+# (DSV41_ROCE_TWOSHOT=1, runtime/b12x/b12x/comm/roce_twoshot); the overlay picks one.
+_ROCE_MODULES = ("b12x.comm.roce.roce_oneshot", "b12x.comm.roce_ring.roce_oneshot",
+                 "b12x.comm.roce_twoshot.roce_oneshot")
 
 
 def enabled():
@@ -594,7 +596,7 @@ def install_router(module):
 
 
 def install_roce(module):
-    """Patch b12x.comm.roce(_ring).roce_oneshot: launch the prefetch right before each collective."""
+    """Patch b12x.comm.roce(_ring|_twoshot).roce_oneshot: launch the prefetch right before each collective."""
     if not _installed():
         return
     cls = module.RoceOneshotAllReduce
