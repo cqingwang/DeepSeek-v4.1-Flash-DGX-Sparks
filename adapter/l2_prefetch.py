@@ -134,7 +134,7 @@ _state = {"lib": None, "learning": {}, "plans": {}, "sig": None, "idx": 0, "lin"
           "woa_depth": 0}
 _CHUNK = 16384
 # RoCEnante packages whose collectives fork the prefetch: the stock one and the switchless-ring
-# one (DSV41_ROCE_RING=1, runtime/b12x/b12x/comm/roce_ring); runtime/roce_tp4_adapt.py picks one.
+# one (DSV41_ROCE_RING=1, shared from spark/ring/b12x); runtime/roce_tp4_adapt.py picks one.
 _ROCE_MODULES = ("b12x.comm.roce.roce_oneshot", "b12x.comm.roce_ring.roce_oneshot")
 
 

@@ -31,7 +31,7 @@ def rsync_excludes():
 def launcher_source():
     """start.sh from the variable defaults through the helper functions, no dispatch."""
     source = (ROOT / "start.sh").read_text()
-    start = source.index("HEAD_IP=")
+    start = source.index('if [[ "${DSV41_LAUNCHER:-}" == tp4 ]]')
     end = source.index('case "$CMD" in')
     return "set -euo pipefail\n" + source[start:end]
 
@@ -99,6 +99,30 @@ class BuildTargetTests(unittest.TestCase):
         self.assertIn('docker build -f "$ROOT/$dockerfile" -t "$IMAGE"', build)
         workers = build[build.index("for h in \"${WORKER_HOSTS[@]}\""):]
         self.assertIn('docker build -f $(printf \'%q\' "$dockerfile")', workers)
+        self.assertIn("$ring_context_arg", workers)
+
+    def test_roce_build_passes_the_shared_parent_ring_as_named_context(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            Path(tmp, "SSH_IDENTITY.pub").write_text("ssh-ed25519 AAAA test\n")
+            ring_dir = Path(tmp, "ring", "b12x")
+            (ring_dir / "comm/roce_ring").mkdir(parents=True)
+            (ring_dir / "comm/roce_ring/roce_oneshot.py").write_text("# shared source\n")
+            log = Path(tmp, "docker.log")
+            shell(
+                r"""
+                  BUILD_DOCKERFILE=Dockerfile.canary-roce
+                  WORKER_HOSTS=()
+                  docker() { printf '%s\n' "$*" >> "$LOG"
+                             case "$1 $2" in "image inspect") echo arm64;; esac; }
+                  cmd_build
+                """,
+                Path(tmp),
+                {"LOG": str(log), "B12X_RING_HOST_DIR": str(ring_dir)},
+            )
+            calls = [line for line in log.read_text().splitlines() if line.startswith("build ")]
+            self.assertEqual(len(calls), 1, log.read_text())
+            self.assertIn(f"--build-context spark-ring={ring_dir}", calls[0])
+            self.assertIn(f"-f {ROOT}/Dockerfile.canary-roce", calls[0])
 
     def test_a_dockerfile_outside_the_repository_is_rejected(self):
         """The workers only see what the rsync staged, so an absolute path cannot work."""
@@ -129,10 +153,10 @@ class RsyncExcludesTests(unittest.TestCase):
                              "the checkpoint directory at the repository root was copied")
 
     def test_every_exclude_is_anchored(self):
-        """A bare name matches any path component; all five are root-level artifacts."""
+        """Only cache and exact env-name excludes are intentionally unanchored."""
         for pattern in rsync_excludes():
-            if pattern in (".env", ".env.tp4"):
-                continue  # exact filenames, meant to be protected everywhere
+            if pattern in (".env", ".env.tp4", "__pycache__", "*.pyc"):
+                continue  # exact env filenames and Python-cache subtree are intentional
             self.assertTrue(pattern.startswith("/"), f"unanchored exclude: {pattern}")
 
 
@@ -164,7 +188,8 @@ class CanaryDockerfileTests(unittest.TestCase):
         text = (ROOT / "Dockerfile.canary-roce").read_text()
         self.assertIn("COPY runtime/sources.manifest /opt/dsv41/runtime/sources.manifest", text)
         self.assertIn("runtime/b12x/source-provenance.json", text)
-        self.assertIn("runtime/b12x/roce_ring-provenance.json", text)
+        self.assertIn("COPY --from=spark-ring /roce_ring-provenance.json", text)
+        self.assertIn("COPY --from=spark-ring /comm/roce_ring", text)
 
     def test_the_pip_index_is_overridable(self):
         text = (ROOT / "Dockerfile.canary").read_text()

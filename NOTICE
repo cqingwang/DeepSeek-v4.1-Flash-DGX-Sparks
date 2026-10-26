@@ -29,12 +29,13 @@ Third-party components and their licences:
   scripts/qeval*.py) is contributed from knapcio/DeepSeek-V4.1-Flash-4x-DGX-Spark-TP4,
   AGPL-3.0-or-later. The fetched third-party trees remain under their respective
   upstream licenses and are pinned by runtime/sources.manifest.
-- runtime/b12x/b12x/comm/roce_ring is the path-aware RoCEnante package of
+- The shared `spark/ring/b12x/comm/roce_ring` path-aware RoCEnante package is from
   FujitsuPolycom/sparkring (commit f16b5f4), itself derived from local-inference-lab/b12x
-  (RoCEnante, PR 295); Apache License 2.0 (runtime/b12x/LICENSE). Origin and local
-  changes: runtime/b12x/roce_ring-provenance.json. scripts/ring_mesh/plan.py drives
-  sparkring's fabric planner and the units run sparkring's RDMA-TX marker; neither is
-  vendored here (both come from a sparkring checkout, Apache License 2.0).
+  (RoCEnante, PR 295); Apache License 2.0, retained at `spark/ring/b12x/LICENSE`.
+  Origin and local changes are recorded in `spark/ring/b12x/roce_ring-provenance.json`.
+  `scripts/ring_mesh/plan.py` drives sparkring's fabric planner and the units run
+  sparkring's RDMA-TX marker; neither is vendored here (both come from a sparkring checkout,
+  Apache License 2.0).
 - SGLang, FlashInfer, DeepGEMM, PyTorch, NVIDIA components and the DeepSeek model
   retain their respective upstream licences. This repository does not
   redistribute model weights.

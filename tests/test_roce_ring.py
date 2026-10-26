@@ -24,7 +24,7 @@ def _load(name, *candidates):
 
 paths = _load(
     "roce_ring_paths",
-    ROOT / "runtime/b12x/b12x/comm/roce_ring/_path_config.py",
+    ROOT.parent / "ring/b12x/comm/roce_ring/_path_config.py",
     Path("/opt/b12x/b12x/comm/roce_ring/_path_config.py"),
 )
 plan = _load("ring_mesh_plan", ROOT / "scripts/ring_mesh/plan.py")

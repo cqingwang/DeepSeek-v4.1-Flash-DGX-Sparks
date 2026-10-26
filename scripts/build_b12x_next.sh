@@ -14,9 +14,11 @@
 #
 # usage: scripts/build_b12x_next.sh [out_dir=runtime/b12x_next] [commit]
 set -euo pipefail
+HERE="$(cd "$(dirname "$0")" && pwd)"
 OUT=${1:-runtime/b12x_next}
 COMMIT=${2:-a7d7d29b2ef8869086e0ceaa787321f17544e3c9}
 REPO=${B12X_REPO:-https://github.com/local-inference-lab/b12x}
+SPARK_RING_DIR="${SPARK_RING_DIR:-$(cd "$HERE/../../ring/b12x" && pwd)}"
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 git clone -q "$REPO" "$tmp/src"
@@ -28,7 +30,7 @@ cp "$tmp/src/LICENSE" "$OUT/LICENSE"
 find "$OUT/b12x_next" -name __pycache__ -type d -prune -exec rm -rf {} +
 find "$OUT/b12x_next" -type f \( -name '*.py' -o -name '*.c' -o -name '*.cpp' -o -name '*.h' \) -print0 \
   | xargs -0 perl -pi -e 's/\bb12x\b(?!-)/b12x_next/g; s/\bB12X_(?!NEXT_)/B12X_NEXT_/g'
-cp "$HERE/../runtime/b12x/b12x/comm/roce_env.py" "$OUT/b12x_next/comm/roce_env.py"
+cp "$SPARK_RING_DIR/comm/roce_env.py" "$OUT/b12x_next/comm/roce_env.py"
 echo "$COMMIT" > "$OUT/b12x_next/SOURCE_COMMIT"
 # ds41 patches, in order:
 #   compact-n64-m64: admit the M64 tile for compact-N64 (N=576, EP1) prefill capacities (b12x pins them to M16)
@@ -39,7 +41,6 @@ echo "$COMMIT" > "$OUT/b12x_next/SOURCE_COMMIT"
 #   det-triton-planner: admit the Triton route planner with deterministic output (it writes only
 #                    order-free integer row counts / tile prefix and resets the barrier words, so
 #                    launches that use it skip the barrier fill above; outputs are bit-identical)
-HERE="$(cd "$(dirname "$0")" && pwd)"
 PATCHES=("$HERE/b12x_next-compact-n64-m64.patch" "$HERE/b12x_next-prequant-input.patch"
          "$HERE/b12x_next-barrier-zero.patch" "$HERE/b12x_next-det-triton-planner.patch"
          "$HERE/b12x_next-required-gid.patch")

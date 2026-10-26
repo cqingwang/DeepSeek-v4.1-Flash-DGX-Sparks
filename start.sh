@@ -123,6 +123,7 @@ NCCL_SHA256="${NCCL_SHA256:-}"
 NCCL_SWITCHLESS_RING_ONLY="${NCCL_SWITCHLESS_RING_ONLY:-0}"
 NCCL_IB_SUBNET_PREFIX_LEN="${NCCL_IB_SUBNET_PREFIX_LEN:-}"
 NCCL_OVERLAY_PIP="${NCCL_OVERLAY_PIP:-$NCCL_SWITCHLESS_RING_ONLY}"
+B12X_RING_HOST_DIR="${B12X_RING_HOST_DIR:-$ROOT/../ring/b12x}"
 
 if [[ "$NCCL_SWITCHLESS_RING_ONLY" == 1 ]]; then
   [[ "$NCCL_IB_SUBNET_PREFIX_LEN" =~ ^[1-9][0-9]?$ ]] \
@@ -159,7 +160,7 @@ EP_SIZE="${EP_SIZE:-$TP_SIZE}"
 if [[ "${DSV41_LAUNCHER:-}" == tp4 ]]; then
   [[ "$NNODES" == 4 && "$TP_SIZE" == 4 && "${#WORKER_IPS[@]}" == 3 ]] \
     || { echo "TP4 ring requires NNODES=4, TP_SIZE=4 and three common.ring workers" >&2; exit 1; }
-  for required in HEAD_IP WORKER_USER SSH_IDENTITY FABRIC_IFACE GLOO_SOCKET_IFNAME NCCL_SOCKET_IFNAME IB_HCA NCCL_HOST_DIR; do
+  for required in HEAD_IP WORKER_USER SSH_IDENTITY FABRIC_IFACE GLOO_SOCKET_IFNAME NCCL_SOCKET_IFNAME IB_HCA NCCL_HOST_DIR B12X_RING_HOST_DIR; do
     [[ -n "${!required:-}" ]] || { echo "TP4 ring missing config.yaml-derived value: $required" >&2; exit 1; }
   done
 fi
@@ -443,6 +444,13 @@ docker_common_args() {
          -v "$NCCL_HOST_DIR:$NCCL_CONTAINER_DIR:ro" \
          -v "$HOME/nccl-debug:/nccl-debug:rw" \
          -e "LD_PRELOAD=$NCCL_PIN_CONTAINER $NCCL_CONTAINER_DIR/$NCCL_SO_NAME")
+  fi
+  if [[ "${DSV41_LAUNCHER:-}" == tp4 ]]; then
+    _a+=(
+      -v "$B12X_RING_HOST_DIR/comm/roce_ring:/opt/b12x/b12x/comm/roce_ring:ro"
+      -v "$B12X_RING_HOST_DIR/comm/roce_env.py:/opt/b12x/b12x/comm/roce_env.py:ro"
+      -v "$B12X_RING_HOST_DIR/comm/roce_env.py:/opt/b12x_next/b12x_next/comm/roce_env.py:ro"
+    )
   fi
   # Legacy standalone profiles may still pass PEER_HCA_RANK values. The
   # managed switchless target rejects them because its pinned NCCL selects a
@@ -779,9 +787,18 @@ cmd_build() {
   base=$(build_base_image) || return 1
   base_image_ready "$base" || return 1
   local dockerfile="$BUILD_DOCKERFILE"
+  local ring_context_arg=""
+  local -a ring_build_args=()
   case "$dockerfile" in /*) die "BUILD_DOCKERFILE must be inside the repository (got $dockerfile)";; esac
   [[ -f "$ROOT/$dockerfile" ]] || die "no such Dockerfile: $ROOT/$dockerfile"
-  docker build -f "$ROOT/$dockerfile" -t "$IMAGE" $BUILD_ARGS --build-arg "BASE_IMAGE=$base" --pull=false "$ROOT"
+  if [[ "$dockerfile" == "Dockerfile.canary-roce" ]]; then
+    [[ -f "$B12X_RING_HOST_DIR/comm/roce_ring/roce_oneshot.py" ]] \
+      || die "shared B12X RoCE module missing: $B12X_RING_HOST_DIR"
+    ring_build_args+=(--build-context "spark-ring=$B12X_RING_HOST_DIR")
+    ring_context_arg="--build-context $(printf '%q' "spark-ring=$B12X_RING_HOST_DIR")"
+  fi
+  docker build -f "$ROOT/$dockerfile" -t "$IMAGE" $BUILD_ARGS "${ring_build_args[@]+"${ring_build_args[@]}"}" \
+    --build-arg "BASE_IMAGE=$base" --pull=false "$ROOT"
   local img_arch
   img_arch=$(docker image inspect -f '{{.Architecture}}' "$IMAGE")
   [[ "$img_arch" == "arm64" ]] || die "expected arm64 image, got $img_arch"
@@ -793,6 +810,12 @@ cmd_build() {
   for h in "${WORKER_HOSTS[@]}"; do
     info "rsync recipe → $h:$WORKER_DIR"
     remote_on "$h" "mkdir -p $(printf '%q' "$WORKER_DIR")"
+    if [[ "$dockerfile" == "Dockerfile.canary-roce" ]]; then
+      remote_on "$h" "mkdir -p $(printf '%q' "$B12X_RING_HOST_DIR")"
+      rsync -aH --checksum --exclude '__pycache__' --exclude '*.pyc' \
+        -e "$(ssh_rsync_e)" \
+        "$B12X_RING_HOST_DIR/" "${WORKER_USER}@${h}:${B12X_RING_HOST_DIR}/"
+    fi
     rsync -aH --delete --exclude '.env' --exclude '.env.tp4' --exclude '/state' --exclude '/state-tp4' \
       --exclude '/logs' --exclude '/logs-tp4' --exclude '/models' \
       --exclude '/engram' \
@@ -801,7 +824,7 @@ cmd_build() {
     info "docker build on $h ..."
     remote_on "$h" --timeout "${BUILD_TIMEOUT:-0}" \
       "$(base_image_worker_command "$base")
-       cd $(printf '%q' "$WORKER_DIR") && docker build -f $(printf '%q' "$dockerfile") -t $(printf '%q' "$IMAGE") $BUILD_ARGS --build-arg $(printf '%q' "BASE_IMAGE=$base") --pull=false ."
+       cd $(printf '%q' "$WORKER_DIR") && docker build -f $(printf '%q' "$dockerfile") -t $(printf '%q' "$IMAGE") $BUILD_ARGS $ring_context_arg --build-arg $(printf '%q' "BASE_IMAGE=$base") --pull=false ."
   done
   fi
   info "overlay image on all 3 nodes"
@@ -906,6 +929,13 @@ validate_tp4_ring_policy() {
   [[ "$NCCL_IB_SUBNET_PREFIX_LEN" =~ ^[1-9][0-9]?$ ]] \
     && (( NCCL_IB_SUBNET_PREFIX_LEN <= 32 )) \
     || { echo "TP4 ring-only mode requires a valid common.ring subnet prefix" >&2; return 1; }
+  [[ "$B12X_RING_HOST_DIR" == /* ]] \
+    || { echo "TP4 B12X ring requires an absolute parent-configured B12X_RING_HOST_DIR" >&2; return 1; }
+  local ring_source
+  for ring_source in comm/roce_env.py comm/roce_ring/__init__.py comm/roce_ring/roce_oneshot.py; do
+    [[ -f "$B12X_RING_HOST_DIR/$ring_source" ]] \
+      || { echo "TP4 shared B12X ring source is missing: $B12X_RING_HOST_DIR/$ring_source" >&2; return 1; }
+  done
   local peer_rank peer_var
   for peer_rank in 0 1 2 3; do
     peer_var="PEER_HCA_RANK$peer_rank"
@@ -1043,6 +1073,10 @@ cmd_serve() {
   local nccl_library_mount_arg nccl_host_mount_arg
   nccl_library_mount_arg=$(printf '%q' "$NCCL_LIBRARY_PATH:$NCCL_PIP_SO:ro")
   nccl_host_mount_arg=$(printf '%q' "$NCCL_HOST_DIR:$NCCL_CONTAINER_DIR:ro")
+  local b12x_ring_mount_arg b12x_roce_env_mount_arg b12x_next_roce_env_mount_arg
+  b12x_ring_mount_arg=$(printf '%q' "$B12X_RING_HOST_DIR/comm/roce_ring:/opt/b12x/b12x/comm/roce_ring:ro")
+  b12x_roce_env_mount_arg=$(printf '%q' "$B12X_RING_HOST_DIR/comm/roce_env.py:/opt/b12x/b12x/comm/roce_env.py:ro")
+  b12x_next_roce_env_mount_arg=$(printf '%q' "$B12X_RING_HOST_DIR/comm/roce_env.py:/opt/b12x_next/b12x_next/comm/roce_env.py:ro")
   for h in "${WORKER_HOSTS[@]}"; do
     wip="${WORKER_IPS[$idx]}"
     wgid="${WORKER_GIDS[$idx]}"
@@ -1058,6 +1092,11 @@ cmd_serve() {
         docker volume inspect $NFS_VOLUME >/dev/null || { echo 'MISSING docker volume $NFS_VOLUME on $h — run ./start.sh share'; exit 1; }
       fi
       test -d /dev/infiniband || { echo 'MISSING /dev/infiniband on $h'; exit 1; }
+      for ring_source in $(printf '%q' "$B12X_RING_HOST_DIR/comm/roce_env.py") \
+        $(printf '%q' "$B12X_RING_HOST_DIR/comm/roce_ring/__init__.py") \
+        $(printf '%q' "$B12X_RING_HOST_DIR/comm/roce_ring/roce_oneshot.py"); do
+        test -f \"\$ring_source\" || { echo \"MISSING shared B12X ring source \$ring_source on $h\"; exit 1; }
+      done
       mkdir -p $WORKER_DIR/state $WORKER_DIR/logs
       NCCL_ARGS=()
       if [ \"${NCCL_OVERLAY_PIP:-0}\" = 1 ]; then
@@ -1076,6 +1115,7 @@ cmd_serve() {
           -v $(printf '%q' "$NCCL_HOST_DIR:$NCCL_CONTAINER_DIR:ro")
           -v \"\$HOME/nccl-debug:/nccl-debug:rw\")
       fi
+      B12X_RING_ARGS=(-v $b12x_ring_mount_arg -v $b12x_roce_env_mount_arg -v $b12x_next_roce_env_mount_arg)
       MODEL_SRC='$NFS_VOLUME'
       if [ '$WEIGHTS_MODE' = 'local' ]; then MODEL_SRC='$WORKER_MODEL_DIR'; fi
       docker run -d --name $(printf '%q' "$worker_ctn") \
@@ -1087,6 +1127,7 @@ cmd_serve() {
         -v $WORKER_DIR/state:/state \
         -v \$HOME/.cache:/root/.cache \
         \"\${NCCL_ARGS[@]+"\${NCCL_ARGS[@]}"}\" \"\${SHIM_ARGS[@]+"\${SHIM_ARGS[@]}"}\" \\
+        \"\${B12X_RING_ARGS[@]+\"\${B12X_RING_ARGS[@]}\"}\" \\
 $(worker_env_lines "$wip" "$wgid" "$rank")
         -e API_KEY=$(printf '%q' "$API_KEY") \\
         -e EXTRA_SGLANG_ARGS=$(printf '%q' "${EXTRA_SGLANG_ARGS:-}") \\

@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Fetch the third-party sources of the TP4 images at their pinned commits, verify every
-# download against runtime/sources.manifest, and apply this repository's patches.
+# Fetch third-party target sources at their pinned commits and stage shared Spark ring
+# sources from the parent spark/ring/b12x module.
 #
 #   scripts/fetch_runtime.sh OUT_DIR [sglang-canary] [b12x] [b12x-next]   (default: all three)
 #
 #   OUT_DIR/sglang-canary/python   SGLang dsv4.1 branch python/ tree (unpatched; the Dockerfile
 #                                  applies runtime/sglang-rocenante.patch + runtime/roce_tp4_adapt.py)
-#   OUT_DIR/b12x/{b12x,LICENSE}    SG17 b12x (b12x.comm.roce) + b12x.comm.roce_ring
+#   OUT_DIR/b12x/{b12x,LICENSE}    SG17 b12x plus the shared b12x.comm.roce_ring package
 #   OUT_DIR/b12x_next/{b12x_next,LICENSE}
 #                                  b12x main renamed to the package b12x_next, patched
 #
@@ -15,6 +15,7 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MANIFEST="${MANIFEST:-$ROOT/runtime/sources.manifest}"
+SPARK_RING_DIR="${SPARK_RING_DIR:-$ROOT/../ring/b12x}"
 OUT="${1:?usage: scripts/fetch_runtime.sh OUT_DIR [sglang-canary] [b12x] [b12x-next]}"
 shift
 COMPONENTS=("$@")
@@ -78,26 +79,9 @@ fetch_b12x() {
   tar -xzf "$tmp/b12x-sg17.tgz" -C "$tmp/sg17"
   [[ -d "$tmp/sg17/b12x/comm/roce" && -f "$tmp/sg17/LICENSE" ]] || die "b12x-sg17: unexpected archive layout"
   mv "$tmp/sg17/b12x" "$tmp/sg17/LICENSE" "$OUT/b12x/"
-  cp "$ROOT/runtime/b12x/b12x/comm/roce_env.py" "$OUT/b12x/b12x/comm/roce_env.py"
   check_local scripts/b12x-required-gid.patch
   (cd "$OUT/b12x" && patch -p1 --forward --quiet --no-backup-if-mismatch < "$ROOT/scripts/b12x-required-gid.patch") \
     || die "b12x required-GID patch did not apply"
-  # roce_ring: nine files, each pinned; sparkring stores some with CRLF line ends
-  local ring="$tmp/ring/roce_ring" id f
-  mkdir -p "$ring"
-  while read -r id; do
-    f="${id#roce-ring/}"
-    fetch "$id" "$ring/$f"
-    perl -pi -e 's/\r\n/\n/' "$ring/$f"
-  done < <(awk '$1 ~ /^roce-ring\// { print $1 }' "$MANIFEST")
-  [[ $(find "$ring" -type f | wc -l) -eq 9 ]] || die "roce-ring: expected 9 files"
-  check_local scripts/roce_ring-sparkring-f16b5f4.patch
-  (cd "$tmp/ring" && patch -p1 --forward --quiet --no-backup-if-mismatch < "$ROOT/scripts/roce_ring-sparkring-f16b5f4.patch") \
-    || die "roce_ring patch did not apply"
-  mv "$ring" "$OUT/b12x/b12x/comm/roce_ring"
-  check_local scripts/roce_ring-tp4-ssot.patch
-  (cd "$OUT/b12x" && patch -p1 --forward --quiet --no-backup-if-mismatch < "$ROOT/scripts/roce_ring-tp4-ssot.patch") \
-    || die "roce_ring TP4 SSOT patch did not apply"
 }
 
 fetch_b12x_next() {
@@ -132,6 +116,21 @@ fetch_b12x_next() {
   [[ -z "$left" ]] || die "unrenamed b12x references in: $left"
 }
 
+copy_shared_ring_runtime() {
+  local source="$SPARK_RING_DIR/comm"
+  [[ -d "$OUT/b12x/b12x/comm" || -d "$OUT/b12x_next/b12x_next/comm" ]] || return 0
+  [[ -f "$source/roce_env.py" && -f "$source/roce_ring/roce_oneshot.py" ]] \
+    || die "shared Spark ring source is missing under $SPARK_RING_DIR"
+  if [[ -d "$OUT/b12x/b12x/comm" ]]; then
+    cp "$source/roce_env.py" "$OUT/b12x/b12x/comm/roce_env.py"
+    rm -rf "$OUT/b12x/b12x/comm/roce_ring"
+    cp -R "$source/roce_ring" "$OUT/b12x/b12x/comm/roce_ring"
+  fi
+  if [[ -d "$OUT/b12x_next/b12x_next/comm" ]]; then
+    cp "$source/roce_env.py" "$OUT/b12x_next/b12x_next/comm/roce_env.py"
+  fi
+}
+
 for c in "${COMPONENTS[@]}"; do
   case "$c" in
     sglang-canary) fetch_sglang_canary ;;
@@ -140,6 +139,7 @@ for c in "${COMPONENTS[@]}"; do
     *) die "unknown component $c (sglang-canary, b12x, b12x-next)" ;;
   esac
 done
+copy_shared_ring_runtime
 check_local runtime/sglang-rocenante.patch
 check_local runtime/flash_mla_sm120.canary.py
 echo "fetched into $OUT: ${COMPONENTS[*]}"

@@ -3,6 +3,16 @@
 Newest first. Each entry says what changed in the production stack and what was measured; the
 raw results live under `docs/results/`.
 
+## 2026-10-26 (shared ring module ownership)
+
+- The path-aware B12X RoCE package, configured-GID helper, provenance, license and derivation inputs
+  now live in the parent Spark repository at `spark/ring/b12x/`, not under this engine target.
+- `Dockerfile.canary-roce` consumes that directory through the `spark-ring` BuildKit context;
+  `start.sh` mounts the module and helper read-only on all four ranks. The managed parent config
+  remains the only source for physical HCA, GID, peer-map and rank values.
+- This is an ownership/build-input change only; no serving container was restarted and no new
+  serving qualification or benchmark result is claimed.
+
 ## 2026-09-29 (DeepSeek ring deployment; measured near, below switched README)
 
 - The local Spark config now enables the pinned `cx7_hairpin_diagonal` ring plan for this DeepSeek

@@ -551,8 +551,8 @@ No CPU touches the forwarded packets and the kernel forwards nothing (`nstat IpF
 flat); a marked packet that misses the rule is dropped, never routed in software. Every rank uses
 two paths per peer over its four RDMA functions: the neighbours over their own cable, the opposite
 node through each neighbour (one path per PCIe domain). `DSV41_ROCE_RING=1` makes the SG17 overlay
-load `b12x.comm.roce_ring`, sparkring's path-aware RoCEnante (provenance and local changes in
-`runtime/b12x/roce_ring-provenance.json`), instead of `b12x.comm.roce`; unset, nothing changes.
+load `b12x.comm.roce_ring`, sparkring's path-aware RoCEnante (shared source and provenance in
+`spark/ring/b12x/`), instead of `b12x.comm.roce`; unset, nothing changes.
 `DSV41_L2_PREFETCH` hooks either package. It hooks only these RoCEnante one-shot modules: on a ring
 boot with `SGLANG_ROCE_ALLREDUCE=0` the collectives go through NCCL, the prefetch learns no plan
 (`collectives=0 ... this graph runs without prefetch` on every captured graph) and is inert, with no
@@ -619,7 +619,7 @@ the two before it (the fast loader's boot-to-boot spread).
 3. **The plan**, from the head. In the managed workspace, topology and SSH endpoints are read from the parent Spark config; specify the target whose runtime rank order and B12X contract must be checked:
 
    ```bash
-   python3 scripts/ring_mesh/plan.py --sparkring ~/sparkring --target deepseek_v4.1_luzi_switchless --out ring-mesh
+   python3 scripts/ring_mesh/plan.py --sparkring ~/sparkring --target deepseek_v4.1_flash_switchless --out ring-mesh
    ```
 
    `plan.py` reads the configured physical order, both port planes and target settings through
@@ -628,7 +628,7 @@ the two before it (the fast loader's boot-to-boot spread).
    topology from live addresses. Once inventory matches, it has sparkring build the RoCEnante selection:
    per node two `/32` routes, two
    tc rules and two markers. It writes `mesh-up-<host>.sh` / `mesh-down-<host>.sh` and `env.txt`,
-   including a diagnostic `EXTRA_CONTAINER_ENV` string whose B12X peer paths use the physical A→B→C→D ranks and are checked against `query-model` output. NCCL peer-HCA variables are not injected for the current LuZ/SparkRing build because it selects local ports by peer RoCE GID subnet. `env.txt` is for parity review;
+   including a diagnostic `EXTRA_CONTAINER_ENV` string whose B12X peer paths use the physical A→B→C→D ranks and are checked against `query-model` output. NCCL peer-HCA variables are not injected for the current SparkRing build because it selects local ports by peer RoCE GID subnet. `env.txt` is for parity review;
    the parent deployment remains the only writer of the active managed environment.
 4. **Install on every node** with the engine stopped (applying the hairpin size re-initialises each
    fabric function); `$HOST` is that node's name as given to `plan.py`:

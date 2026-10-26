@@ -10,8 +10,9 @@ ARG BASE_IMAGE=lmsysorg/sglang:dev-dsv41@sha256:3dbc313030a6ef2c5d7de8ecf48e9aec
 ARG FETCH_STAGE=fetch
 FROM ${BASE_IMAGE} AS fetch
 COPY runtime/sources.manifest runtime/sglang-rocenante.patch runtime/flash_mla_sm120.canary.py /src/runtime/
-COPY scripts/fetch_runtime.sh scripts/b12x_next-compact-n64-m64.patch scripts/b12x-required-gid.patch scripts/roce_ring-sparkring-f16b5f4.patch scripts/roce_ring-tp4-ssot.patch /src/scripts/
-RUN bash /src/scripts/fetch_runtime.sh /fetched sglang-canary b12x b12x-next
+COPY scripts/fetch_runtime.sh scripts/b12x_next-compact-n64-m64.patch scripts/b12x-required-gid.patch /src/scripts/
+COPY --from=spark-ring / /src/spark-ring/
+RUN SPARK_RING_DIR=/src/spark-ring bash /src/scripts/fetch_runtime.sh /fetched sglang-canary b12x b12x-next
 
 FROM ${BASE_IMAGE} AS fetch_local
 COPY runtime/fetched/sglang-canary /fetched/sglang-canary
@@ -19,6 +20,9 @@ COPY runtime/fetched/b12x /fetched/b12x
 COPY runtime/fetched/b12x_next /fetched/b12x_next
 
 FROM ${FETCH_STAGE} AS fetch_selected
+COPY --from=spark-ring /comm/roce_env.py /fetched/b12x/b12x/comm/roce_env.py
+COPY --from=spark-ring /comm/roce_ring /fetched/b12x/b12x/comm/roce_ring
+COPY --from=spark-ring /comm/roce_env.py /fetched/b12x_next/b12x_next/comm/roce_env.py
 FROM ${BASE_IMAGE}
 # Same mirror knob as Dockerfile.canary (Saolence, #6): --build-arg PIP_INDEX=<mirror>/simple
 ARG PIP_INDEX=https://pypi.org/simple
@@ -42,7 +46,8 @@ RUN PYTHONPATH=/opt/b12x:/opt/b12x_next python3 -c "import b12x.comm.roce, b12x_
 COPY runtime/patch_encoding_dsv41.py /opt/dsv41/runtime/patch_encoding_dsv41.py
 RUN python3 /opt/dsv41/runtime/patch_encoding_dsv41.py
 COPY runtime/sources.manifest /opt/dsv41/runtime/sources.manifest
-COPY runtime/b12x/source-provenance.json runtime/b12x/roce_ring-provenance.json /opt/dsv41/runtime/b12x/
+COPY runtime/b12x/source-provenance.json /opt/dsv41/runtime/b12x/
+COPY --from=spark-ring /roce_ring-provenance.json /opt/dsv41/runtime/b12x/
 WORKDIR /opt/dsv41
 COPY adapter /opt/dsv41/adapter
 RUN g++ -O2 -Wall -Wextra -Werror -std=c++17 -shared -fPIC -pthread \
