@@ -20,7 +20,7 @@ sglang-canary  f80c91a4b97e52e17fbcff088aa6b47b6270f6b9  9968fcff7fa8218b8246a45
 b12x-sg17  66aa6bd5085e63bbb011557075765e3191e807b2  4922d0db9395fb8b537d7e216d509a5747867a45f20c18290e385786609dd05f  https://raw.githubusercontent.com/rhys101/DeepSeek-V4.1-Flash-vLLM-DGX-Spark-8/66aa6bd5085e63bbb011557075765e3191e807b2/sglang/experiments/sg17-rocenante/b12x-source.tar.gz
 
 # b12x main, installed as the top-level package b12x_next beside the SG17 copy (renamed
-# identifiers, B12X_* knobs -> B12X_NEXT_*), then scripts/b12x_next-compact-n64-m64.patch.
+# identifiers, B12X_* knobs -> B12X_NEXT_*), then the five local DeepSeek patches listed below.
 # adapter/moe_b12x_next.py refuses any other commit. Apache-2.0.
 b12x-main  a7d7d29b2ef8869086e0ceaa787321f17544e3c9  e2d070850d50fb365a01f82f16e3f582a53e7ad1c6e3d657b50babb68814635d  https://github.com/local-inference-lab/b12x/archive/a7d7d29b2ef8869086e0ceaa787321f17544e3c9.tar.gz
 
@@ -31,4 +31,8 @@ b12x-main  a7d7d29b2ef8869086e0ceaa787321f17544e3c9  e2d070850d50fb365a01f82f16e
 local  runtime/sglang-rocenante.patch  e813f97a87539681a5951f055b4d0b78f14630437f7c0adaa7e012f7adc5c704  -
 local  runtime/flash_mla_sm120.canary.py  2fe25ba5e2ff91f6028b6a32c315ba8875d8780b9341bae9411af1cc927885bf  -
 local  scripts/b12x_next-compact-n64-m64.patch  1fb1f1eca87206618115f57f9303860bf7a3be8700356bca91ca87a2ba57b701  -
+local  scripts/b12x_next-prequant-input.patch  839e62728dcdf5d209ee907cb8b2828a3f3327f21b74b37ca3045e66c1264ee4  -
+local  scripts/b12x_next-barrier-zero.patch  dbec8235975450bf2963bf31e4949b369016fc3f93890ac4d7fe470ad02a4b60  -
+local  scripts/b12x_next-det-triton-planner.patch  d503f6fa8209ab0deafdfc2336e39ba433b891e7fa133a7de18fdcb3f4ecd741  -
+local  scripts/b12x_next-required-gid.patch  defb3a6643e69324758e4c811c0915020b9e5d1824f921c8fce74f7959fc2849  -
 local  scripts/b12x-required-gid.patch  1b448637d2814084b7289025cedf96e766d9007ffe3192c33c47acbd4b82ee45  -

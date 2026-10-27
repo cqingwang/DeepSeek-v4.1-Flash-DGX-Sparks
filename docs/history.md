@@ -2,7 +2,126 @@
 
 Every dated table, note and rejected experiment that used to live in the README, moved here unchanged when the README was reduced to the current state (2026-09-24). What changed in which commit is in [CHANGELOG.md](../CHANGELOG.md); the current numbers are in the [README](../README.md#current-results).
 
-All rows below were taken with sparkDash up to 1.8.6. sparkDash 1.8.7 replaced the code prompts (c1 and the concurrent waves), so the code columns here are not comparable with the README's current table; the prose, structured and prefill prompts are unchanged.
+The rows from before the sparkDash 1.8.8 sections were taken with sparkDash up to 1.8.6. sparkDash 1.8.7 replaced the code prompts (c1 and the concurrent waves), so those code columns are not comparable with the 1.8.8 tables; the prose, structured and prefill prompts are unchanged. From v2.6 (2026-10-27) the README reports speedbench only.
+
+## Production 2026-10-23 (v2.5 + NVMe keepalive, main `1059dfe`), sparkDash 1.8.8 and speedbench
+
+The README's results from 2026-10-23 until v2.6, moved here unchanged. sparkDash has not been used since 2026-10-25; later numbers are speedbench only.
+
+Image `Dockerfile.canary-roce` built from `f9a1de4` (SGLang `dsv4.1` `f80c91a4b` + the credited backports, without #45251) plus this release's Engram NVMe keepalive (`adapter/row_store.cpp`), the "Production profile" block of [`.env.tp4.example`](.env.tp4.example) with `EP_SIZE=1`, 1M context, checkpoint [`deepseek-ai/DeepSeek-V4.1-Flash-1017`](https://huggingface.co/deepseek-ai/DeepSeek-V4.1-Flash-1017) at `1bae0e1`, GPU clock capped at 2200 MHz, measured 2026-10-23 on one fresh boot per checkpoint with the host memory compacted first. The abliterated variant of the same checkpoint is a second weights profile in `.env.tp4.example`; its numbers on the same image, profile and protocol follow each table. Speculative decoding makes tok/s depend on the generated text, so other DeepSeek releases give somewhat different numbers on the same prompts.
+
+#### sparkDash 1.8.8
+
+256 new tokens, temperature 0, thinking off.
+
+**Decode, aggregate tok/s (per stream in brackets)**
+
+| prompt type | c1 | c2 | c4 | c8 | c16 |
+|---|---:|---:|---:|---:|---:|
+| prose | **91.3** | 115.0 (58.1) | 174.0 (44.8) | 242.8 (32.0) | 359.7 (24.2) |
+| code | 142.9 | 186.1 (94.1) | 255.2 (66.0) | 341.4 (45.5) | 471.6 (31.9) |
+| structured | 160.8 | 222.2 (114.3) | 215.7 (67.1) | 248.7 (41.7) | 393.5 (35.2) |
+| json | 130.6 | 184.9 (96.3) | 322.8 (82.5) | 461.4 (59.6) | 726.9 (47.2) |
+
+**Prefill, cold, tok/s** (measured on the same image without the NVMe keepalive, which leaves prefill unchanged: cold 388K 67.8 s with it, 67.4 s without)
+
+| 4k | 16k | 32k | 64k | 128k |
+|---:|---:|---:|---:|---:|
+| 4798 | 5976 | 6196 | 6241 | 6291 |
+
+Abliterated checkpoint ([`mrfakename/DeepSeek-V4.1-Flash-1017-abliterated`](https://huggingface.co/mrfakename/DeepSeek-V4.1-Flash-1017-abliterated) `517efab`), same image, profile and protocol, c1: prose 89.0, code 145.2, structured 160.1, json 131.4; c16 aggregate: prose 355.7, code 479.1; prefill 4k-128k 4855-6214 tok/s. Its edit touches only `attn.wo_b` and `shared_experts.w2` of the main layers (the DSpark draft layers are identical), so the two run within a few percent of each other.
+
+**How these were measured.** sparkDash DecodeBench after two discarded warm-up prose c1 runs; c1 is the median of three runs, c4 the median of two, c2 / c8 / c16 one run each (c1 runs: prose 91.2 / 91.4 / 91.3; code 141.7 / 142.9 / 143.3; structured 155.1 / 160.8 / 160.9; json 130.1 / 130.6 / 131.4). sparkDash's prose c1 is a single prompt, and the non-prose types use a different prompt at each concurrency, so per-stream values are not comparable across columns. Prefill: sparkDash prefill bench, cold (salted prompts), after a 4k warm-up, median of the second and third of three runs per length; its filler is one repeated token, so the Engram row cache inflates these numbers ([MiaAI-Lab#21](https://github.com/MiaAI-Lab/DeepSeek-v4.1-Flash-DGX-Sparks/issues/21)).
+
+#### speedbench
+
+[speedbench](https://github.com/knapcio/speedbench) 0.3 (`6733653`), full mode: 73 frozen prompts in six categories (prompt set speedbench-v1), c1, temperature 0, 256 output tokens, thinking off, run on the head against `127.0.0.1:8888`. Decode tok/s, geometric mean over the prompts of each category:
+
+| tok/s | prose | code | structured | agentic | multilingual | long context | all 73 prompts |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| official 1017 | 64.7 | 106.8 | 109.5 | 98.3 | 70.0 | 91.0 | 87.5 |
+| abliterated | 64.3 | 110.2 | 105.1 | 100.6 | 68.4 | 92.2 | 87.6 |
+
+Median time to first token 205 ms (abliterated 208 ms); 73 of 73 prompts valid on both, none failed.
+
+**Correctness checks on the same boot.** Needle retrieval PASS at 124k and 388k tokens (passphrase at 50 % depth; 21 s and 68 s); cold prefill of a 388K-token varied-text prompt 67.8 s (5,720 tok/s); `scripts/qeval.py` 71 / 75 (code 24/25, format 7/7, json 6/8, math 13/14, prose 5/5, reason 16/16); T > 0 scan (`ds_gate.py tscan`, 35 outputs) 0 garbled, 0 errors; `/v1/messages` with the image placeholder token in text and with thinking enabled without a budget: both answered; native `/generate` with top-10 logprobs on 16.5k-40k-token prompts answered. The abliterated boot passed the same checks (qeval 71/75 with the same split, cold 388K 69.0 s), plus `ds_gate.py kld` long and short panels against the stable 1017 image (continuation KL 0.0075 / 0.0126) and the issue #16 accelerated reproducer (`scripts/issue16_repro.py`: 190K-900K cached prefixes with 512-4096 fresh tokens, alternating c1/c4): 1,018 requests in 30 minutes, 0 failures, no CUDA error or Xid on any rank ([docs/issue-16-swa-crash.md](docs/issue-16-swa-crash.md)).
+
+## Production 2026-10-22 (v2.5, image `f9a1de4`, before the NVMe keepalive), sparkDash 1.8.8
+
+The v2.5 README table: official 1017 checkpoint `1bae0e1`, production profile, one fresh boot, same protocol as the 2026-10-23 sparkDash table above.
+
+| prompt type | c1 | c2 | c4 | c8 | c16 |
+|---|---:|---:|---:|---:|---:|
+| prose | 91.0 | 114.8 (58.0) | 169.4 (43.7) | 232.9 (30.6) | 343.3 (23.0) |
+| code | 140.3 | 182.0 (92.1) | 248.1 (64.4) | 321.6 (42.8) | 454.9 (30.7) |
+| structured | 159.7 | 219.8 (113.3) | 214.4 (66.9) | 238.7 (39.6) | 373.3 (33.2) |
+| json | 130.5 | 179.5 (93.3) | 318.1 (81.1) | 444.6 (57.6) | 694.3 (45.2) |
+
+c1 runs: prose 91.1 / 91.0 / 89.8; code 137.5 / 140.4 / 143.4; structured 152.5 / 160.8 / 159.7; json 127.8 / 131.1 / 130.5. Abliterated `517efab`, same image: c1 prose 88.6, code 144.9, structured 158.4, json 128.1; c16 prose 337.6, code 456.9. speedbench 0.3 full (prose / code / structured / agentic / multilingual / long context / all): official 63.9 / 105.4 / 107.4 / 96.9 / 69.0 / 88.3 / 86.1, abliterated 63.3 / 108.7 / 103.2 / 97.3 / 67.7 / 89.9 / 85.9; median TTFT 218 / 219 ms. Cold 388K 67.4 s (abliterated 68.2 s); abliterated KL long/short 0.0062 / 0.0061; issue #16 reproducer 813 requests in 30 min (1,445 in 40 min on an earlier boot), 0 failures.
+
+## Conservative fallback profile 2026-10-22 (1017 checkpoint), sparkDash 1.8.8
+
+Served 2026-10-22 between the issue #16 quarantine and the re-qualification of the v2.4 levers: the "Conservative fallback profile" block of `.env.tp4.example` (v2.1 feature set, 4096-token chunks, memory fraction 0.80), `EP_SIZE=1`, checkpoint `mrfakename/DeepSeek-V4.1-Flash-1017-abliterated` at `517efab`, image of `57a9888` with the SGLang tree of `030813a` (no #45251), GPU clock cap 2200 MHz, one fresh boot, same protocol as the README.
+
+| prompt type | c1 | c2 | c4 | c8 | c16 |
+|---|---:|---:|---:|---:|---:|
+| prose | 84.8 | 122.3 (61.9) | 166.6 (43.1) | 235.7 (31.2) | 336.7 (21.8) |
+| code | 138.8 | 182.7 (92.3) | 242.9 (64.3) | 317.6 (42.0) | 457.8 (30.6) |
+| structured | 153.8 | 217.7 (112.9) | 218.2 (72.6) | 275.3 (42.2) | 375.3 (32.1) |
+| json | 126.0 | 176.4 (89.1) | 298.5 (76.1) | 476.9 (61.9) | 684.8 (44.7) |
+
+Prefill, cold, tok/s: 4k 4805, 16k 5814, 32k 5938, 64k 5963, 128k 5964. speedbench 0.3 full: prose 61.2, code 105.3, structured 100.1, agentic 93.6, multilingual 65.9, long context 86.6, all 83.1. Cold 388K prefill 77.0 s (5,037 tok/s). qeval 71/75, tscan 0/35.
+
+## Production 2026-10-12 (v2.4, image before the issue #16 fix), sparkDash 1.8.8
+
+These measurements remain useful as historical performance data, but their image predates the issue #16 fix. Stack v2.4 (the historical `EXTRA_CONTAINER_ENV` line of [`.env.tp4.example`](../.env.tp4.example) with its settings block, `EP_SIZE=1`, `Dockerfile.canary-roce` image), built from a clean tree on all four nodes, sparkDash 1.8.8: 256 new tokens, temperature 0, thinking off, idle fleet, 2026-10-12. KV pool 3.67M tokens, 1M context. Raw output: [`docs/results/validation-20261012-v24.txt`](results/validation-20261012-v24.txt). Measurements from other fleets are linked, with their dates, in [`docs/community-results.md`](community-results.md).
+
+#### sparkDash, GPU clock capped at 2200 MHz
+
+All results here are at the 2200 MHz SM clock cap this fleet runs with (`nvidia-smi -lgc 0,2200`, re-applied by a timer), which keeps the nodes cooler.
+
+**Decode, aggregate tok/s (per stream in brackets)**
+
+| prompt type | c1 | c2 | c4 | c8 | c16 |
+|---|---:|---:|---:|---:|---:|
+| prose | **89.9** | 123.3 (63.3) | 164.9 (41.7) | 237.2 (30.8) | 341.3 (22.2) |
+| code | 131.0 | 175.8 (88.8) | 246.8 (63.2) | 306.8 (41.0) | 440.3 (29.4) |
+| structured | 158.7 | 178.9 (103.7) | 240.4 (70.2) | 292.2 (43.5) | 575.6 (44.7) |
+| json | 128.4 | 175.1 (90.3) | 314.0 (79.4) | 465.0 (59.4) | 632.8 (41.7) |
+
+**Prefill, cold, tok/s**
+
+| 4k | 16k | 32k | 64k | 128k |
+|---:|---:|---:|---:|---:|
+| 4756 | 5790 | 5941 | 5969 | 5896 |
+
+**How these were measured.** sparkDash DecodeBench after two discarded warm-up prose c1 runs; c1 is the median of three runs, c4 the median of two, c2 / c8 / c16 one run each. Each cell is the better of two full sweeps on two boots of the same final image (c1 runs: prose 89.9 / 89.0 / 90.0; code 131.0 / 129.3 / 131.4; structured 152.8 / 159.3 / 158.7; json 123.4 / 129.5 / 128.5). This fleet ran without the optional `DSV41_ENGRAM_DRM_NODE` (its display reservation is used by another tenant), which costs a few percent at c8-c16. Prefill: sparkDash prefill bench, cold, one run per length; its filler is one repeated token, so the Engram row cache inflates these numbers ([MiaAI-Lab#21](https://github.com/MiaAI-Lab/DeepSeek-v4.1-Flash-DGX-Sparks/issues/21)).
+
+#### Long context and multi-user behaviour
+
+Varied-text prompts, cold (unique salt per prompt), [`scripts/v24_probe.py`](../scripts/v24_probe.py):
+
+| | v2.4 |
+|---|---:|
+| cold prefill, 388K-token prompt | 77.8 s (4,976 tok/s) |
+| 969K-token needle (passphrase found) | 235 s |
+| short chat sent 8 s into a cold 400K prefill, time to answer | 4.6 s |
+| return to a 388K session after a second 388K session ran | 1.5 s (100 % cached) |
+| lowest MemAvailable during the 1M prefill, head / workers | 5.7 / 7.1-7.7 GiB |
+
+What v2.4 changed against v2.3 is in [CHANGELOG.md](../CHANGELOG.md).
+
+**Quality and correctness gates** (final image, against the v2.3 settings booted the same morning as the reference):
+
+- `scripts/qeval.py` (75 auto-scored tasks, c1, temperature 0): 72 / 72 / 72 on v2.4, the reference 72 / 72 / 72; both miss the same three tasks.
+- Greedy-continuation KL against the reference (`scripts/ds_gate.py kld`): mean 0.0045 over 239 positions (long prompts, 16.5k-40k) and 0.0061 over 559 positions (short, 1-3k), PASS against the 0.035 limit.
+- T > 0 scan (`ds_gate.py tscan`, 35 outputs): 0 garbled, 0 errors (reference 0 of 35).
+- Prefix cache (`scripts/prefix_scan.py`): PASS, cold-vs-warm logprob drift 0.0 on all eight hits (reference identical, including its one false anomaly).
+- 60-minute soak at 16 concurrent clients (mixed prompts, T 0 / 0.6 / 1.0, 30 % thinking, ~5 % cold 22K-45K-token prompts): 2,285 completions, 0 errors, 0 empty, 0 container restarts or OOM, 0 kernel Xid / `NV_ERR`, MemAvailable never below 12.9 GiB.
+- `/v1/messages` with the image placeholder token in message text and with `thinking: {"type": "enabled"}` without a budget: both answered.
+- Required and named `tool_choice` now use SGLang's V4.1 structural tag. The stock default image admitted a bare DSML invoke that the parser returned as `message.content`; the build-time backport and parser/grammar test require a proper calls block and typed `tool_calls`. `auto` was unaffected, and the canary source already carried the fixed detector.
+
+Every earlier measurement, the per-stage tables and the experiments that were tried and not adopted are in [docs/history.md](history.md); what changed when is in [CHANGELOG.md](../CHANGELOG.md).
 
 ## Production 2026-10-22 (v2.5, image `f9a1de4`, before the NVMe keepalive), sparkDash 1.8.8
 

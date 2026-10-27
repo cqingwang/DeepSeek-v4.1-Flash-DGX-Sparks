@@ -3,6 +3,138 @@
 Newest first. Each entry says what changed in the production stack and what was measured; the
 raw results live under `docs/results/`.
 
+> Local managed-ring applicability (2026-10-27): the v2.6 entries below preserve knapcio's upstream
+> switched-fabric release record, not this workspace's active profile. The managed target uses
+> `DSV41_ROCE_RING=1`, so its incompatible two-shot runtime is excluded. The optional
+> `DSV41_MOE_LAUNCH_PREPARED` and `DSV41_INDEXER_NOSYNC` changes optimize eager prefill only, are
+> absent from the parent target config, and are also excluded from this decode-focused image. The
+> block-verification numerical fix remains because this target enables block verification.
+
+## 2026-10-27 v2.6
+
+Production profile = v2.5 plus the two-shot all-reduce for wide steps and two prefill host-overhead
+cuts, on an image that also carries the block-verification threshold fix. `.env.tp4.example`'s
+"Production profile" line adds `DSV41_ROCE_TWOSHOT=1 DSV41_ROCE_TWOSHOT_ROWS=18
+B12X_ROCE_PIPE_BLOCKS=4 B12X_ROCE_PIPE_CHUNK_BYTES=65536 DSV41_MOE_LAUNCH_PREPARED=plan
+DSV41_INDEXER_NOSYNC=1`; every other setting is unchanged.
+
+Fleet A / B / A' on 2026-10-26: four fresh boots in order (production, the two-shot switches only,
+the full set, production again), host memory compacted before each, abliterated 1017 `517efab`,
+GPU clock cap 2200 MHz, speedbench 0.3 (`6733653`), thinking off, first run after each boot
+discarded. A difference counts only beyond both production boots by more than their own
+difference (floor 0.5 %).
+
+| metric | production (2 boots) | two-shot only | full set |
+|---|---:|---:|---:|
+| c1 all-prompt geomean tok/s (2 full runs per boot) | 88.91 / 88.93 | 88.97 | 88.56 (noise) |
+| c1 prose geomean tok/s | 65.34 / 65.59 | 65.33 | 65.27 (noise) |
+| c4 block tok/s | 131.56 / 131.30 | 131.64 | 131.74 (noise) |
+| c16 block tok/s | 201.33 / 201.20 | 208.66 (+3.7 %) | 211.02 (+4.9 %) |
+| cold prefill 4k tok/s | 4,555 / 4,586 | 4,613 | 5,309 (+16.2 %) |
+| cold prefill 64k tok/s | 5,779 / 5,773 | 5,803 | 5,970 (+3.4 %) |
+| TTFT, c1 full median | 213.7 / 215.6 ms | 216.3 ms | 206.4 ms (-3.9 %) |
+| TTFT, load c1 median | 215.5 / 217.5 ms | 218.9 ms | 206.7 ms (-4.5 %) |
+| TTFT, load c16 median | 564.1 / 561.8 ms | 547.6 ms (-2.7 %) | 539.3 ms (-4.2 %) |
+
+Exactness: 75 qeval prompts at T = 0 with top-20 logprobs and cold (salted) prefills on every
+boot; both new arms byte-identical to production on all 75, and the two production boots identical
+to each other.
+
+Release gate on the full set (one more fresh boot, same weights and protocol): speedbench full c1
+all-prompt geomean 88.84 and 89.80 (prose 65.04 / 66.14, code 111.57 / 112.84), median TTFT 206 /
+208 ms, 0 of 73 failed; `scripts/qeval.py` 71 / 75 (code 24/25, format 7/7, json 6/8, math 13/14,
+prose 5/5, reason 16/16), the same score and split as v2.5; T > 0 scan 0 / 35; needles PASS at
+124k (19.8 s) and 388k tokens (66.6 s); cold 388K prefill 65.2 s (5,770 tok/s; 69.0 s on v2.5);
+`/v1/messages` with the image placeholder token in text and with thinking enabled without a
+budget both answered; issue #16 accelerated reproducer 15 minutes, 410 requests, 0 failures. A
+T > 0 distribution check (production boot, 12,000 samples, 3 tokens, T 1.0): the second token's
+counts match the verify row's own probabilities (chi-square p 0.61).
+
+- Two-shot RoCE all-reduce for wide steps (`DSV41_ROCE_TWOSHOT=1`, `DSV41_ROCE_TWOSHOT_ROWS=18`,
+  `B12X_ROCE_PIPE_BLOCKS=4`, `B12X_ROCE_PIPE_CHUNK_BYTES=65536`; unset = one-shot only, as
+  before). At c16 the TP all-reduce moves 983 KB and the one-shot sends three full copies per rank
+  (163-175 us per call, ~14 ms per step on the wire). The pipelined two-shot of Luke Alonso's
+  flashinfer#6915 sends each rank's quarter to its owner, which sums the four partials in FP32 in
+  rank order exactly as the one-shot does, then gathers the reduced rows back: half the bytes,
+  bit-identical output. All-reduces of 18 rows or more take it; smaller ones stay one-shot. Ported
+  as a separate package `runtime/b12x/b12x/comm/roce_twoshot` (the `roce` package is byte for byte
+  untouched; `runtime/roce_twoshot_adapt.py` selects the copy in pynccl.py when the switch is set),
+  routed per call by row count through `adapter/roce_twoshot.py` (an in-boot A/B key). A two-shot
+  op after the 32-bit sequence wrap fails closed, and every kernel of the copy poisons the runtime
+  at sequence 0 instead of touching a flag or payload. Tests: `tests/test_roce_twoshot.py`
+  (protocol model bit-identical to the one-shot, ctrl/ABI agreement, the unchanged production
+  hashes, the sequence-wrap guard); the proxy builds with `-Werror` and every kernel compiles for
+  sm_121a without spills. Fleet: c16 +3.7 % alone, c1 / c4 within noise, T = 0 byte-identical.
+  Not with `DSV41_ROCE_RING=1`. Credits: Luke Alonso (flashinfer-ai/flashinfer#6915, the two-shot
+  all-reduce), on rhys101's RoCEnante path and local-inference-lab/b12x's RoCEnante transport.
+
+- Prepared eager MoE launch (`DSV41_MOE_LAUNCH_PREPARED=plan`, `adapter/moe_launch_prepared.py`).
+  Eager (prefill) calls of b12x_next's `tp_moe_dynamic_launch` repeated the host-side
+  quant/routing/materialization/tile decisions and the kernel lookup on every call: 1.45-1.77 ms of
+  host time per call on a c1 trace, 40 calls in a host-paced ~200 ms short prefill. `plan` makes
+  those decisions once per launch contract (every scalar argument, scratch size, device,
+  pre-quantized state, the programmatic overrides) and mirrors b12x main's `_launch_dynamic_flat`
+  (`a7d7d29`, source sha256-pinned; refuses to arm on drift). The barrier fill, route planner,
+  tensor pointers and current stream stay per call; a plan is dropped on any `B12X_NEXT_*`
+  environment write and whenever the kernel cache no longer maps it to the same compiled kernel.
+  Same kernels, same arguments, same order. Decode runs in CUDA graphs and is untouched. Test:
+  `tests/test_moe_launch_prepared.py` (stock and prepared bodies against recording stubs of every
+  side effect over 262 production contracts). `plan,direct` (skip the PyTorch dispatcher) and the
+  `DSV41_MOE_LAUNCH_TIMING` hooks stay test only. Credits: local-inference-lab/b12x (the launch
+  path it mirrors).
+
+- Build source closure: the Docker fetch stage now applies and SHA-256-checks the same five
+  DeepSeek patches as `scripts/build_b12x_next.sh` before installing the locked B12X main archive
+  as `b12x_next`. This keeps the runtime functions aligned with the prepared-MoE source pins and
+  makes incomplete patch application fail during image construction; no ring or serving setting
+  changes.
+
+- Prefill indexer slot ids without host syncs (`DSV41_INDEXER_NOSYNC=1`, with
+  `DSV41_INDEXER_CHUNKED=1`, `adapter/indexer_chunked_v3.py`). The eager prefill indexer of the
+  eight index-source layers indexed `req_to_token` with a 0-dim CUDA tensor per request (an
+  `.item()`: one stream sync per request and layer) and copied the request starts from pageable
+  memory (another sync). It now builds the compressed-slot ids with one device gather and pinned
+  non-blocking copies. Integer ops on the same elements in the same order: bit-identical. GPU check
+  (`tests/gpu_test_indexer_nosync.py`): 300 random batches equal to the stock loop, PyTorch's sync
+  detector raises nothing (it catches the stock loop), host time behind a queued 2 ms kernel 2.3 ms
+  -> 0.08 ms, 2-4 MiB extra device memory; top-level syncs per c1 extend on every rank >= 10 -> <= 2.
+  CPU test: `tests/test_indexer_nosync.py`. Credits: kpham-sgl (sglang#39187, the chunked indexer
+  backport this edits).
+
+- Block verification threshold arithmetic (`adapter/block_verify.py`, sampled rows only, always on). The
+  acceptance threshold h_i = S_i / (S_i + 1 - w_i) was evaluated as `(S + 1) - w` in FP32, which
+  rounds S against 1: with w = 1 - 2^-24 and S = 3e-8 it gave 0.503 for 0.335, with a clipped
+  w = 1 and S = 1.4 * 2^-24 it gave 0.70 for 1.0, and in general it moved h by up to
+  2^-24 / (S + 1 - w) relative. It is now `S + (1 - w)`; `1 - w` is exact in FP32 for w >= 0.5.
+  New `tests/test_block_verify_numerics.py` checks every threshold against an FP64 oracle on the
+  same FP32 probabilities (straddling draws, a grid of 1 - w and S, V = 129280 production-shaped
+  rows with margins 2-30, ties, -inf, one-hot drafts, p == q, truncated blocks, bf16 inputs) and
+  fails on the previous arithmetic. The old association moved the effective (clipped) threshold by
+  up to ~0.5 on those rows; its raw value was unbounded. Greedy selection is protected structurally:
+  an all-greedy batch never calls this code, and in a mixed batch it runs on every row while
+  SelectMixedAccept keeps the greedy rows' own AcceptGreedy result (greedy includes top_k <= 1, also
+  at temperature > 0). The draws consumed per call are unchanged. Affected: sampled rows of
+  sampled requests, at a verification step whose draw lands between the old and the new threshold.
+  On synthetic production-shaped rows (fixed drafts, offline) that was at most 7.4e-8 total
+  variation of the accepted length, and at most 9.7e-8 accepted-length mismatch under the
+  implementation's shared-uniform coupling, per step; these are synthetic observations, not a
+  bound over production histories. This is a correctness fix, not
+  a speed change, and it does not touch the FP32 rounding of the probabilities themselves
+  (SoftmaxTemp), which dominates the remaining error for confident tokens. Credit: Barron,
+  Gnanapragasam and Tschannen's softmax fix as applied in Christopher Owen's spark-ds41f #584.
+
+- `stop.sh`: the shared NFS exporter it keeps (`dsv41-nfs`, or a reused `vllm-fn-nfs`/`glm53-nfs`) is no longer
+  reported as "still running", the `kept:` line names the exporter it found, and the banner counts the head plus the
+  configured workers instead of a fixed 3x. Report only; cleanup unchanged. Tests in `tests/test_stop_nfs_filter.py`;
+  checked live on four Sparks. Credits: SvangenStudios
+  ([#57](https://github.com/knapcio/DeepSeek-V4.1-Flash-4x-DGX-Spark-TP4/pull/57)).
+
+- Ring mesh (`scripts/ring_mesh/plan.py`, `hairpin.sh`): the generated `show | grep -q ... || add` checks
+  read the whole output (`grep ... >/dev/null`), so under `set -o pipefail` a show command that still had output when
+  `grep -q` exited no longer died of SIGPIPE and re-added an existing rule ("Filter already exists", mesh-up aborted).
+  Test `tests/test_ring_mesh_pipefail.py` (stub `tc`/`ip`, output larger than a pipe buffer), now in CI. Credits:
+  joeym82956 ([#54](https://github.com/knapcio/DeepSeek-V4.1-Flash-4x-DGX-Spark-TP4/pull/54)).
+
 ## Unreleased
 
 - `stop.sh`: the shared NFS exporter it keeps (`dsv41-nfs`, or a reused `vllm-fn-nfs`/`glm53-nfs`) is no longer

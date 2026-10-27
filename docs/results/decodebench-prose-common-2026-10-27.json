@@ -1,0 +1,245 @@
+{
+  "date": "2026-10-27",
+  "source": {
+    "product": "SparkDash DecodeBench",
+    "route": "/api/sparks/spark-a/llm/bench"
+  },
+  "startedAt": "2026-10-27T08:57:16.124479+00:00",
+  "finishedAt": "2026-10-27T08:57:56.940090+00:00",
+  "target": {
+    "sparkId": "spark-a",
+    "host": "192.168.2.180",
+    "port": 8888,
+    "modelId": "deepseek-v4.1-flash",
+    "checkpoint": "deepseek-ai/DeepSeek-V4.1-Flash-1017",
+    "topology": "four-node A-B-C-D-A physical switchless ring",
+    "rankOrder": [
+      "spark-a",
+      "spark-b",
+      "spark-c",
+      "spark-d"
+    ],
+    "imageId": "sha256:f81081116e734b88b45dc51b30e3d6afdb44f3807f99688bf139f0a6f2059402",
+    "sourceRevision": "local-280fae9e0d76b15fb4bf77ab83bcdbb982a3e1a9-93a464cae44774ff2a3bf18ca078ce67774a586899ad6cc517de67387d1134d1"
+  },
+  "protocol": {
+    "promptType": "prose",
+    "maxTokensPerStream": 256,
+    "minTokens": 256,
+    "ignoreEos": true,
+    "temperature": 0,
+    "thinking": false,
+    "warmupJobs": 2,
+    "measuredRepetitions": {
+      "1": 3,
+      "4": 3
+    },
+    "statistic": "arithmetic mean of SparkDash aggregateDecodeTps",
+    "decodeWindow": "(completion_tokens - 1) / (last - first content chunk)",
+    "otherDecodeTypesIncluded": false
+  },
+  "sparkDashSettings": {
+    "pollIntervalMs": 1000
+  },
+  "jobs": [
+    {
+      "label": "warmup-prose-c1-1",
+      "warmup": true,
+      "benchId": "5e547674-cd3f-4e7a-8c07-d9607bede978",
+      "status": "completed",
+      "startedAt": "2026-10-27T08:57:16.129000+00:00",
+      "finishedAt": "2026-10-27T08:57:20.234000+00:00",
+      "concurrency": 1,
+      "streamsOk": 1,
+      "streamsFailed": 0,
+      "totalCompletionTokens": 256,
+      "aggregateDecodeTps": 80.1,
+      "meanDecodeTps": 80.1,
+      "medianDecodeTps": 80.1,
+      "meanTtftMs": 228.86,
+      "durationMs": 3412.94,
+      "perStreamDecodeTps": [
+        80.1
+      ]
+    },
+    {
+      "label": "warmup-prose-c1-2",
+      "warmup": true,
+      "benchId": "f8b86a95-3c4d-4c98-80d4-c04775d2612c",
+      "status": "completed",
+      "startedAt": "2026-10-27T08:57:20.322000+00:00",
+      "finishedAt": "2026-10-27T08:57:24.222000+00:00",
+      "concurrency": 1,
+      "streamsOk": 1,
+      "streamsFailed": 0,
+      "totalCompletionTokens": 256,
+      "aggregateDecodeTps": 82.83,
+      "meanDecodeTps": 82.83,
+      "medianDecodeTps": 82.83,
+      "meanTtftMs": 226.21,
+      "durationMs": 3305.2,
+      "perStreamDecodeTps": [
+        82.83
+      ]
+    },
+    {
+      "label": "prose-c1-run-1",
+      "warmup": false,
+      "benchId": "83c74ba6-ea4c-431a-9058-f54a36716289",
+      "status": "completed",
+      "startedAt": "2026-10-27T08:57:24.326000+00:00",
+      "finishedAt": "2026-10-27T08:57:28.227000+00:00",
+      "concurrency": 1,
+      "streamsOk": 1,
+      "streamsFailed": 0,
+      "totalCompletionTokens": 256,
+      "aggregateDecodeTps": 82.72,
+      "meanDecodeTps": 82.72,
+      "medianDecodeTps": 82.72,
+      "meanTtftMs": 230.42,
+      "durationMs": 3313.4,
+      "perStreamDecodeTps": [
+        82.72
+      ]
+    },
+    {
+      "label": "prose-c1-run-2",
+      "warmup": false,
+      "benchId": "d334303c-744f-4f0c-bc52-37c01855373c",
+      "status": "completed",
+      "startedAt": "2026-10-27T08:57:28.454000+00:00",
+      "finishedAt": "2026-10-27T08:57:32.361000+00:00",
+      "concurrency": 1,
+      "streamsOk": 1,
+      "streamsFailed": 0,
+      "totalCompletionTokens": 256,
+      "aggregateDecodeTps": 82.8,
+      "meanDecodeTps": 82.8,
+      "medianDecodeTps": 82.8,
+      "meanTtftMs": 229.46,
+      "durationMs": 3309.4,
+      "perStreamDecodeTps": [
+        82.8
+      ]
+    },
+    {
+      "label": "prose-c1-run-3",
+      "warmup": false,
+      "benchId": "e3e8e3f5-a652-465e-873d-f617b86f60aa",
+      "status": "completed",
+      "startedAt": "2026-10-27T08:57:32.443000+00:00",
+      "finishedAt": "2026-10-27T08:57:36.330000+00:00",
+      "concurrency": 1,
+      "streamsOk": 1,
+      "streamsFailed": 0,
+      "totalCompletionTokens": 256,
+      "aggregateDecodeTps": 82.86,
+      "meanDecodeTps": 82.86,
+      "medianDecodeTps": 82.86,
+      "meanTtftMs": 220.91,
+      "durationMs": 3298.57,
+      "perStreamDecodeTps": [
+        82.86
+      ]
+    },
+    {
+      "label": "prose-c4-run-1",
+      "warmup": false,
+      "benchId": "8e22fe6c-2db2-4b63-a19b-1a49892d756f",
+      "status": "completed",
+      "startedAt": "2026-10-27T08:57:36.569000+00:00",
+      "finishedAt": "2026-10-27T08:57:43.182000+00:00",
+      "concurrency": 4,
+      "streamsOk": 4,
+      "streamsFailed": 0,
+      "totalCompletionTokens": 1024,
+      "aggregateDecodeTps": 176.85,
+      "meanDecodeTps": 44.78,
+      "medianDecodeTps": 44.76,
+      "meanTtftMs": 267.14,
+      "durationMs": 6035.35,
+      "perStreamDecodeTps": [
+        45.38,
+        44.21,
+        44.76,
+        44.76
+      ]
+    },
+    {
+      "label": "prose-c4-run-2",
+      "warmup": false,
+      "benchId": "0f10b47e-986e-43d0-bf6f-297c3b42ea54",
+      "status": "completed",
+      "startedAt": "2026-10-27T08:57:43.301000+00:00",
+      "finishedAt": "2026-10-27T08:57:49.795000+00:00",
+      "concurrency": 4,
+      "streamsOk": 4,
+      "streamsFailed": 0,
+      "totalCompletionTokens": 1024,
+      "aggregateDecodeTps": 180.19,
+      "meanDecodeTps": 45.67,
+      "medianDecodeTps": 45.61,
+      "meanTtftMs": 242.61,
+      "durationMs": 5903.76,
+      "perStreamDecodeTps": [
+        46.4,
+        45.05,
+        45.61,
+        45.61
+      ]
+    },
+    {
+      "label": "prose-c4-run-3",
+      "warmup": false,
+      "benchId": "46fff7dd-9d07-4cbb-ab77-0c9531143744",
+      "status": "completed",
+      "startedAt": "2026-10-27T08:57:50.122000+00:00",
+      "finishedAt": "2026-10-27T08:57:56.668000+00:00",
+      "concurrency": 4,
+      "streamsOk": 4,
+      "streamsFailed": 0,
+      "totalCompletionTokens": 1024,
+      "aggregateDecodeTps": 180.83,
+      "meanDecodeTps": 45.77,
+      "medianDecodeTps": 45.68,
+      "meanTtftMs": 249.06,
+      "durationMs": 5890.28,
+      "perStreamDecodeTps": [
+        46.5,
+        45.21,
+        45.68,
+        45.68
+      ]
+    }
+  ],
+  "summary": {
+    "c1": {
+      "samplesAggregateTokPerSecond": [
+        82.72,
+        82.8,
+        82.86
+      ],
+      "arithmeticMeanAggregateTokPerSecond": 82.793333,
+      "referenceAggregateTokPerSecond": 91.3,
+      "differenceTokPerSecond": -8.506667,
+      "meetsReference": false
+    },
+    "c4": {
+      "samplesAggregateTokPerSecond": [
+        176.85,
+        180.19,
+        180.83
+      ],
+      "arithmeticMeanAggregateTokPerSecond": 179.29,
+      "referenceAggregateTokPerSecond": 174.0,
+      "differenceTokPerSecond": 5.29,
+      "meetsReference": true
+    }
+  },
+  "reference": {
+    "source": "knapcio/main README prose aggregate decode",
+    "network": "upstream switched RoCE reference; local result retains the physical switchless ring",
+    "c1AggregateTokPerSecond": 91.3,
+    "c4AggregateTokPerSecond": 174.0
+  }
+}

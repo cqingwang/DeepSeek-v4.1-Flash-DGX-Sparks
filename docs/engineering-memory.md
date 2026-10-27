@@ -1,5 +1,94 @@
 # 工程记忆
 
+## 2026-10-27：managed ring 清理未使用的 two-shot 与 prefill-only adapters
+
+- **范围与证据：** 对比 knapcio v2.6 合并树、`spark/config.yaml` target env 和 TP4
+  `Dockerfile.canary-roce`。父仓配置启用 `DSV41_ROCE_RING=1`、`DSV41_INDEXER_CHUNKED=1`
+  与 `DSV41_MOE_B12X_NEXT=1`，但没有启用 `DSV41_ROCE_TWOSHOT`、
+  `DSV41_INDEXER_NOSYNC` 或 `DSV41_MOE_LAUNCH_PREPARED`。上游 CHANGELOG 明确写明
+  two-shot 不可与 `DSV41_ROCE_RING=1` 同用；两个 prefill 开关只改变 eager prefill，不影响
+  这次 prose c1/c4 decode 门禁。
+- **清理决策：** 移除被禁用的 RoCE two-shot 副本、runtime selector、AB registry/专测及过期
+  NOTICE；移除未启用的 prepared-MoE adapter/wiring/测试和 indexer-nosync 分支/测试。保留
+  已启用的 `moe_b12x_next`、chunked indexer/TP prefill split、block-verify 数值修复及父仓
+  `spark/ring/b12x`。`runtime/b12x` 和 `runtime/b12x_next` 在本地 pre-merge 基线已有，分别供
+  RoCEnante 与 routed MoE 使用；它们不是此次新增的重复 runtime，不删除。既有 PCIe two-shot
+  属于原基线，不是被移除的 switch-fabric RoCE 副本。
+- **红绿回归：** 新增 `tests/test_local_ring_runtime_scope.py`。清理前脚本两项均失败（一个
+  检出 `adapter/roce_twoshot.py`，另一个检出 prepared-MoE adapter）；删除运行时代码和对应
+  生成缓存后，`python3 tests/test_local_ring_runtime_scope.py` 为 2 passed。Docker 镜像合同
+  也调用该测试，并不再调用已移除的 prefill 专测。
+- **本机验证：** `python3 tests/test_ab_variant.py` 通过；`python3 tests/test_offline_build.py`
+  为 28 passed；TP4/launcher/adapter-pin pytest 为 28 passed、1 skipped、3 subtests；
+  `python3 tests/test_roce_ring.py` 为 13 passed、1 image-only skipped；`py_compile`、
+  `bash -n`、工作树和暂存区 `git diff --check` 通过。
+- **限制：** macOS 控制端未安装 torch，直接执行 `tests/test_indexer_chunked_v3.py` 因
+  `ModuleNotFoundError: No module named 'torch'` 无法运行；此回归由后续 Spark ARM64 镜像构建
+  内的 CPU/GPU合同覆盖。本地清理没有同步、构建、部署或证明线上性能；后续继续以本地源安全
+  同步，并重新检查生产态。
+
+## 2026-10-27：Docker B12X fetch stage 遗漏 prepared-MoE 所需补丁集
+
+- **范围与环境：** `scripts/fetch_runtime.sh`、`scripts/build_b12x_next.sh`、
+  `runtime/sources.manifest` 与 `Dockerfile.canary-roce` 的 B12X main→`b12x_next` 源码路径；
+  macOS arm64/Python 3.13 控制端、Spark Linux/aarch64 构建。
+- **症状与证据：** 镜像内 `tests/test_moe_launch_prepared.py` 报
+  `_launch_dynamic_flat` pin 期望 `3e160eff…d0db2ce6a1`，实际为
+  `8d3dde40…1d1cd15`。本地完整生成树 SHA 为 `3e160eff…d0db2ce6a1`；活动旧镜像内为
+  `8d3dde40…1d1cd15`，同时缺少 `prequantized_input()` 和 `_zero_barrier_state()`。新离线合同
+  首次 RED：`test_b12x_next_fetch_applies_every_manifest_pinned_ds41_patch` 发现 Docker fetch
+  脚本只列 compact-N64 patch。
+- **根因：** Dockerfile 使用 `fetch_runtime.sh` 的锁定 archive 流程，但该流程只应用
+  compact-N64 patch；`build_b12x_next.sh` 和 prepared-MoE/Prefill-SP 适配器则依赖
+  compact-N64、prequant-input、barrier-zero、det-triton-planner、required-GID 五个补丁。
+  因此 adapter hash 自身正确，错在镜像 B12X 源树不完整。将五补丁加入后，旧未重命名扫描
+  又把注释 `B12X_NEXT GID` 错判为旧环境变量；原 `(?!NEXT_)` 未接受 NEXT 后的单词边界。
+- **修复：** `fetch_runtime.sh` 按与本地 builder 相同顺序验证并应用五个补丁，manifest 为
+  每个补丁固定 SHA-256；校验每个关键功能标记，并把五补丁整体哈希写入 `SOURCE_PATCH`。
+  两条构建路径的 leftover guard 改为允许 `B12X_NEXT` 命名空间正文/变量。没有改 hash pin、
+  SGLang/B12X 上游 commit、ring/NCCL 策略、模型或服务 env。
+- **红绿回归：** 两个新增离线测试在修复前分别复现“fetcher 缺少四个补丁”和
+  “重命名 guard 拒绝合法 `B12X_NEXT`”问题。修复后：
+  `python3 tests/test_offline_build.py` → 28 passed；
+  `python3 -m pytest -q tests/test_ring_tp4_contract.py tests/test_launcher_build.py tests/test_adapter_engine_pins.py`
+  → 28 passed、1 skipped、3 subtests；
+  `python3 tests/test_ab_variant.py` 通过，`env PYTHONPATH=adapter python3 tests/test_roce_twoshot.py`
+  → 31 passed、3 skipped，Bash/Python 静态检查和 staged/unstaged `git diff --check` 通过。
+  隔离目录真实运行锁定 archive fetch 后 `_launch_dynamic_flat` SHA 为
+  `3e160eff…d0db2ce6a1`、`_launch_dynamic` SHA 为
+  `10f33935…fed620b3`，`SOURCE_PATCH=c75ef35a4d2b2711`。
+- **网络与适用边界：** spark-a 的 TUNA simple 返回 HTTP 200，现有镜像 build history 确认
+  `PIP_INDEX=https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple` 已实际生效；spark-a
+  `127.0.0.1:7890` 回退隧道当前可达，只有固定源失败才使用。新修复尚未在 spark-a 重建，
+  尚未分发或部署；spark-a 当前活动容器继续运行，不能把本次本地 fetch/测试当成镜像或
+  生产验收。
+
+## 2026-10-27：上游 two-shot 合同不能覆盖 managed ring 的禁用边界
+
+- **范围与环境：** 合并 `knapcio/main` 后的 `tests/test_roce_twoshot.py`、
+  `runtime/b12x/twoshot-provenance.json` 与当前 managed switchless TP4 镜像合同；本机
+  macOS arm64、Python 3.13。
+- **症状与 RED：** 直接运行 `env PYTHONPATH=adapter python3 tests/test_roce_twoshot.py`
+  为 31 项中 3 项失败：测试要求 `sitecustomize.py` / `l2_prefetch.py` 注册 two-shot 模块、
+  要求 `Dockerfile.canary-roce` 执行 `roce_twoshot_adapt.py`，并要求现有生产 `roce` 包的
+  SHA 与上游 1059dfe 完全一致；实际校验发现唯一摘要差异为
+  `roce_oneshot.py`（本地 `af96c022…849b3b`，上游 fixture
+  `df4bcacb…aeb213`）。
+- **根因：** 上游测试按其 switched-RoCE 生产集成编写；本站 managed image 必须在
+  `DSV41_ROCE_RING=1` 下保持 two-shot 未安装，且本站现有 B12X 来源/`roce_oneshot.py`
+  以 `runtime/b12x/source-provenance.json` 的本地源码为准，不能被上游摘要覆盖。
+- **修复：** 将两项集成断言改为保护本地边界（managed env、`sitecustomize`、L2 与
+  `Dockerfile.canary-roce` 不注册/启用 two-shot）；将生产包期望摘要收敛到
+  `twoshot-provenance.json` 的 copy-base provenance，并把本地 `roce_oneshot.py` 实际
+  SHA 写入该记录。没有修改 `sitecustomize.py`、RoCE runtime、拓扑或生产环境变量。
+- **红绿回归：** RED 为上述直接脚本 3 项失败；GREEN：
+  `env PYTHONPATH=adapter python3 tests/test_roce_twoshot.py` → 31 passed、3 skipped。
+  两个 skipped 为 Linux/libibverbs native proxy 与仅镜像内的 pynccl 校验，须在 Spark
+  ARM64 镜像构建中覆盖。不要用 pytest 收集依赖 torch 的脚本式测试；本次 macOS 缺 torch，
+  pytest 收集 `test_moe_launch_prepared.py` 会触发其有意的 `SystemExit(0)`。
+- **适用边界：** upstream two-shot 可作为隔离源码与协议模型保留，但 managed
+  `DSV41_ROCE_RING=1` 镜像中保持未集成；启用前须有与本站环网拓扑兼容的单独验证和用户决策。
+
 ## 2026-10-27：knapcio/main 部署后的 prose c1/c4 专项诊断
 
 - **范围与现场：** managed `deepseek_v4.1_flash_switchless`，固定模型

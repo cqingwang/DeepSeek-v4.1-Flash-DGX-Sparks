@@ -1,0 +1,353 @@
+{
+  "source": {
+    "product": "SparkDash DecodeBench",
+    "version": "1.8.8",
+    "gitCommit": "754f40a7454fed1d26d47d1d68dd7bef930ce5ca",
+    "localSourceRevision": "280fae9e0d76b15fb4bf77ab83bcdbb982a3e1a9"
+  },
+  "target": {
+    "sparkId": "spark-a",
+    "host": "192.168.2.180",
+    "port": 8888,
+    "modelId": "deepseek-v4.1-flash",
+    "checkpoint": "deepseek-ai/DeepSeek-V4.1-Flash-1017",
+    "network": "local A-B-C-D switchless ring",
+    "imageId": "sha256:089f7ff3f4953b275b74299b1824e065aaf6a06a0f126d6c3d3eef74b3c62849",
+    "sourceRevision": "local-280fae9e0d76b15fb4bf77ab83bcdbb982a3e1a9"
+  },
+  "protocol": {
+    "promptType": "prose",
+    "maxTokens": 256,
+    "minTokens": 256,
+    "ignoreEos": true,
+    "temperature": 0,
+    "thinking": false,
+    "topP": 1,
+    "warmupJobs": 2,
+    "measuredRepetitions": {
+      "1": 3,
+      "4": 3
+    },
+    "statistic": "arithmetic mean of three aggregateDecodeTps samples; two warmup requests discarded",
+    "metric": "(completion_tokens - 1) / (last - first content chunk); concurrency aggregate over concurrent first-to-last content window"
+  },
+  "timing": {
+    "startedAt": "2026-10-27T04:01:11.872Z",
+    "finishedAt": "2026-10-27T04:01:44.711Z"
+  },
+  "runs": [
+    {
+      "label": "warmup-prose-c1-1",
+      "discardedWarmup": true,
+      "benchId": "16ddd278-81bb-4e2a-adca-a1870fb84e6d",
+      "status": "completed",
+      "startedAt": "2026-10-27T04:01:03.349Z",
+      "finishedAt": "2026-10-27T04:01:07.632Z",
+      "durationMs": 4283,
+      "concurrency": 1,
+      "aggregateDecodeTps": 78.95,
+      "meanDecodeTps": 78.95,
+      "streamsOk": 1,
+      "streamsFailed": 0,
+      "totalDecodeTokens": 255,
+      "totalCompletionTokens": 256,
+      "streamCompletionTokens": [
+        256
+      ],
+      "streamDecodeTps": [
+        78.95
+      ],
+      "waveDurationMs": 3458.83
+    },
+    {
+      "label": "warmup-prose-c1-2",
+      "discardedWarmup": true,
+      "benchId": "6d7aa0e1-76b5-40a2-9e52-c8e942ff49d1",
+      "status": "completed",
+      "startedAt": "2026-10-27T04:01:07.869Z",
+      "finishedAt": "2026-10-27T04:01:11.807Z",
+      "durationMs": 3938,
+      "concurrency": 1,
+      "aggregateDecodeTps": 81.8,
+      "meanDecodeTps": 81.8,
+      "streamsOk": 1,
+      "streamsFailed": 0,
+      "totalDecodeTokens": 255,
+      "totalCompletionTokens": 256,
+      "streamCompletionTokens": [
+        256
+      ],
+      "streamDecodeTps": [
+        81.8
+      ],
+      "waveDurationMs": 3364.76
+    },
+    {
+      "label": "prose-c1-run-1",
+      "discardedWarmup": false,
+      "benchId": "6b1b683b-27d9-438d-8406-e16c0e88c038",
+      "status": "completed",
+      "startedAt": "2026-10-27T04:01:11.872Z",
+      "finishedAt": "2026-10-27T04:01:15.799Z",
+      "durationMs": 3927,
+      "concurrency": 1,
+      "aggregateDecodeTps": 81.84,
+      "meanDecodeTps": 81.84,
+      "streamsOk": 1,
+      "streamsFailed": 0,
+      "totalDecodeTokens": 255,
+      "totalCompletionTokens": 256,
+      "streamCompletionTokens": [
+        256
+      ],
+      "streamDecodeTps": [
+        81.84
+      ],
+      "waveDurationMs": 3355.75
+    },
+    {
+      "label": "prose-c1-run-2",
+      "discardedWarmup": false,
+      "benchId": "b6fddbd7-a450-4fa3-b130-c6a7c23b9a89",
+      "status": "completed",
+      "startedAt": "2026-10-27T04:01:15.877Z",
+      "finishedAt": "2026-10-27T04:01:19.808Z",
+      "durationMs": 3931,
+      "concurrency": 1,
+      "aggregateDecodeTps": 81.89,
+      "meanDecodeTps": 81.89,
+      "streamsOk": 1,
+      "streamsFailed": 0,
+      "totalDecodeTokens": 255,
+      "totalCompletionTokens": 256,
+      "streamCompletionTokens": [
+        256
+      ],
+      "streamDecodeTps": [
+        81.89
+      ],
+      "waveDurationMs": 3361.15
+    },
+    {
+      "label": "prose-c1-run-3",
+      "discardedWarmup": false,
+      "benchId": "4763b3be-0778-41ad-b473-54e4cf4b4512",
+      "status": "completed",
+      "startedAt": "2026-10-27T04:01:19.882Z",
+      "finishedAt": "2026-10-27T04:01:23.826Z",
+      "durationMs": 3944,
+      "concurrency": 1,
+      "aggregateDecodeTps": 81.88,
+      "meanDecodeTps": 81.88,
+      "streamsOk": 1,
+      "streamsFailed": 0,
+      "totalDecodeTokens": 255,
+      "totalCompletionTokens": 256,
+      "streamCompletionTokens": [
+        256
+      ],
+      "streamDecodeTps": [
+        81.88
+      ],
+      "waveDurationMs": 3373.41
+    },
+    {
+      "label": "prose-c4-run-1",
+      "discardedWarmup": false,
+      "benchId": "2a94e110-9126-4d5d-a88e-7a0172236e55",
+      "status": "completed",
+      "startedAt": "2026-10-27T04:01:23.886Z",
+      "finishedAt": "2026-10-27T04:01:30.824Z",
+      "durationMs": 6938,
+      "concurrency": 4,
+      "aggregateDecodeTps": 168.35,
+      "meanDecodeTps": 43.9,
+      "streamsOk": 4,
+      "streamsFailed": 0,
+      "totalDecodeTokens": 1020,
+      "totalCompletionTokens": 1024,
+      "streamCompletionTokens": [
+        256,
+        256,
+        256,
+        256
+      ],
+      "streamDecodeTps": [
+        46.44,
+        42.09,
+        44.23,
+        42.84
+      ],
+      "waveDurationMs": 6371.02
+    },
+    {
+      "label": "prose-c4-run-2",
+      "discardedWarmup": false,
+      "benchId": "d28f9e35-4a05-4f73-989b-ef9195b61ad8",
+      "status": "completed",
+      "startedAt": "2026-10-27T04:01:30.891Z",
+      "finishedAt": "2026-10-27T04:01:37.693Z",
+      "durationMs": 6802,
+      "concurrency": 4,
+      "aggregateDecodeTps": 170.88,
+      "meanDecodeTps": 44.52,
+      "streamsOk": 4,
+      "streamsFailed": 0,
+      "totalDecodeTokens": 1020,
+      "totalCompletionTokens": 1024,
+      "streamCompletionTokens": [
+        256,
+        256,
+        256,
+        256
+      ],
+      "streamDecodeTps": [
+        47.01,
+        42.72,
+        44.83,
+        43.52
+      ],
+      "waveDurationMs": 6232.89
+    },
+    {
+      "label": "prose-c4-run-3",
+      "discardedWarmup": false,
+      "benchId": "cc50dbe8-a89f-4b53-ac8a-c3c06b345757",
+      "status": "completed",
+      "startedAt": "2026-10-27T04:01:37.894Z",
+      "finishedAt": "2026-10-27T04:01:44.711Z",
+      "durationMs": 6817,
+      "concurrency": 4,
+      "aggregateDecodeTps": 170.95,
+      "meanDecodeTps": 44.52,
+      "streamsOk": 4,
+      "streamsFailed": 0,
+      "totalDecodeTokens": 1020,
+      "totalCompletionTokens": 1024,
+      "streamCompletionTokens": [
+        256,
+        256,
+        256,
+        256
+      ],
+      "streamDecodeTps": [
+        47.01,
+        42.74,
+        44.83,
+        43.51
+      ],
+      "waveDurationMs": 6237.77
+    }
+  ],
+  "summary": {
+    "c1": {
+      "sampleCount": 3,
+      "aggregateDecodeTps": [
+        81.84,
+        81.89,
+        81.88
+      ],
+      "arithmeticMean": 81.87,
+      "referenceAggregateDecodeTps": 91.3,
+      "attainmentPercent": 89.67,
+      "differenceTps": -9.43,
+      "meetsReference": false
+    },
+    "c4": {
+      "sampleCount": 3,
+      "aggregateDecodeTps": [
+        168.35,
+        170.88,
+        170.95
+      ],
+      "arithmeticMean": 170.06,
+      "referenceAggregateDecodeTps": 174,
+      "attainmentPercent": 97.74,
+      "differenceTps": -3.94,
+      "meetsReference": false
+    }
+  },
+  "reference": {
+    "network": "knapcio upstream switched RoCE; not the local ring topology",
+    "readmeProseC1AggregateTps": 91.3,
+    "readmeProseC4AggregateTps": 174
+  },
+  "runtimeAudit": {
+    "checkedAt": "2026-10-27T04:06:24Z",
+    "containers": [
+      {
+        "host": "spark-a",
+        "rank": 0,
+        "status": "running",
+        "health": "healthy",
+        "imageId": "sha256:089f7ff3f4953b275b74299b1824e065aaf6a06a0f126d6c3d3eef74b3c62849"
+      },
+      {
+        "host": "spark-b",
+        "rank": 1,
+        "status": "running",
+        "health": "healthy",
+        "imageId": "sha256:089f7ff3f4953b275b74299b1824e065aaf6a06a0f126d6c3d3eef74b3c62849"
+      },
+      {
+        "host": "spark-c",
+        "rank": 2,
+        "status": "running",
+        "health": "healthy",
+        "imageId": "sha256:089f7ff3f4953b275b74299b1824e065aaf6a06a0f126d6c3d3eef74b3c62849"
+      },
+      {
+        "host": "spark-d",
+        "rank": 3,
+        "status": "running",
+        "health": "healthy",
+        "imageId": "sha256:089f7ff3f4953b275b74299b1824e065aaf6a06a0f126d6c3d3eef74b3c62849"
+      }
+    ],
+    "modelCheckpoint": "deepseek-ai/DeepSeek-V4.1-Flash-1017",
+    "servedModel": "deepseek-v4.1-flash",
+    "modelBind": "/opt/models/deepseek-ai/DeepSeek-V4.1-Flash-1017:/models/DeepSeek-V4.1-Flash:ro",
+    "topology": "physical A→B→C→D→A; runtime ranks 0→1→2→3; TP4/EP1; NCCL NET/IB and ring-only",
+    "runtimeValues": {
+      "NCCL_BUFFSIZE": 8388608,
+      "NCCL_MIN_NCHANNELS": 4,
+      "NCCL_MAX_NCHANNELS": 4,
+      "SGLANG_ROCE_MAX_SIZE": 262144,
+      "DSV41_ROCE_GATHER": 262144
+    }
+  },
+  "rdmaCounters": {
+    "baselineAt": "2026-10-27T03:55:02.972Z",
+    "benchmarkStartedAt": "2026-10-27T04:01:11.872Z",
+    "benchmarkFinishedAt": "2026-10-27T04:01:44.711Z",
+    "afterAt": "2026-10-27T04:06:24Z",
+    "byNode": {
+      "spark-a": {
+        "samples": 8,
+        "positive": 8,
+        "portXmitDataDelta": 8561931315,
+        "portRcvDataDelta": 8562360489
+      },
+      "spark-b": {
+        "samples": 8,
+        "positive": 8,
+        "portXmitDataDelta": 8563577495,
+        "portRcvDataDelta": 8563720686
+      },
+      "spark-c": {
+        "samples": 8,
+        "positive": 8,
+        "portXmitDataDelta": 8567742544,
+        "portRcvDataDelta": 8567542733
+      },
+      "spark-d": {
+        "samples": 8,
+        "positive": 8,
+        "portXmitDataDelta": 8566320937,
+        "portRcvDataDelta": 8565948382
+      }
+    },
+    "interpretation": "Counters increased on both rails and all nodes, but the before/after interval extends beyond the benchmark; it is not a request-window-isolated RDMA proof."
+  },
+  "result": "This pre-v2.6 image run does not meet either upstream reference; it is retained as a baseline, not final acceptance."
+}

@@ -1,0 +1,325 @@
+{
+  "date": "2026-10-27",
+  "scope": {
+    "promptType": "prose",
+    "concurrencies": [
+      1,
+      4
+    ],
+    "repetitionsPerConcurrency": 3,
+    "statistic": "arithmetic mean of aggregateDecodeTps (not median)",
+    "maxTokens": 256,
+    "minTokens": 256,
+    "temperature": 0,
+    "thinking": false,
+    "warmups": "two complete 256-token prose c1 jobs per measurement round; discarded",
+    "otherDecodeTypesIncluded": false
+  },
+  "measurement": {
+    "harness": "SparkDash DecodeBench 1.8.8",
+    "sourceCommit": "754f40a7454fed1d26d47d1d68dd7bef930ce5ca",
+    "metric": "(completion_tokens - 1) / (last - first content chunk); concurrency aggregate over concurrent first-to-last content window",
+    "localTopology": "four-node physical A-B-C-D-A switchless ring; rank 0-3 in physical order",
+    "checkpoint": "deepseek-ai/DeepSeek-V4.1-Flash-1017",
+    "servedModel": "deepseek-v4.1-flash",
+    "imageId": "sha256:f81081116e734b88b45dc51b30e3d6afdb44f3807f99688bf139f0a6f2059402",
+    "referenceFleetAggregateTokPerSecond": {
+      "c1": 91.3,
+      "c4": 174.0
+    }
+  },
+  "monitorPollIntervalAB": {
+    "changes": [
+      "1000 ms -> 10000 ms via SparkDash PUT /api/settings",
+      "10000 ms -> 1000 ms via SparkDash PUT /api/settings after A/B"
+    ],
+    "withoutRestart": true,
+    "finalPollIntervalMs": 1000,
+    "decision": "Restore 1000 ms: 10000 ms produced a repeatable c1 increase, but both c4 round means were below the 1000 ms baseline; do not trade the four-stream result for a c1-only change.",
+    "results": {
+      "poll1000_before": {
+        "samples": [
+          {
+            "label": "prose-c1-run-1",
+            "concurrency": 1,
+            "aggregateDecodeTps": 83.37,
+            "streamsOk": 1,
+            "streamsFailed": 0,
+            "totalCompletionTokens": 256,
+            "startedAt": "2026-10-27T07:16:52.997Z",
+            "finishedAt": "2026-10-27T07:16:56.899Z"
+          },
+          {
+            "label": "prose-c1-run-2",
+            "concurrency": 1,
+            "aggregateDecodeTps": 82.97,
+            "streamsOk": 1,
+            "streamsFailed": 0,
+            "totalCompletionTokens": 256,
+            "startedAt": "2026-10-27T07:16:57.062Z",
+            "finishedAt": "2026-10-27T07:17:00.988Z"
+          },
+          {
+            "label": "prose-c1-run-3",
+            "concurrency": 1,
+            "aggregateDecodeTps": 83.05,
+            "streamsOk": 1,
+            "streamsFailed": 0,
+            "totalCompletionTokens": 256,
+            "startedAt": "2026-10-27T07:17:01.130Z",
+            "finishedAt": "2026-10-27T07:17:05.043Z"
+          },
+          {
+            "label": "prose-c4-run-1",
+            "concurrency": 4,
+            "aggregateDecodeTps": 168.44,
+            "streamsOk": 4,
+            "streamsFailed": 0,
+            "totalCompletionTokens": 1024,
+            "startedAt": "2026-10-27T07:17:05.202Z",
+            "finishedAt": "2026-10-27T07:17:12.167Z"
+          },
+          {
+            "label": "prose-c4-run-2",
+            "concurrency": 4,
+            "aggregateDecodeTps": 171.28,
+            "streamsOk": 4,
+            "streamsFailed": 0,
+            "totalCompletionTokens": 1024,
+            "startedAt": "2026-10-27T07:17:12.301Z",
+            "finishedAt": "2026-10-27T07:17:19.115Z"
+          },
+          {
+            "label": "prose-c4-run-3",
+            "concurrency": 4,
+            "aggregateDecodeTps": 171.22,
+            "streamsOk": 4,
+            "streamsFailed": 0,
+            "totalCompletionTokens": 1024,
+            "startedAt": "2026-10-27T07:17:19.201Z",
+            "finishedAt": "2026-10-27T07:17:26.025Z"
+          }
+        ],
+        "summary": {
+          "c1": {
+            "samplesAggregateTokPerSecond": [
+              83.37,
+              82.97,
+              83.05
+            ],
+            "arithmeticMeanAggregateTokPerSecond": 83.13,
+            "referenceAggregateTokPerSecond": 91.3,
+            "meetsReference": false
+          },
+          "c4": {
+            "samplesAggregateTokPerSecond": [
+              168.44,
+              171.28,
+              171.22
+            ],
+            "arithmeticMeanAggregateTokPerSecond": 170.313333,
+            "referenceAggregateTokPerSecond": 174.0,
+            "meetsReference": false
+          }
+        }
+      },
+      "poll10000_round1": {
+        "samples": [
+          {
+            "label": "prose-c1-run-1",
+            "concurrency": 1,
+            "aggregateDecodeTps": 85.77,
+            "streamsOk": 1,
+            "streamsFailed": 0,
+            "totalCompletionTokens": 256,
+            "startedAt": "2026-10-27T07:39:59.656Z",
+            "finishedAt": "2026-10-27T07:40:03.442Z"
+          },
+          {
+            "label": "prose-c1-run-2",
+            "concurrency": 1,
+            "aggregateDecodeTps": 84.65,
+            "streamsOk": 1,
+            "streamsFailed": 0,
+            "totalCompletionTokens": 256,
+            "startedAt": "2026-10-27T07:40:03.667Z",
+            "finishedAt": "2026-10-27T07:40:07.492Z"
+          },
+          {
+            "label": "prose-c1-run-3",
+            "concurrency": 1,
+            "aggregateDecodeTps": 86.25,
+            "streamsOk": 1,
+            "streamsFailed": 0,
+            "totalCompletionTokens": 256,
+            "startedAt": "2026-10-27T07:40:07.691Z",
+            "finishedAt": "2026-10-27T07:40:11.465Z"
+          },
+          {
+            "label": "prose-c4-run-1",
+            "concurrency": 4,
+            "aggregateDecodeTps": 162.15,
+            "streamsOk": 4,
+            "streamsFailed": 0,
+            "totalCompletionTokens": 1024,
+            "startedAt": "2026-10-27T07:40:11.795Z",
+            "finishedAt": "2026-10-27T07:40:19.105Z"
+          },
+          {
+            "label": "prose-c4-run-2",
+            "concurrency": 4,
+            "aggregateDecodeTps": 154.52,
+            "streamsOk": 4,
+            "streamsFailed": 0,
+            "totalCompletionTokens": 1024,
+            "startedAt": "2026-10-27T07:40:19.271Z",
+            "finishedAt": "2026-10-27T07:40:26.770Z"
+          },
+          {
+            "label": "prose-c4-run-3",
+            "concurrency": 4,
+            "aggregateDecodeTps": 168.92,
+            "streamsOk": 4,
+            "streamsFailed": 0,
+            "totalCompletionTokens": 1024,
+            "startedAt": "2026-10-27T07:40:26.997Z",
+            "finishedAt": "2026-10-27T07:40:33.859Z"
+          }
+        ],
+        "summary": {
+          "c1": {
+            "samplesAggregateTokPerSecond": [
+              85.77,
+              84.65,
+              86.25
+            ],
+            "arithmeticMeanAggregateTokPerSecond": 85.556667,
+            "referenceAggregateTokPerSecond": 91.3,
+            "meetsReference": false
+          },
+          "c4": {
+            "samplesAggregateTokPerSecond": [
+              162.15,
+              154.52,
+              168.92
+            ],
+            "arithmeticMeanAggregateTokPerSecond": 161.863333,
+            "referenceAggregateTokPerSecond": 174.0,
+            "meetsReference": false
+          }
+        }
+      },
+      "poll10000_round2": {
+        "samples": [
+          {
+            "label": "prose-c1-run-1",
+            "concurrency": 1,
+            "aggregateDecodeTps": 85.86,
+            "streamsOk": 1,
+            "streamsFailed": 0,
+            "totalCompletionTokens": 256,
+            "startedAt": "2026-10-27T07:50:00.728Z",
+            "finishedAt": "2026-10-27T07:50:04.556Z"
+          },
+          {
+            "label": "prose-c1-run-2",
+            "concurrency": 1,
+            "aggregateDecodeTps": 84.82,
+            "streamsOk": 1,
+            "streamsFailed": 0,
+            "totalCompletionTokens": 256,
+            "startedAt": "2026-10-27T07:50:04.796Z",
+            "finishedAt": "2026-10-27T07:50:08.611Z"
+          },
+          {
+            "label": "prose-c1-run-3",
+            "concurrency": 1,
+            "aggregateDecodeTps": 86.03,
+            "streamsOk": 1,
+            "streamsFailed": 0,
+            "totalCompletionTokens": 256,
+            "startedAt": "2026-10-27T07:50:08.737Z",
+            "finishedAt": "2026-10-27T07:50:12.500Z"
+          },
+          {
+            "label": "prose-c4-run-1",
+            "concurrency": 4,
+            "aggregateDecodeTps": 162.62,
+            "streamsOk": 4,
+            "streamsFailed": 0,
+            "totalCompletionTokens": 1024,
+            "startedAt": "2026-10-27T07:50:12.647Z",
+            "finishedAt": "2026-10-27T07:50:19.738Z"
+          },
+          {
+            "label": "prose-c4-run-2",
+            "concurrency": 4,
+            "aggregateDecodeTps": 162.17,
+            "streamsOk": 4,
+            "streamsFailed": 0,
+            "totalCompletionTokens": 1024,
+            "startedAt": "2026-10-27T07:50:19.972Z",
+            "finishedAt": "2026-10-27T07:50:26.754Z"
+          },
+          {
+            "label": "prose-c4-run-3",
+            "concurrency": 4,
+            "aggregateDecodeTps": 177.29,
+            "streamsOk": 4,
+            "streamsFailed": 0,
+            "totalCompletionTokens": 1024,
+            "startedAt": "2026-10-27T07:50:26.859Z",
+            "finishedAt": "2026-10-27T07:50:33.439Z"
+          }
+        ],
+        "summary": {
+          "c1": {
+            "samplesAggregateTokPerSecond": [
+              85.86,
+              84.82,
+              86.03
+            ],
+            "arithmeticMeanAggregateTokPerSecond": 85.57,
+            "referenceAggregateTokPerSecond": 91.3,
+            "meetsReference": false
+          },
+          "c4": {
+            "samplesAggregateTokPerSecond": [
+              162.62,
+              162.17,
+              177.29
+            ],
+            "arithmeticMeanAggregateTokPerSecond": 167.36,
+            "referenceAggregateTokPerSecond": 174.0,
+            "meetsReference": false
+          }
+        }
+      }
+    },
+    "delta10sVs1s": {
+      "round1": {
+        "c1MeanTokPerSecond": 2.426667,
+        "c4MeanTokPerSecond": -8.45
+      },
+      "round2": {
+        "c1MeanTokPerSecond": 2.44,
+        "c4MeanTokPerSecond": -2.953333
+      }
+    }
+  },
+  "networkSourceCheck": {
+    "checkedOn": "spark-a",
+    "tunaPyPi": "HTTP 200 over direct connection",
+    "buildImageHistory": "PIP_INDEX=https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple",
+    "macProxyFallback": "spark-a loopback 127.0.0.1:7890 listener reachable; not needed because TUNA succeeded"
+  },
+  "transientEvents": [
+    "An initial 10000 ms round was interrupted by ECONNRESET during an idle preflight after two measured c1 jobs; it was not treated as a complete three-run result.",
+    "The completed second round recorded all six c1/c4 samples. A post-diagnostic cleanup check briefly saw one running request; a subsequent read-only API check confirmed running=0, waiting=0. The standalone RDMA after-snapshot for that second round was not collected; earlier ring/data-plane verification remains separate."
+  ],
+  "overallPerformanceGate": {
+    "c1TargetMet": false,
+    "c4TargetMet": false,
+    "status": "not met; retain the local ring and do not claim knapcio reference speed achieved"
+  }
+}

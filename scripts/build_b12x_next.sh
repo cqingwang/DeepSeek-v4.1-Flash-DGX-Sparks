@@ -55,6 +55,6 @@ grep -q "_compact_w4a8_query(query) and not query.deterministic_output" "$OUT/b1
 if command -v sha256sum >/dev/null; then sum=sha256sum; else sum="shasum -a 256"; fi
 cat "${PATCHES[@]}" | $sum | cut -c1-16 > "$OUT/b12x_next/SOURCE_PATCH"
 # leftovers: only thread names / lock-file names of the form "b12x-..." may keep the old word
-left=$(find "$OUT/b12x_next" -name '*.py' -print0 | xargs -0 perl -ne 'print "$ARGV\n" if /\bb12x\b(?!-)/ || /\bB12X_(?!NEXT_)/' | sort -u)
+left=$(find "$OUT/b12x_next" -name '*.py' -print0 | xargs -0 perl -ne 'print "$ARGV\n" if /\bb12x\b(?!-)/ || /\bB12X_(?!NEXT(?:_|\b))/' | sort -u)
 if [ -n "$left" ]; then echo "unrenamed b12x references in: $left" >&2; exit 1; fi
 echo "built $OUT/b12x_next from $COMMIT ($(find "$OUT/b12x_next" -name '*.py' | wc -l) python files)"

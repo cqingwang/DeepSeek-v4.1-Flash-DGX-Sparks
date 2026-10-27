@@ -19,6 +19,54 @@ class OfflineBuildTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             return shell('ensure_ssh_keys() { :; }\n' + code, Path(tmp), settings)
 
+    def test_b12x_next_fetch_applies_every_manifest_pinned_ds41_patch(self):
+        patch_paths = [
+            'scripts/b12x_next-compact-n64-m64.patch',
+            'scripts/b12x_next-prequant-input.patch',
+            'scripts/b12x_next-barrier-zero.patch',
+            'scripts/b12x_next-det-triton-planner.patch',
+            'scripts/b12x_next-required-gid.patch',
+        ]
+        fetch_source = (ROOT / 'scripts/fetch_runtime.sh').read_text()
+        builder_source = (ROOT / 'scripts/build_b12x_next.sh').read_text()
+        manifest_rows = (ROOT / 'runtime/sources.manifest').read_text().splitlines()
+
+        for source in (fetch_source, builder_source):
+            positions = [source.find(Path(path).name) for path in patch_paths]
+            self.assertTrue(all(position >= 0 for position in positions), positions)
+            self.assertEqual(positions, sorted(positions), positions)
+
+        self.assertIn('check_local "$patch_rel"', fetch_source)
+        for patch_path in patch_paths:
+            with self.subTest(patch=patch_path):
+                patch_file = ROOT / patch_path
+                manifest_row = next(
+                    line.split() for line in manifest_rows
+                    if line.split()[:2] == ['local', patch_path]
+                )
+                self.assertEqual(
+                    hashlib.sha256(patch_file.read_bytes()).hexdigest(),
+                    manifest_row[2],
+                )
+
+    def test_b12x_next_rename_guard_allows_the_renamed_namespace(self):
+        regex = r'\bB12X_(?!NEXT(?:_|\b))'
+        for script_path in (
+            ROOT / 'scripts/fetch_runtime.sh',
+            ROOT / 'scripts/build_b12x_next.sh',
+        ):
+            self.assertIn(regex, script_path.read_text())
+
+        sample = 'B12X_NEXT GID\nB12X_NEXT_ROCE_GID_INDEX\nB12X_ROCE_GID_INDEX\n'
+        result = subprocess.run(
+            ['perl', '-ne', f'print if /{regex}/'],
+            input=sample,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        self.assertEqual(result.stdout, 'B12X_ROCE_GID_INDEX\n')
+
     def test_b12x_gid_patch_imports_shared_roce_env_from_parent_comm(self):
         patch_path = ROOT / 'scripts/b12x-required-gid.patch'
         patch_source = patch_path.read_text()

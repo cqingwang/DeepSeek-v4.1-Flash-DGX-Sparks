@@ -2,6 +2,8 @@
 
 > **Workspace boundary:** this document preserves the target's standalone/upstream recipe and uses illustrative `/24` examples below. In the parent Spark workspace, the active topology and all host-specific values come only from `spark/config.yaml.common.ring`; the current physical order is A→B→C→D→A. The shared B12X RoCEnante implementation lives in `spark/ring/b12x/`, while `spark/program.py` derives its runtime maps and the target launcher only verifies/consumes those managed values. Do not copy the example addresses, HCA/GID indexes, or launcher values into the managed target.
 
+> **Upstream v2.6 boundary:** the optional two-shot collective is documented and tested for switched fabric, not `DSV41_ROCE_RING=1`. Keep it disabled on this switchless deployment and retain the parent-managed 256 KiB RoCEnante limit. The v2.6 prepared-MoE and no-sync indexer switches are prefill runtime parameters; once their adapter code is present in the image, change them through the parent-managed container environment rather than rebuilding for a parameter-only change.
+
 `NCCL_SWITCHLESS_RING_ONLY=1` boots this stack on four DGX Sparks cabled as a ring
 (a-b-c-d-a, one DAC per adjacency per rail, no switch in between). It is **off by
 default and changes nothing when off**: the switch only decides whether the ring

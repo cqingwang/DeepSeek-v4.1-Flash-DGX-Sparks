@@ -8,7 +8,8 @@
 #                                  applies runtime/sglang-rocenante.patch + runtime/roce_tp4_adapt.py)
 #   OUT_DIR/b12x/{b12x,LICENSE}    SG17 b12x plus the shared b12x.comm.roce_ring package
 #   OUT_DIR/b12x_next/{b12x_next,LICENSE}
-#                                  b12x main renamed to the package b12x_next, patched
+#                                  b12x main renamed to the package b12x_next, then patched
+#                                  with the five pinned DeepSeek runtime patches
 #
 # The Dockerfiles run this in their `fetch` stage. On a host it needs bash, curl, tar, perl,
 # patch and sha256sum (or shasum). Nothing is trusted without its sha256.
@@ -87,7 +88,15 @@ fetch_b12x() {
 fetch_b12x_next() {
   echo "b12x-next (b12x main as b12x_next)"
   fetch b12x-main "$tmp/b12x-main.tgz"
-  local commit dst="$OUT/b12x_next" patch_file="$ROOT/scripts/b12x_next-compact-n64-m64.patch"
+  local commit dst="$OUT/b12x_next" patch_rel patch_file
+  local -a patch_relatives=(
+    scripts/b12x_next-compact-n64-m64.patch
+    scripts/b12x_next-prequant-input.patch
+    scripts/b12x_next-barrier-zero.patch
+    scripts/b12x_next-det-triton-planner.patch
+    scripts/b12x_next-required-gid.patch
+  )
+  local -a patch_files=()
   read -r commit _ <<<"$(row b12x-main)"
   rm -rf "$dst"
   mkdir -p "$dst" "$tmp/main"
@@ -103,16 +112,32 @@ fetch_b12x_next() {
   find "$dst/b12x_next" -type f \( -name '*.py' -o -name '*.c' -o -name '*.cpp' -o -name '*.h' \) -print0 \
     | xargs -0 perl -pi -e 's/\bb12x\b(?!-)/b12x_next/g; s/\bB12X_(?!NEXT_)/B12X_NEXT_/g'
   echo "$commit" > "$dst/b12x_next/SOURCE_COMMIT"
-  # admit the M64 tile for compact-N64 (N=576, EP1) prefill capacities (b12x pins them to M16)
-  check_local scripts/b12x_next-compact-n64-m64.patch
-  (cd "$dst" && patch -p0 --forward --quiet < "$patch_file") || die "compact-n64-m64 patch did not apply"
-  grep -q "_compact_n64_tiles" "$dst/b12x_next/moe/fused_moe/_tuning.py" || die "compact-n64-m64 patch did not apply"
-  sha256 "$patch_file" | cut -c1-16 > "$dst/b12x_next/SOURCE_PATCH"
+  # Keep this locked archive path equivalent to scripts/build_b12x_next.sh: the adapter's
+  # source pins and CPU/GPU contracts rely on all five patches, not only the tile-capacity fix.
+  for patch_rel in "${patch_relatives[@]}"; do
+    check_local "$patch_rel"
+    patch_file="$ROOT/$patch_rel"
+    (cd "$dst" && patch -p0 --forward --quiet --no-backup-if-mismatch < "$patch_file") \
+      || die "$patch_rel did not apply"
+    patch_files+=("$patch_file")
+  done
+  grep -q "_compact_n64_tiles" "$dst/b12x_next/moe/fused_moe/_tuning.py" \
+    || die "compact-n64-m64 patch did not apply"
+  grep -q "def prequantized_input" "$dst/b12x_next/moe/fused_moe/_impl.py" \
+    || die "prequant-input patch did not apply"
+  grep -q "def _zero_barrier_state" "$dst/b12x_next/moe/fused_moe/_impl.py" \
+    || die "barrier-zero patch did not apply"
+  grep -q "_compact_w4a8_query(query) and not query.deterministic_output" "$dst/b12x_next/moe/fused_moe/_tuning.py" \
+    && die "det-triton-planner patch did not apply"
+  grep -q "required_roce_gid_index" "$dst/b12x_next/comm/roce/roce_oneshot.py" \
+    || die "required-gid patch did not apply"
+  cat "${patch_files[@]}" > "$tmp/b12x-next.patchset"
+  sha256 "$tmp/b12x-next.patchset" | cut -c1-16 > "$dst/b12x_next/SOURCE_PATCH"
   # The measured images never carried sequence/engram (an op package unused by the MoE path;
   # a repository-wide `engram/` ignore rule kept it out). Left out so the build matches them.
   rm -rf "$dst/b12x_next/sequence/engram"
   local left
-  left=$(find "$dst/b12x_next" -name '*.py' -print0 | xargs -0 perl -ne 'print "$ARGV\n" if /\bb12x\b(?!-)/ || /\bB12X_(?!NEXT_)/' | sort -u)
+  left=$(find "$dst/b12x_next" -name '*.py' -print0 | xargs -0 perl -ne 'print "$ARGV\n" if /\bb12x\b(?!-)/ || /\bB12X_(?!NEXT(?:_|\b))/' | sort -u)
   [[ -z "$left" ]] || die "unrenamed b12x references in: $left"
 }
 
