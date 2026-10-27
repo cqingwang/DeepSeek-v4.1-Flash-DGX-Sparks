@@ -101,6 +101,12 @@ class EngramLoader(importlib.abc.Loader):
         elif module.__name__ == 'sglang.srt.models.deepseek_v4':
             from fast_load import install_deepseek_v4
             install_deepseek_v4(module)
+            # Gated on DSV41_WO_A_INPUT_FP8 (off by default): wo_a's input o rounded to e4m3 in 32-blocks
+            # with power-of-two scales, as DeepSeek's 2026-10-12 reference does. BEFORE wo_a_w8, whose
+            # mid/drop wrapper calls this one for the routes it does not round in registers itself.
+            if os.environ.get('DSV41_WO_A_INPUT_FP8', '0').strip().lower() not in ('0', 'off', 'false', ''):
+                from wo_a_input_fp8 import install_model as install_wo_a_input_fp8
+                install_wo_a_input_fp8(module)
             # Gated on DSV41_WO_A_W8: verify/draft wo_a reads its fp8 checkpoint bytes.
             if os.environ.get('DSV41_WO_A_W8', '0').strip() not in ('0', 'off', 'false', ''):
                 from wo_a_w8 import install_model as install_wo_a_w8
@@ -133,6 +139,10 @@ class EngramLoader(importlib.abc.Loader):
                 install_verify_cap_dspark(module)
             from fast_load import install_dspark
             install_dspark(module)
+            # Gated on DSV41_WO_A_INPUT_FP8: checks the draft calls the wrapped wo_a dispatch.
+            if os.environ.get('DSV41_WO_A_INPUT_FP8', '0').strip().lower() not in ('0', 'off', 'false', ''):
+                from wo_a_input_fp8 import install_dspark as install_wo_a_input_fp8_dspark
+                install_wo_a_input_fp8_dspark(module)
             if os.environ.get('DSV41_WO_A_W8', '0').strip() not in ('0', 'off', 'false', ''):
                 from wo_a_w8 import install_dspark as install_wo_a_w8_dspark
                 install_wo_a_w8_dspark(module)

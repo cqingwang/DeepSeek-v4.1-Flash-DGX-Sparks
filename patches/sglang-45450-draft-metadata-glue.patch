@@ -1,0 +1,237 @@
+--- a/python/sglang/srt/layers/attention/base_attn_backend.py
++++ b/python/sglang/srt/layers/attention/base_attn_backend.py
+@@ -96,6 +96,13 @@
+         self.init_forward_metadata_out_graph(forward_batch)
+         self.init_forward_metadata_in_graph(forward_batch)
+ 
++    def glue_draft_metadata(self) -> str:
++        """Called once by a speculative draft runner that would capture this
++        backend's ``init_forward_metadata_out_graph`` into its metadata glue graph:
++        "" accepts (and prepares the backend for it), otherwise the reason not to.
++        Accept only a prep whose host inputs are constant per replay key."""
++        return "the attention backend declares no host-free draft prep"
++
+     def init_forward_metadata_out_graph(
+         self,
+         forward_batch: ForwardBatch,
+--- a/python/sglang/srt/layers/attention/deepseek_v4_backend.py
++++ b/python/sglang/srt/layers/attention/deepseek_v4_backend.py
+@@ -1139,6 +1139,7 @@
+ class DeepseekV4AttnBackend(
+     AttentionBackend, C4IndexerBackendMixin, CompressorBackendMixin
+ ):
++    draft_metadata_glued = False
+     use_captured_forward_metadata_for_breakable_cuda_graph: bool = True
+     supports_prefill_cuda_graph_max_context_size: bool = True
+     supports_ragged_verify_graph: bool = True
+@@ -1285,11 +1286,47 @@
+         self.is_draft_runner = model_runner.is_draft_worker
+         self._verify_mask = None
+         self.cuda_graph_swa_out_cache_loc: Optional[torch.Tensor] = None
++        # Once a draft runner glues this prep (glue_draft_metadata): the draft
++        # block's extend lengths come from device constants, one per batch size.
++        self.draft_metadata_glued = False
++        self._draft_extend_lens: Dict[Tuple[int, ...], torch.Tensor] = {}
+ 
+     def _move_to_device(self, x: List[int]) -> torch.Tensor:
+         pin_tensor = torch.tensor(x, dtype=torch.int32, pin_memory=True)
+         return pin_tensor.to(self.device, non_blocking=True)
+ 
++    def glue_draft_metadata(self) -> str:
++        # On FlashMLA without online c128 MTP, a request window or context
++        # parallelism, the DSpark draft block prep launches only device work whose
++        # host inputs follow from the batch size (its CPU lengths feed asserts).
++        for bad, why in (
++            (not self.is_dspark_draft, "not the DSpark draft runner"),
++            (self.trtllm_attn, "trtllm-gen attention"),
++            (self.online_c128_mtp.enabled(), "online c128 MTP"),
++            (self.token_to_kv_pool.request_window is not None, "a request window"),
++            (get_parallel().attn_cp_size != 1, "context parallelism"),
++        ):
++            if bad:
++                return why
++        self.draft_metadata_glued = True
++        return ""
++
++    def _draft_block_extend_lens(self, lens: List[int]) -> torch.Tensor:
++        """The draft block's extend lengths on the device; glued, a cached constant
++        (a captured host copy would replay from a freed pinned buffer)."""
++        if not self.draft_metadata_glued:
++            return self._move_to_device(lens)
++        key = tuple(lens)
++        cached = self._draft_extend_lens.get(key)
++        if cached is None:
++            if torch.cuda.is_available() and torch.cuda.is_current_stream_capturing():
++                raise RuntimeError(
++                    f"draft block extend lengths {key} first seen inside the metadata "
++                    "glue capture"
++                )
++            cached = self._draft_extend_lens[key] = self._move_to_device(lens)
++        return cached
++
+     def _resolve_verify_layout(
+         self,
+         forward_batch: ForwardBatch,
+@@ -1914,7 +1951,7 @@
+             seq_lens_cpu=seq_lens_cpu_list,
+             extend_len=block_size,
+         )
+-        extend_seq_lens = self._move_to_device(lengths.extend_seq_lens_cpu)
++        extend_seq_lens = self._draft_block_extend_lens(lengths.extend_seq_lens_cpu)
+         return self.init_forward_metadata_prefill(
+             # DSpark draft blocks are SWA-only, like draft extend. Their full
+             # context page table is unused; retain only its 2-D placeholder.
+--- a/python/sglang/srt/model_executor/runner/decode_cuda_graph_runner.py
++++ b/python/sglang/srt/model_executor/runner/decode_cuda_graph_runner.py
+@@ -22,6 +22,7 @@
+ 
+ from __future__ import annotations
+ 
++import atexit
+ import contextlib
+ import inspect
+ import logging
+@@ -128,6 +129,9 @@
+ 
+ logger = logging.getLogger(__name__)
+ 
++# Draft metadata glue: steps between two "draft glue" tally lines per rank
++DRAFT_GLUE_LOG_EVERY = 1000
++
+ if TYPE_CHECKING:
+     from sglang.srt.model_executor.model_runner import ModelRunner
+     from sglang.srt.speculative.spec_info import SpeculativeAlgorithm
+@@ -455,6 +459,15 @@
+         self._metadata_glue = (
+             MetadataGlueGraph(self.device) if enable_metadata_glue else None
+         )
++        # The DSpark draft runner's prep has no host-fed plan, so the guard above does
++        # not apply where its backend says so.
++        self._draft_metadata_glue = (
++            self._metadata_glue is None and self._glues_draft_metadata()
++        )
++        self._draft_glue_logged = 0
++        if self._draft_metadata_glue:
++            self._metadata_glue = MetadataGlueGraph(self.device)
++            atexit.register(self._log_draft_glue, " at shutdown")
+ 
+         # --- backend ---------------------------------------------------
+         self.backend = resolve_decode_backend(self)
+@@ -1372,6 +1385,7 @@
+             and not self.enable_pdmux
+             and self.model_runner.lora_manager is None
+         ):
++            self._glue_draft_inputs(fb_view)
+             # actual_forward_mode belongs in the key even though the captured
+             # graph always targets capture_forward_mode: DSV4's replay prep
+             # substitutes seq_lens / seq_lens_cpu / seq_lens_sum /
+@@ -1387,7 +1401,11 @@
+                 ),
+             )
+         else:
++            if self._metadata_glue is not None:
++                self._metadata_glue.note_not_routed()
+             attn_backend.init_forward_metadata_out_graph(fb_view)
++        if self._draft_metadata_glue:
++            self._maybe_log_draft_glue()
+ 
+         self.raw_bs = raw_bs
+         self.raw_num_token = raw_num_token
+@@ -1405,6 +1423,43 @@
+             graph_size_key, stream_idx, variant_label, attention_variant
+         )
+ 
++    def _glues_draft_metadata(self) -> bool:
++        """Whether this draft runner's metadata prep runs through the glue graph: a
++        static-verify draft runner whose backend accepts it."""
++        if not self.model_runner.is_draft_worker:
++            return False
++        if envs.SGLANG_RAGGED_VERIFY_MODE.get() != "static":
++            why = "ragged verify"
++        else:
++            why = self.attn_backend.glue_draft_metadata()
++        if why:
++            logger.info("Draft metadata glue graph off: %s.", why)
++            return False
++        logger.info("Draft metadata prep through the glue graph, one per replay key.")
++        return True
++
++    def _maybe_log_draft_glue(self) -> None:
++        glue = self._metadata_glue
++        steps = glue.replays + glue.eager
++        if steps >= self._draft_glue_logged + DRAFT_GLUE_LOG_EVERY:
++            self._draft_glue_logged = steps
++            self._log_draft_glue("")
++
++    def _log_draft_glue(self, when: str) -> None:
++        logger.debug(
++            "draft glue: %d graph replays, %d eager (since warm-up)%s",
++            self._metadata_glue.replays,
++            self._metadata_glue.eager,
++            when,
++        )
++
++    def _glue_draft_inputs(self, fb_view) -> None:
++        """The draft glue graph reads its inputs by address: out_cache_loc from the
++        registry slot fill_from just wrote, not the step's own (fresh) tensor."""
++        if self._draft_metadata_glue and fb_view.out_cache_loc is not None:
++            n = fb_view.out_cache_loc.shape[0]
++            fb_view.out_cache_loc = self.buffers.out_cache_loc[:n]
++
+     def _ragged_graph_num_tokens(self, total_verify_tokens: int) -> int:
+         from sglang.srt.speculative.ragged_verify import round_up_grid
+ 
+--- a/python/sglang/srt/model_executor/runner/metadata_glue_graph.py
++++ b/python/sglang/srt/model_executor/runner/metadata_glue_graph.py
+@@ -47,6 +47,10 @@
+     def __init__(self, device):
+         self.device = device
+         self.disabled = False
++        # Since the first warm-up: prep steps served by a graph replay, and steps
++        # that ran eagerly after it (capture failure, disabled, or never routed here).
++        self.replays = 0
++        self.eager = 0
+         self._states: Dict[Any, dict] = {}
+         self._capture_stream = None
+ 
+@@ -55,6 +59,12 @@
+         static buffers and backend state may have been rebuilt)."""
+         self._states.clear()
+ 
++    def note_not_routed(self) -> None:
++        """A replay the caller prepared eagerly without calling ``run`` (padding,
++        TBO, pdmux, LoRA, disabled)."""
++        if self._states or self.disabled:
++            self.eager += 1
++
+     @staticmethod
+     def _leaves(attn_backend) -> List[Any]:
+         backends = [attn_backend]
+@@ -74,6 +84,7 @@
+             for backend, metadata in st["meta"]:
+                 backend.forward_metadata = metadata
+             st["graph"].replay()
++            self.replays += 1
+             return
+ 
+         if st["warmups"] < self.NUM_WARMUP:
+@@ -85,7 +96,10 @@
+             self._capture_stream = torch.cuda.Stream()
+         graph = torch.cuda.CUDAGraph()
+         try:
+-            with torch.cuda.graph(graph, stream=self._capture_stream):
++            # Captured while serving: other threads may use CUDA meanwhile.
++            with torch.cuda.graph(
++                graph, stream=self._capture_stream, capture_error_mode="thread_local"
++            ):
+                 attn_backend.init_forward_metadata_out_graph(fb_view)
+         except Exception:
+             logger.warning(
+@@ -95,6 +109,7 @@
+                 exc_info=True,
+             )
+             self.disabled = True
++            self.eager += 1
+             # Ops under a failed capture were recorded, not executed — run
+             # this step's prep for real.
+             attn_backend.init_forward_metadata_out_graph(fb_view)

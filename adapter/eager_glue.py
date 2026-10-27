@@ -62,6 +62,9 @@ except ImportError:
 # DSV4 replay prep reads forward_batch.out_cache_loc, a fresh tensor every step, not a runner static
 # buffer, so a glue graph replays the capture-time address; a bounded bit-check cannot guard that. The
 # names still parse (existing env strings keep working) but install nothing; "all" leaves them out.
+# The pinned SGLang runtime now carries upstream #45450's draft-only replacement, which rebinds
+# out_cache_loc to the runner registry before capture. Keep this obsolete monkey patch dropped:
+# the runtime port owns the safe path and its backend/configuration guards.
 DROPPED = frozenset({"tvglue", "dglue"})
 _warned = set()
 

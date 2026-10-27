@@ -1,0 +1,75 @@
+diff --git a/python/sglang/srt/layers/attention/deepseek_v4_backend.py b/python/sglang/srt/layers/attention/deepseek_v4_backend.py
+--- a/python/sglang/srt/layers/attention/deepseek_v4_backend.py
++++ b/python/sglang/srt/layers/attention/deepseek_v4_backend.py
+@@ -1015,6 +1015,8 @@ class DSV4Metadata:
+     # Per-step scratch for TP-padded query heads, zeroed by the first user.
+     # Later layers overwrite real heads and preserve the zero padding.
+     q_pad_buffer: Optional[torch.Tensor] = None
++    # Set once a CUDA graph captures q_pad_buffer; it may not grow after that.
++    q_pad_captured: bool = False
+ 
+     # Two-level low-ratio indexer (dsv4/candidate_indexer.py): what the
+     # candidate-source layer published for the index-source layers after it, in
+diff --git a/python/sglang/srt/models/deepseek_v4.py b/python/sglang/srt/models/deepseek_v4.py
+--- a/python/sglang/srt/models/deepseek_v4.py
++++ b/python/sglang/srt/models/deepseek_v4.py
+@@ -975,6 +975,34 @@ class DeepseekV4AttentionMLA(nn.Module):
+         # Other FlashMLA implementations retain their existing padded shape.
+         return 64 if self.n_local_heads <= 64 else self.n_heads
+ 
++    def _zero_padded_q(self, x, kernel_num_heads, attn_backend) -> torch.Tensor:
++        # One zeroed buffer per metadata, grown to the most rows it has served; each
++        # call takes a row slice. A graph that keeps the metadata keeps the buffer,
++        # so the buffer must not grow once a graph has captured it.
++        meta = getattr(attn_backend, "forward_metadata", None)
++        buf = getattr(meta, "q_pad_buffer", None)
++        if (
++            buf is None
++            or buf.shape[0] < x.shape[0]
++            or buf.shape[1:] != (kernel_num_heads, self.head_dim)
++            or buf.dtype != x.dtype
++        ):
++            assert not getattr(meta, "q_pad_captured", False), (
++                "the padded query buffer grew after a CUDA graph captured it"
++            )
++            buf = x.new_zeros(x.shape[0], kernel_num_heads, self.head_dim)
++            if meta is not None:
++                try:
++                    meta.q_pad_buffer = buf
++                except (AttributeError, TypeError):
++                    pass
++        if meta is not None and torch.cuda.is_current_stream_capturing():
++            try:
++                meta.q_pad_captured = True
++            except (AttributeError, TypeError):
++                pass
++        return buf[: x.shape[0]]
++
+     def _local_attn_sink(self, kernel_num_heads: Optional[int] = None) -> torch.Tensor:
+         if self.attn_tp_size == 1:
+             return self.attn_sink
+@@ -2173,23 +2201,7 @@ class DeepseekV4AttentionMLA(nn.Module):
+                 # padded shape. attn_sink is sliced to this rank and padded to match.
+                 if self.is_dsv41:
+                     # The V4.1 kernels read all padded heads, so the padding must be zero.
+-                    # Each layer overwrites real heads and leaves padding zero. Reuse requires
+-                    # all consumers on the layer's stream and no retained reference after return;
+-                    # a side-stream consumer would need an event before the next layer writes.
+-                    want = (x.shape[0], kernel_num_heads, self.head_dim)
+-                    meta = getattr(attn_backend, "forward_metadata", None)
+-                    q_padded = getattr(meta, "q_pad_buffer", None)
+-                    if (
+-                        q_padded is None
+-                        or tuple(q_padded.shape) != want
+-                        or q_padded.dtype != x.dtype
+-                    ):
+-                        q_padded = x.new_zeros(*want)
+-                        if meta is not None:
+-                            try:
+-                                meta.q_pad_buffer = q_padded
+-                            except (AttributeError, TypeError):
+-                                pass
++                    q_padded = self._zero_padded_q(x, kernel_num_heads, attn_backend)
+                 elif _is_gfx942_supported:
+                     # Uninitialized padded TP heads inject NaN into attention on gfx942
+                     # (fnuz), so zero-init there; other archs tolerate new_empty and skip

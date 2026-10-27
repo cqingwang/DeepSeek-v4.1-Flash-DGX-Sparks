@@ -252,6 +252,7 @@ benchmarks/, tests/      upstream benchmark, row-store, thinking-alias, encoder-
 | `PYTORCH_CUDA_ALLOC_CONF` | `expandable_segments:False` | never `True`: with expandable segments every prefill of more than 64 query tokens returns NaN logits (garbage for prompts of 65-~4000 tokens and for 3+ concurrent requests; REPORT.md §17). The native allocator fragments on long prompts, hence the context cap |
 | `DSV41_PREFILL_EMPTY_CACHE_TOKENS` | 8192 | `adapter/prefill_empty_cache.py`: after each prefill chunk of a sequence this long or longer, give the allocator's cached blocks back so a long prompt costs one chunk's transient, not the sum (REPORT.md §17). 0 disables |
 | `DSV41_IO_THREADS` | 96 | Engram miss-servicing threads (NVMe does ~112k IOPS at QD 64) |
+| `DSV41_ENGRAM_KEEPALIVE_MS` | 25 | one 4 KiB read per period while Engram lookups arrived in the last 2 s, so the drive does not enter APST sleep between decode steps (~10 ms wake-up); 0 disables |
 | `DSV41_CACHE_GIB` | 0 | Engram row cache; 0 because n-gram rows have ~0% reuse and RAM is GPU memory |
 | `OFFLOAD_MODE` | nvme | keep |
 | `SKIP_SMOKE` / `SMOKE_QUICK` | 0 / 1 | arithmetic smoke after `/health`; 0 = also JSON, tools, vision |

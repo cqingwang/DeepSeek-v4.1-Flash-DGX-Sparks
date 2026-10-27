@@ -4,7 +4,7 @@
  
  from . import _allgather_cute
  from ._oneshot_cute import PACK_BYTES, get_launcher, is_launcher_prepared
-+from .roce_env import required_roce_gid_index
++from ..roce_env import required_roce_gid_index
  from ._proxy import Layout, Proxy, load as _load_proxy_library
  
  logger = logging.getLogger(__name__)

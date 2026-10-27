@@ -30,7 +30,13 @@ def test_tp4_templates_keep_production_defaults() -> None:
         assert values["DIST_PORT"] == "25000"
         assert values["WEIGHTS_MODE"] == "local"
         assert values["NFS_SHARE"] == "0"
-        assert values["DSV41_ADAPTIVE_CHUNK"] == "1"
+        for obsolete_key in (
+            "DSV41_ADAPTIVE_CHUNK",
+            "DSV41_ADAPTIVE_LOW",
+            "DSV41_ADAPTIVE_HIGH",
+            "DSV41_ADAPTIVE_FLOOR",
+        ):
+            assert obsolete_key not in values
         assert values["DSV41_INDEXER_BUDGET_MIB"] == "256"
 
 
@@ -38,13 +44,14 @@ def test_launcher_retains_ring_and_local_weight_contract() -> None:
     source = (ROOT / "start.sh").read_text(encoding="utf-8")
     for marker in (
         '"$NCCL_HOST_DIR:$NCCL_CONTAINER_DIR:ro"',
-        '"LD_PRELOAD=$NCCL_PIN_CONTAINER $NCCL_CONTAINER_DIR/$NCCL_SO_NAME"',
+        "LD_PRELOAD=$NCCL_PIN_CONTAINER $NCCL_CONTAINER_DIR/$NCCL_SO_NAME",
+        "LD_PRELOAD=$LD_PRELOAD_SHIM",
         "nccl_validate_managed_tp4_transport_policy",
+        "preflight_all_nodes",
+        "scripts/ship_image_ring.sh",
         "EXTRA_DOCKER_ENV",
         "WEIGHTS_MODE",
         "WORKER_MODEL_DIR",
-        "scripts/nccl_selfcheck.sh",
-        "scripts/gate.sh",
     ):
         assert marker in source, f"启动器缺少必要能力: {marker}"
 

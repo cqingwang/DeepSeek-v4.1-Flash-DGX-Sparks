@@ -92,7 +92,7 @@ net_line=$(grep 'NET/IB : Using' "$log" | head -1 || true)
 actual_hcas=$(sed -E 's/^.*NET\/IB : Using //; s/ \[RO\].*$//; s/\[[0-9]+\]([^:]+):[^ ]+/\1/g' <<< "$net_line")
 actual_hcas="${actual_hcas// /,}"
 if [[ -n "$net_line" && "$actual_hcas" == "$managed_hcas" ]]; then
-  echo "[+] NCCL RoCE HCA 顺序与 common.ring 完全一致: $actual_hcas（$EXPECT_HCA 个）"
+  echo "[+] NCCL RoCE HCA 顺序与 common.ring 完全一致: ${actual_hcas}（$EXPECT_HCA 个）"
 else
   echo "[x] NCCL RoCE HCA 与 common.ring 不一致: actual=${actual_hcas:-缺失} expected=$managed_hcas"
   fail=1

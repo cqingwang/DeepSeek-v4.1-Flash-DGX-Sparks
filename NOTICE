@@ -1,4 +1,4 @@
-DeepSeek-V4.1-Flash on 3x NVIDIA DGX Spark
+DeepSeek-V4.1-Flash on 4x NVIDIA DGX Spark
 Copyright (C) 2026 zurih
 
 This repository (start.sh, stop.sh, boot.py changes, adapter/, scripts/, files/,
@@ -15,12 +15,6 @@ Third-party components and their licences:
   MIT License, Copyright (c) 2026 0xSero. The MIT notice is retained in
   LICENSE.upstream-MIT as that licence requires; the combined work is offered
   under the AGPL-3.0-or-later.
-- adapter/verify_cap.py, block_verify.py, draft_head_fp8.py, engram_prefetch.py,
-  draft_tau.py, folded_result_fence.py, autotune_keep.py and wo_a_w8.py (with their
-  tests) originate from knapcio/DeepSeek-V4.1-Flash-4x-DGX-Spark-TP4 (commit 4d8f4c0),
-  AGPL-3.0-or-later. wo_a_w8.py and autotune_keep.py were modified here (TP3 group
-  count, dev-dsv41 bridge, draft/DROP fix, autotune cache fixes); see README.md,
-  Attribution.
 - runtime/flash_mla_sm120.py is derived from SGLang and remains under the Apache
   License 2.0 (LICENSE.sglang); the page-split changes are distributed under the
   same terms.
@@ -29,13 +23,19 @@ Third-party components and their licences:
   scripts/qeval*.py) is contributed from knapcio/DeepSeek-V4.1-Flash-4x-DGX-Spark-TP4,
   AGPL-3.0-or-later. The fetched third-party trees remain under their respective
   upstream licenses and are pinned by runtime/sources.manifest.
+- runtime/sglang/deepseekv41_detector.py is sgl-project/sglang
+  python/sglang/srt/function_call/deepseekv41_detector.py at commit 464fffbec8d0
+  (SGLang #39665), unmodified, Apache License 2.0 (LICENSE.sglang). The default
+  image installs it through runtime/patch_v41_tool_constraint.py.
+- patches/nccl-2393-aarch64-cts-fence.patch is Stanislav Bardyuk's change from
+  NVIDIA/nccl PR #2393 (commit b85c5d9c4aa5), backported to NCCL v2.30.7-1;
+  Apache License 2.0 (LICENSE.sglang contains the same Apache-2.0 text).
 - The shared `spark/ring/b12x/comm/roce_ring` path-aware RoCEnante package is from
   FujitsuPolycom/sparkring (commit f16b5f4), itself derived from local-inference-lab/b12x
-  (RoCEnante, PR 295); Apache License 2.0, retained at `spark/ring/b12x/LICENSE`.
-  Origin and local changes are recorded in `spark/ring/b12x/roce_ring-provenance.json`.
-  `scripts/ring_mesh/plan.py` drives sparkring's fabric planner and the units run
-  sparkring's RDMA-TX marker; neither is vendored here (both come from a sparkring checkout,
-  Apache License 2.0).
+  (RoCEnante, PR 295); Apache License 2.0. The shared source, license and provenance are
+  maintained in the parent repository at `spark/ring/b12x/`. `scripts/ring_mesh/plan.py`
+  drives sparkring's fabric planner and the units run sparkring's RDMA-TX marker; neither is
+  vendored here (both come from a sparkring checkout, Apache License 2.0).
 - SGLang, FlashInfer, DeepGEMM, PyTorch, NVIDIA components and the DeepSeek model
   retain their respective upstream licences. This repository does not
   redistribute model weights.

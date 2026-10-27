@@ -1,0 +1,980 @@
+{
+  "source": {
+    "product": "SparkDash DecodeBench",
+    "version": "1.8.8",
+    "gitCommit": "754f40a7454fed1d26d47d1d68dd7bef930ce5ca"
+  },
+  "startedAt": "2026-10-27T01:32:21.477Z",
+  "target": {
+    "sparkId": "spark-a",
+    "host": "192.168.2.180",
+    "port": 8888,
+    "modelId": "deepseek-v4.1-flash",
+    "checkpoint": "deepseek-ai/DeepSeek-V4.1-Flash-1017",
+    "network": "local A-B-C-D switchless ring",
+    "imageId": "sha256:5c300d07b3b571f11afe93c4ac2685412d683c34a63e48047a552e85ceafac27"
+  },
+  "protocol": {
+    "promptType": "prose",
+    "maxTokens": 256,
+    "temperature": 0,
+    "thinking": false,
+    "warmupJobs": 2,
+    "measuredRepetitions": {
+      "1": 3,
+      "4": 3
+    },
+    "statistic": "arithmetic mean requested by user; median included for reference"
+  },
+  "jobs": [
+    {
+      "label": "warmup-prose-c1-1",
+      "discardedWarmup": true,
+      "job": {
+        "benchId": "78dfc10b-4fe1-45fd-b63c-e44bf59eeca8",
+        "sparkId": "spark-a",
+        "status": "completed",
+        "startedAt": 1793064741481,
+        "completedAt": 1793064745270,
+        "config": {
+          "port": 8888,
+          "modelId": "deepseek-v4.1-flash",
+          "concurrencies": [
+            1
+          ],
+          "maxTokens": 256,
+          "promptType": "prose",
+          "host": "192.168.2.180",
+          "tls": false
+        },
+        "progress": {
+          "currentConcurrency": null,
+          "completedLevels": 1,
+          "totalLevels": 1,
+          "message": "Done"
+        },
+        "results": [
+          {
+            "concurrency": 1,
+            "streamsOk": 1,
+            "streamsFailed": 0,
+            "meanDecodeTps": 85.71,
+            "medianDecodeTps": 85.71,
+            "minDecodeTps": 85.71,
+            "maxDecodeTps": 85.71,
+            "meanTtftMs": 222.27,
+            "medianTtftMs": 222.27,
+            "aggregateDecodeTps": 85.71,
+            "meanPrefillTps": 143.97,
+            "medianPrefillTps": 143.97,
+            "aggregatePrefillTps": 143.97,
+            "totalPrefillTokens": 32,
+            "totalDecodeTokens": 255,
+            "totalCompletionTokens": 256,
+            "durationMs": 3198.47,
+            "error": null,
+            "streams": [
+              {
+                "index": 0,
+                "ttftContentMs": 222.27,
+                "reasoningChunks": 0,
+                "ttftMs": 222.27,
+                "decodeTps": 85.71,
+                "decodeTokens": 255,
+                "completionTokens": 256,
+                "prefillTps": 143.97,
+                "prefillTokens": 32,
+                "totalMs": 3197.7,
+                "error": null
+              }
+            ],
+            "model": "deepseek-v4.1-flash"
+          }
+        ],
+        "error": null,
+        "durationMs": 3789,
+        "owner": null
+      }
+    },
+    {
+      "label": "warmup-prose-c1-2",
+      "discardedWarmup": true,
+      "job": {
+        "benchId": "d762c664-97f5-4a75-8cee-572bba9b4218",
+        "sparkId": "spark-a",
+        "status": "completed",
+        "startedAt": 1793064745502,
+        "completedAt": 1793064749279,
+        "config": {
+          "port": 8888,
+          "modelId": "deepseek-v4.1-flash",
+          "concurrencies": [
+            1
+          ],
+          "maxTokens": 256,
+          "promptType": "prose",
+          "host": "192.168.2.180",
+          "tls": false
+        },
+        "progress": {
+          "currentConcurrency": null,
+          "completedLevels": 1,
+          "totalLevels": 1,
+          "message": "Done"
+        },
+        "results": [
+          {
+            "concurrency": 1,
+            "streamsOk": 1,
+            "streamsFailed": 0,
+            "meanDecodeTps": 85.7,
+            "medianDecodeTps": 85.7,
+            "minDecodeTps": 85.7,
+            "maxDecodeTps": 85.7,
+            "meanTtftMs": 232.31,
+            "medianTtftMs": 232.31,
+            "aggregateDecodeTps": 85.7,
+            "meanPrefillTps": 137.75,
+            "medianPrefillTps": 137.75,
+            "aggregatePrefillTps": 137.75,
+            "totalPrefillTokens": 32,
+            "totalDecodeTokens": 255,
+            "totalCompletionTokens": 256,
+            "durationMs": 3208.39,
+            "error": null,
+            "streams": [
+              {
+                "index": 0,
+                "ttftContentMs": 232.31,
+                "reasoningChunks": 0,
+                "ttftMs": 232.31,
+                "decodeTps": 85.7,
+                "decodeTokens": 255,
+                "completionTokens": 256,
+                "prefillTps": 137.75,
+                "prefillTokens": 32,
+                "totalMs": 3207.97,
+                "error": null
+              }
+            ],
+            "model": "deepseek-v4.1-flash"
+          }
+        ],
+        "error": null,
+        "durationMs": 3777,
+        "owner": null
+      }
+    },
+    {
+      "label": "prose-c1-run-1",
+      "discardedWarmup": false,
+      "job": {
+        "benchId": "59a35976-db71-4890-9812-bd46700b1b8b",
+        "sparkId": "spark-a",
+        "status": "completed",
+        "startedAt": 1793064749506,
+        "completedAt": 1793064753324,
+        "config": {
+          "port": 8888,
+          "modelId": "deepseek-v4.1-flash",
+          "concurrencies": [
+            1
+          ],
+          "maxTokens": 256,
+          "promptType": "prose",
+          "host": "192.168.2.180",
+          "tls": false
+        },
+        "progress": {
+          "currentConcurrency": null,
+          "completedLevels": 1,
+          "totalLevels": 1,
+          "message": "Done"
+        },
+        "results": [
+          {
+            "concurrency": 1,
+            "streamsOk": 1,
+            "streamsFailed": 0,
+            "meanDecodeTps": 84.84,
+            "medianDecodeTps": 84.84,
+            "minDecodeTps": 84.84,
+            "maxDecodeTps": 84.84,
+            "meanTtftMs": 234.57,
+            "medianTtftMs": 234.57,
+            "aggregateDecodeTps": 84.84,
+            "meanPrefillTps": 136.42,
+            "medianPrefillTps": 136.42,
+            "aggregatePrefillTps": 136.42,
+            "totalPrefillTokens": 32,
+            "totalDecodeTokens": 255,
+            "totalCompletionTokens": 256,
+            "durationMs": 3240.84,
+            "error": null,
+            "streams": [
+              {
+                "index": 0,
+                "ttftContentMs": 234.57,
+                "reasoningChunks": 0,
+                "ttftMs": 234.57,
+                "decodeTps": 84.84,
+                "decodeTokens": 255,
+                "completionTokens": 256,
+                "prefillTps": 136.42,
+                "prefillTokens": 32,
+                "totalMs": 3240.43,
+                "error": null
+              }
+            ],
+            "model": "deepseek-v4.1-flash"
+          }
+        ],
+        "error": null,
+        "durationMs": 3818,
+        "owner": null
+      }
+    },
+    {
+      "label": "prose-c1-run-2",
+      "discardedWarmup": false,
+      "job": {
+        "benchId": "c190c61f-2a0e-417b-a9bf-1f972be0a5b4",
+        "sparkId": "spark-a",
+        "status": "completed",
+        "startedAt": 1793064753517,
+        "completedAt": 1793064757281,
+        "config": {
+          "port": 8888,
+          "modelId": "deepseek-v4.1-flash",
+          "concurrencies": [
+            1
+          ],
+          "maxTokens": 256,
+          "promptType": "prose",
+          "host": "192.168.2.180",
+          "tls": false
+        },
+        "progress": {
+          "currentConcurrency": null,
+          "completedLevels": 1,
+          "totalLevels": 1,
+          "message": "Done"
+        },
+        "results": [
+          {
+            "concurrency": 1,
+            "streamsOk": 1,
+            "streamsFailed": 0,
+            "meanDecodeTps": 85.85,
+            "medianDecodeTps": 85.85,
+            "minDecodeTps": 85.85,
+            "maxDecodeTps": 85.85,
+            "meanTtftMs": 220.12,
+            "medianTtftMs": 220.12,
+            "aggregateDecodeTps": 85.85,
+            "meanPrefillTps": 145.37,
+            "medianPrefillTps": 145.37,
+            "aggregatePrefillTps": 145.37,
+            "totalPrefillTokens": 32,
+            "totalDecodeTokens": 255,
+            "totalCompletionTokens": 256,
+            "durationMs": 3190.79,
+            "error": null,
+            "streams": [
+              {
+                "index": 0,
+                "ttftContentMs": 220.12,
+                "reasoningChunks": 0,
+                "ttftMs": 220.12,
+                "decodeTps": 85.85,
+                "decodeTokens": 255,
+                "completionTokens": 256,
+                "prefillTps": 145.37,
+                "prefillTokens": 32,
+                "totalMs": 3190.45,
+                "error": null
+              }
+            ],
+            "model": "deepseek-v4.1-flash"
+          }
+        ],
+        "error": null,
+        "durationMs": 3764,
+        "owner": null
+      }
+    },
+    {
+      "label": "prose-c1-run-3",
+      "discardedWarmup": false,
+      "job": {
+        "benchId": "16f485c0-4fe1-4944-881a-e05cbb5a7831",
+        "sparkId": "spark-a",
+        "status": "completed",
+        "startedAt": 1793064757529,
+        "completedAt": 1793064761346,
+        "config": {
+          "port": 8888,
+          "modelId": "deepseek-v4.1-flash",
+          "concurrencies": [
+            1
+          ],
+          "maxTokens": 256,
+          "promptType": "prose",
+          "host": "192.168.2.180",
+          "tls": false
+        },
+        "progress": {
+          "currentConcurrency": null,
+          "completedLevels": 1,
+          "totalLevels": 1,
+          "message": "Done"
+        },
+        "results": [
+          {
+            "concurrency": 1,
+            "streamsOk": 1,
+            "streamsFailed": 0,
+            "meanDecodeTps": 84.76,
+            "medianDecodeTps": 84.76,
+            "minDecodeTps": 84.76,
+            "maxDecodeTps": 84.76,
+            "meanTtftMs": 228.31,
+            "medianTtftMs": 228.31,
+            "aggregateDecodeTps": 84.76,
+            "meanPrefillTps": 140.16,
+            "medianPrefillTps": 140.16,
+            "aggregatePrefillTps": 140.16,
+            "totalPrefillTokens": 32,
+            "totalDecodeTokens": 255,
+            "totalCompletionTokens": 256,
+            "durationMs": 3237.14,
+            "error": null,
+            "streams": [
+              {
+                "index": 0,
+                "ttftContentMs": 228.31,
+                "reasoningChunks": 0,
+                "ttftMs": 228.31,
+                "decodeTps": 84.76,
+                "decodeTokens": 255,
+                "completionTokens": 256,
+                "prefillTps": 140.16,
+                "prefillTokens": 32,
+                "totalMs": 3236.8,
+                "error": null
+              }
+            ],
+            "model": "deepseek-v4.1-flash"
+          }
+        ],
+        "error": null,
+        "durationMs": 3817,
+        "owner": null
+      }
+    },
+    {
+      "label": "prose-c4-run-1",
+      "discardedWarmup": false,
+      "job": {
+        "benchId": "73f88098-8496-4e79-9e31-7bc690a82e2d",
+        "sparkId": "spark-a",
+        "status": "completed",
+        "startedAt": 1793064761541,
+        "completedAt": 1793064768243,
+        "config": {
+          "port": 8888,
+          "modelId": "deepseek-v4.1-flash",
+          "concurrencies": [
+            4
+          ],
+          "maxTokens": 256,
+          "promptType": "prose",
+          "host": "192.168.2.180",
+          "tls": false
+        },
+        "progress": {
+          "currentConcurrency": null,
+          "completedLevels": 1,
+          "totalLevels": 1,
+          "message": "Done"
+        },
+        "results": [
+          {
+            "concurrency": 4,
+            "streamsOk": 4,
+            "streamsFailed": 0,
+            "meanDecodeTps": 45.1,
+            "medianDecodeTps": 44.73,
+            "minDecodeTps": 43.36,
+            "maxDecodeTps": 47.6,
+            "meanTtftMs": 238.7,
+            "medianTtftMs": 238.75,
+            "aggregateDecodeTps": 173.41,
+            "meanPrefillTps": 163.39,
+            "medianPrefillTps": 163.35,
+            "aggregatePrefillTps": 649.73,
+            "totalPrefillTokens": 156,
+            "totalDecodeTokens": 1020,
+            "totalCompletionTokens": 1024,
+            "durationMs": 6121.66,
+            "error": null,
+            "streams": [
+              {
+                "index": 0,
+                "ttftContentMs": 239.53,
+                "reasoningChunks": 0,
+                "ttftMs": 239.53,
+                "decodeTps": 47.6,
+                "decodeTokens": 255,
+                "completionTokens": 256,
+                "prefillTps": 162.82,
+                "prefillTokens": 39,
+                "totalMs": 5596.56,
+                "error": null
+              },
+              {
+                "index": 1,
+                "ttftContentMs": 238.98,
+                "reasoningChunks": 0,
+                "ttftMs": 238.98,
+                "decodeTps": 43.36,
+                "decodeTokens": 255,
+                "completionTokens": 256,
+                "prefillTps": 163.19,
+                "prefillTokens": 39,
+                "totalMs": 6120.23,
+                "error": null
+              },
+              {
+                "index": 2,
+                "ttftContentMs": 237.78,
+                "reasoningChunks": 0,
+                "ttftMs": 237.78,
+                "decodeTps": 45.35,
+                "decodeTokens": 255,
+                "completionTokens": 256,
+                "prefillTps": 164.02,
+                "prefillTokens": 39,
+                "totalMs": 5860.19,
+                "error": null
+              },
+              {
+                "index": 3,
+                "ttftContentMs": 238.51,
+                "reasoningChunks": 0,
+                "ttftMs": 238.51,
+                "decodeTps": 44.1,
+                "decodeTokens": 255,
+                "completionTokens": 256,
+                "prefillTps": 163.51,
+                "prefillTokens": 39,
+                "totalMs": 6021.53,
+                "error": null
+              }
+            ],
+            "model": "deepseek-v4.1-flash"
+          }
+        ],
+        "error": null,
+        "durationMs": 6702,
+        "owner": null
+      }
+    },
+    {
+      "label": "prose-c4-run-2",
+      "discardedWarmup": false,
+      "job": {
+        "benchId": "748a75e9-4b6e-4209-9fe8-ae059f879bed",
+        "sparkId": "spark-a",
+        "status": "completed",
+        "startedAt": 1793064768557,
+        "completedAt": 1793064775207,
+        "config": {
+          "port": 8888,
+          "modelId": "deepseek-v4.1-flash",
+          "concurrencies": [
+            4
+          ],
+          "maxTokens": 256,
+          "promptType": "prose",
+          "host": "192.168.2.180",
+          "tls": false
+        },
+        "progress": {
+          "currentConcurrency": null,
+          "completedLevels": 1,
+          "totalLevels": 1,
+          "message": "Done"
+        },
+        "results": [
+          {
+            "concurrency": 4,
+            "streamsOk": 4,
+            "streamsFailed": 0,
+            "meanDecodeTps": 45.54,
+            "medianDecodeTps": 45.16,
+            "minDecodeTps": 43.78,
+            "maxDecodeTps": 48.08,
+            "meanTtftMs": 238.23,
+            "medianTtftMs": 238.34,
+            "aggregateDecodeTps": 175.12,
+            "meanPrefillTps": 163.71,
+            "medianPrefillTps": 163.64,
+            "aggregatePrefillTps": 652.19,
+            "totalPrefillTokens": 156,
+            "totalDecodeTokens": 1020,
+            "totalCompletionTokens": 1024,
+            "durationMs": 6063.54,
+            "error": null,
+            "streams": [
+              {
+                "index": 0,
+                "ttftContentMs": 238.56,
+                "reasoningChunks": 0,
+                "ttftMs": 238.56,
+                "decodeTps": 48.08,
+                "decodeTokens": 255,
+                "completionTokens": 256,
+                "prefillTps": 163.48,
+                "prefillTokens": 39,
+                "totalMs": 5542.43,
+                "error": null
+              },
+              {
+                "index": 1,
+                "ttftContentMs": 238.49,
+                "reasoningChunks": 0,
+                "ttftMs": 238.49,
+                "decodeTps": 43.78,
+                "decodeTokens": 255,
+                "completionTokens": 256,
+                "prefillTps": 163.53,
+                "prefillTokens": 39,
+                "totalMs": 6062.74,
+                "error": null
+              },
+              {
+                "index": 2,
+                "ttftContentMs": 237.67,
+                "reasoningChunks": 0,
+                "ttftMs": 237.67,
+                "decodeTps": 45.79,
+                "decodeTokens": 255,
+                "completionTokens": 256,
+                "prefillTps": 164.09,
+                "prefillTokens": 39,
+                "totalMs": 5806.89,
+                "error": null
+              },
+              {
+                "index": 3,
+                "ttftContentMs": 238.18,
+                "reasoningChunks": 0,
+                "ttftMs": 238.18,
+                "decodeTps": 44.52,
+                "decodeTokens": 255,
+                "completionTokens": 256,
+                "prefillTps": 163.74,
+                "prefillTokens": 39,
+                "totalMs": 5966.14,
+                "error": null
+              }
+            ],
+            "model": "deepseek-v4.1-flash"
+          }
+        ],
+        "error": null,
+        "durationMs": 6650,
+        "owner": null
+      }
+    },
+    {
+      "label": "prose-c4-run-3",
+      "discardedWarmup": false,
+      "job": {
+        "benchId": "eb20defa-5a16-40d9-b46e-1a17c963885a",
+        "sparkId": "spark-a",
+        "status": "completed",
+        "startedAt": 1793064775569,
+        "completedAt": 1793064782237,
+        "config": {
+          "port": 8888,
+          "modelId": "deepseek-v4.1-flash",
+          "concurrencies": [
+            4
+          ],
+          "maxTokens": 256,
+          "promptType": "prose",
+          "host": "192.168.2.180",
+          "tls": false
+        },
+        "progress": {
+          "currentConcurrency": null,
+          "completedLevels": 1,
+          "totalLevels": 1,
+          "message": "Done"
+        },
+        "results": [
+          {
+            "concurrency": 4,
+            "streamsOk": 4,
+            "streamsFailed": 0,
+            "meanDecodeTps": 45.57,
+            "medianDecodeTps": 45.19,
+            "minDecodeTps": 43.82,
+            "maxDecodeTps": 48.1,
+            "meanTtftMs": 239.56,
+            "medianTtftMs": 239.61,
+            "aggregateDecodeTps": 175.25,
+            "meanPrefillTps": 162.8,
+            "medianPrefillTps": 162.76,
+            "aggregatePrefillTps": 648.66,
+            "totalPrefillTokens": 156,
+            "totalDecodeTokens": 1020,
+            "totalCompletionTokens": 1024,
+            "durationMs": 6060.39,
+            "error": null,
+            "streams": [
+              {
+                "index": 0,
+                "ttftContentMs": 240.08,
+                "reasoningChunks": 0,
+                "ttftMs": 240.08,
+                "decodeTps": 48.1,
+                "decodeTokens": 255,
+                "completionTokens": 256,
+                "prefillTps": 162.45,
+                "prefillTokens": 39,
+                "totalMs": 5541.8,
+                "error": null
+              },
+              {
+                "index": 1,
+                "ttftContentMs": 239.75,
+                "reasoningChunks": 0,
+                "ttftMs": 239.75,
+                "decodeTps": 43.82,
+                "decodeTokens": 255,
+                "completionTokens": 256,
+                "prefillTps": 162.67,
+                "prefillTokens": 39,
+                "totalMs": 6059.65,
+                "error": null
+              },
+              {
+                "index": 2,
+                "ttftContentMs": 238.94,
+                "reasoningChunks": 0,
+                "ttftMs": 238.94,
+                "decodeTps": 45.82,
+                "decodeTokens": 255,
+                "completionTokens": 256,
+                "prefillTps": 163.22,
+                "prefillTokens": 39,
+                "totalMs": 5804.62,
+                "error": null
+              },
+              {
+                "index": 3,
+                "ttftContentMs": 239.47,
+                "reasoningChunks": 0,
+                "ttftMs": 239.47,
+                "decodeTps": 44.55,
+                "decodeTokens": 255,
+                "completionTokens": 256,
+                "prefillTps": 162.86,
+                "prefillTokens": 39,
+                "totalMs": 5962.99,
+                "error": null
+              }
+            ],
+            "model": "deepseek-v4.1-flash"
+          }
+        ],
+        "error": null,
+        "durationMs": 6668,
+        "owner": null
+      }
+    }
+  ],
+  "summary": {
+    "c1": {
+      "sampleCount": 3,
+      "aggregateMeanDecodeTps": 85.15,
+      "aggregateMedianDecodeTps": 84.84,
+      "perStreamMeanDecodeTps": 85.15,
+      "perStreamMedianDecodeTps": 84.84,
+      "referenceAggregateDecodeTps": 91.3,
+      "meanAttainmentPct": 93.26,
+      "meetsReferenceByMean": false,
+      "samples": [
+        {
+          "aggregateDecodeTps": 84.84,
+          "perStreamMeanDecodeTps": 84.84,
+          "durationMs": 3240.84,
+          "streamsOk": 1,
+          "completionTokens": [
+            256
+          ]
+        },
+        {
+          "aggregateDecodeTps": 85.85,
+          "perStreamMeanDecodeTps": 85.85,
+          "durationMs": 3190.79,
+          "streamsOk": 1,
+          "completionTokens": [
+            256
+          ]
+        },
+        {
+          "aggregateDecodeTps": 84.76,
+          "perStreamMeanDecodeTps": 84.76,
+          "durationMs": 3237.14,
+          "streamsOk": 1,
+          "completionTokens": [
+            256
+          ]
+        }
+      ]
+    },
+    "c4": {
+      "sampleCount": 3,
+      "aggregateMeanDecodeTps": 174.59,
+      "aggregateMedianDecodeTps": 175.12,
+      "perStreamMeanDecodeTps": 45.4,
+      "perStreamMedianDecodeTps": 45.54,
+      "referenceAggregateDecodeTps": 174,
+      "meanAttainmentPct": 100.34,
+      "meetsReferenceByMean": true,
+      "samples": [
+        {
+          "aggregateDecodeTps": 173.41,
+          "perStreamMeanDecodeTps": 45.1,
+          "durationMs": 6121.66,
+          "streamsOk": 4,
+          "completionTokens": [
+            256,
+            256,
+            256,
+            256
+          ]
+        },
+        {
+          "aggregateDecodeTps": 175.12,
+          "perStreamMeanDecodeTps": 45.54,
+          "durationMs": 6063.54,
+          "streamsOk": 4,
+          "completionTokens": [
+            256,
+            256,
+            256,
+            256
+          ]
+        },
+        {
+          "aggregateDecodeTps": 175.25,
+          "perStreamMeanDecodeTps": 45.57,
+          "durationMs": 6060.39,
+          "streamsOk": 4,
+          "completionTokens": [
+            256,
+            256,
+            256,
+            256
+          ]
+        }
+      ]
+    }
+  },
+  "finishedAt": "2026-10-27T01:33:02.583Z",
+  "runner": "SparkDash 1.8.8 source commit 754f40a7454fed1d26d47d1d68dd7bef930ce5ca",
+  "sparkDashAppVersion": "2.70.0 (left running; not replaced)",
+  "pollIntervalOriginalMs": 1000,
+  "pollIntervalDuringMs": 10000,
+  "pollIntervalRestoredMs": 1000,
+  "activeJobsAtStart": [],
+  "measuredAt": "2026-10-27T01:32:20.853457+00:00",
+  "reference": {
+    "prose_c1_aggregate_tps": 91.3,
+    "prose_c4_aggregate_tps": 174.0,
+    "reference_c4_per_stream_tps": 44.8,
+    "upstream_statistic": "c1 median of 3; c4 median of 2",
+    "network": "upstream switched RoCE; local run retains switchless ring"
+  },
+  "runnerExitCode": 0,
+  "collectionTime": "2026-10-27T01:33:02.570562+00:00",
+  "diagnostics": [
+    {
+      "id": "2026-10-27-prose-c1-spec-single",
+      "capturedAt": "2026-10-27T10:15:09+08:00",
+      "countedInBenchmark": false,
+      "purpose": "single-request speculative-decoding diagnostic; not a DecodeBench run",
+      "request": {
+        "prompt": "Write a detailed step-by-step explanation of how a hash map works, including collision handling, resizing, and time complexity. Be thorough.",
+        "concurrency": 1,
+        "maxTokens": 256,
+        "temperature": 0,
+        "thinking": false,
+        "modelId": "deepseek-v4.1-flash"
+      },
+      "response": {
+        "finishReason": "length",
+        "completionTokens": 256,
+        "nonStreamingElapsedSeconds": 3.37,
+        "specTokensDetails": {
+          "spec_verify_ct": 82,
+          "spec_accept_length": 3.1219512195121952,
+          "spec_accept_rate": 0.424390243902439,
+          "spec_num_correct_drafts": 174,
+          "spec_num_proposed_drafts": 410
+        }
+      },
+      "metrics": {
+        "before": {
+          "num_running_reqs": 0,
+          "num_queue_reqs": 0,
+          "spec_verify_calls_total": 15103
+        },
+        "after": {
+          "num_running_reqs": 0,
+          "num_queue_reqs": 0,
+          "spec_verify_calls_total": 15185
+        },
+        "verify_calls_delta": 82
+      },
+      "notes": [
+        "Endpoint wall time includes prefill; it is not decode TPS or per-step latency.",
+        "Server was idle before and after the request; no service restart or configuration change."
+      ]
+    }
+  ],
+  "focusSummary": {
+    "scope": {
+      "promptType": "prose",
+      "concurrencies": [
+        1,
+        4
+      ],
+      "runsPerConcurrency": 3,
+      "aggregation": "arithmetic mean of aggregateDecodeTps",
+      "otherDecodeTypesExcluded": true
+    },
+    "referenceAggregateTps": {
+      "c1": 91.3,
+      "c4": 174.0
+    },
+    "measurements": {
+      "c1": {
+        "runsAggregateTps": [
+          84.84,
+          85.85,
+          84.76
+        ],
+        "arithmeticMeanAggregateTps": 85.15,
+        "differenceTps": -6.15,
+        "referenceRatioPercent": 93.264,
+        "meetsReference": false
+      },
+      "c4": {
+        "runsAggregateTps": [
+          173.41,
+          175.12,
+          175.25
+        ],
+        "arithmeticMeanAggregateTps": 174.593333,
+        "differenceTps": 0.593333,
+        "referenceRatioPercent": 100.341,
+        "meetsReference": true
+      }
+    }
+  },
+  "runtimeAudit": {
+    "capturedAt": "2026-10-27T10:18:51+08:00",
+    "source": "read-only docker inspect and authenticated HTTP probes on configured management IPs",
+    "nodes": [
+      {
+        "host": "spark-a",
+        "rank": 0,
+        "container": "deepseek_v4.1_flash_switchless-r0",
+        "containerStatus": "running",
+        "image": "dsv41-4x-spark:knapcio-main-20261026",
+        "tpSize": 4,
+        "epSize": 1,
+        "nnodes": 4,
+        "modelBindSource": "/opt/models/deepseek-ai/DeepSeek-V4.1-Flash-1017",
+        "modelBindDestination": "/models/DeepSeek-V4.1-Flash",
+        "modelBindReadOnly": true,
+        "NCCL_BUFFSIZE": 8388608,
+        "NCCL_MIN_NCHANNELS": 4,
+        "NCCL_MAX_NCHANNELS": 4,
+        "NCCL_NET": "IB",
+        "NCCL_ALGO": "RING",
+        "SGLANG_ROCE_MAX_SIZE": 262144
+      },
+      {
+        "host": "spark-b",
+        "rank": 1,
+        "container": "deepseek_v4.1_flash_switchless-r1",
+        "containerStatus": "running",
+        "image": "dsv41-4x-spark:knapcio-main-20261026",
+        "tpSize": 4,
+        "epSize": 1,
+        "nnodes": 4,
+        "modelBindSource": "/opt/models/deepseek-ai/DeepSeek-V4.1-Flash-1017",
+        "modelBindDestination": "/models/DeepSeek-V4.1-Flash",
+        "modelBindReadOnly": true,
+        "NCCL_BUFFSIZE": 8388608,
+        "NCCL_MIN_NCHANNELS": 4,
+        "NCCL_MAX_NCHANNELS": 4,
+        "NCCL_NET": "IB",
+        "NCCL_ALGO": "RING",
+        "SGLANG_ROCE_MAX_SIZE": 262144
+      },
+      {
+        "host": "spark-c",
+        "rank": 2,
+        "container": "deepseek_v4.1_flash_switchless-r2",
+        "containerStatus": "running",
+        "image": "dsv41-4x-spark:knapcio-main-20261026",
+        "tpSize": 4,
+        "epSize": 1,
+        "nnodes": 4,
+        "modelBindSource": "/opt/models/deepseek-ai/DeepSeek-V4.1-Flash-1017",
+        "modelBindDestination": "/models/DeepSeek-V4.1-Flash",
+        "modelBindReadOnly": true,
+        "NCCL_BUFFSIZE": 8388608,
+        "NCCL_MIN_NCHANNELS": 4,
+        "NCCL_MAX_NCHANNELS": 4,
+        "NCCL_NET": "IB",
+        "NCCL_ALGO": "RING",
+        "SGLANG_ROCE_MAX_SIZE": 262144
+      },
+      {
+        "host": "spark-d",
+        "rank": 3,
+        "container": "deepseek_v4.1_flash_switchless-r3",
+        "containerStatus": "running",
+        "image": "dsv41-4x-spark:knapcio-main-20261026",
+        "tpSize": 4,
+        "epSize": 1,
+        "nnodes": 4,
+        "modelBindSource": "/opt/models/deepseek-ai/DeepSeek-V4.1-Flash-1017",
+        "modelBindDestination": "/models/DeepSeek-V4.1-Flash",
+        "modelBindReadOnly": true,
+        "NCCL_BUFFSIZE": 8388608,
+        "NCCL_MIN_NCHANNELS": 4,
+        "NCCL_MAX_NCHANNELS": 4,
+        "NCCL_NET": "IB",
+        "NCCL_ALGO": "RING",
+        "SGLANG_ROCE_MAX_SIZE": 262144
+      }
+    ],
+    "api": {
+      "healthHttpStatus": 200,
+      "authenticatedModelIds": [
+        "deepseek-v4.1-flash"
+      ]
+    },
+    "configurationChangeOrRestart": false
+  }
+}

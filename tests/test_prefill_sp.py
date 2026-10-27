@@ -238,6 +238,8 @@ class FakeEngram:
 class FakeLayer:
     def __init__(self, group, g, layer_id, engram=None):
         self.layer_id = layer_id
+        self.group = group
+        self.source_kv = {}             # rank -> (x, positions) of write_tail_source_kv
         self.self_attn = FakeAttn(group, g)
         self.mlp = FakeMoE(group, g)
         self.engram = engram
@@ -271,6 +273,13 @@ class FakeLayer:
     def hc_post(self, x, R, post, comb):
         out = post.unsqueeze(-1) * x.float().unsqueeze(1) + (comb.unsqueeze(-1) * R.float().unsqueeze(2)).sum(1)
         return out.to(BF)
+
+    def write_tail_source_kv(self, *, hidden_states, prev_pre, positions, forward_batch):
+        # SGLang #42901: the last KV-source layer writes compressed KV for every prompt row
+        # before the tail. It must see all rows, on the unsharded path.
+        assert sp._ctx.plan is None, "source-KV write inside the sequence-parallel region"
+        x = self._hc_combine(hidden_states, prev_pre)
+        self.source_kv[self.group.rank_in_group] = (x.clone(), positions.clone())
 
     def forward_hc_pre_from_prev(self, positions, hidden_states, input_ids, forward_batch,
                                  input_ids_global, prev_pre, precomputed_attn=None,
@@ -327,9 +336,11 @@ class Backend:
 
 
 class FakeModel:
-    def __init__(self, group, seed, n_layers=6, late=4, vision=False, m_dependent_wkv=False):
+    def __init__(self, group, seed, n_layers=6, late=4, vision=False, m_dependent_wkv=False,
+                 tail_writes=True):
         g = torch.Generator().manual_seed(seed)
         self.pp_group = SimpleNamespace(world_size=1)
+        self.tail_writes_source_kv = tail_writes
         self.hidden_size, self.hc_mult, self.hc_pre_from_prev_sublayer = D, 4, True
         self.start_layer, self.end_layer, self.late_layer_start = 0, n_layers, late
         self.config = SimpleNamespace(model_type="deepseek_v41", vision_n_layers=1 if vision else 0,
@@ -396,6 +407,9 @@ def stock_forward_layers(self, positions, hidden_states, forward_batch, input_id
     saved = None
     for i in range(self.start_layer, self.end_layer):
         if tail is not None and i == self.late_layer_start:
+            if self.tail_writes_source_kv:
+                self.layers[i].write_tail_source_kv(hidden_states=hidden_states, prev_pre=prev_pre,
+                                                    positions=positions, forward_batch=forward_batch)
             saved = backend.enter_late_layer_tail(forward_batch)
             hidden_states, prev_pre, input_ids, input_ids_global = (
                 tail.rows(hidden_states), tail.rows(prev_pre), tail.rows(input_ids),
@@ -427,10 +441,11 @@ FB = SimpleNamespace(forward_mode=SimpleNamespace(is_extend_without_speculative=
 
 
 def run(mode, rows, lens, *, exact=False, late=4, vision=False, rs_order="ring", m_dep=False, seed=1,
-        debug=False):
+        debug=False, tail_writes=True):
     """Every rank's (hidden, pre, aux list) for one forward in `mode` (stock | comm | shard)."""
     group = ThreadGroup(W, rs_order)
-    model = FakeModel(group, seed, late=late, vision=vision, m_dependent_wkv=m_dep)
+    model = FakeModel(group, seed, late=late, vision=vision, m_dependent_wkv=m_dep,
+                      tail_writes=tail_writes)
     tail = Tail(lens) if late is not None else None
     backend = Backend(tail)
     sp._M.clear()
@@ -479,6 +494,18 @@ def same(a, b):
             and all(torch.equal(u, v) for u, v in zip(xa, xb)))
 
 
+def same_source_kv(ma, mb):
+    """Both models wrote the same full-prompt source KV on every rank (or neither wrote any)."""
+    for la, lb in zip(ma.layers, mb.layers):
+        if sorted(la.source_kv) != sorted(lb.source_kv):
+            return False
+        for r in la.source_kv:
+            (xa, pa), (xb, pb) = la.source_kv[r], lb.source_kv[r]
+            if not (torch.equal(xa, xb) and torch.equal(pa, pb)):
+                return False
+    return True
+
+
 def main():
     torch.set_num_threads(1)
     # --- partition -------------------------------------------------------------------------
@@ -525,12 +552,19 @@ def main():
             ("no bounded replay", 4096, [4096], dict(late=None)),
             ("not divisible (stock)", 2050, [2050], dict()),
             ("below MIN_ROWS (stock)", 1020, [1020], dict()),
+            ("tail without KV write", 4096, [1000, 50, 2046, 1000], dict(tail_writes=False)),
         ]
         for name, rows, lens, kw in cases:
-            stock, _, _ = run("stock", rows, lens, **kw)
+            stock, m_st, _ = run("stock", rows, lens, **kw)
             exact, m_ex, g_ex = run("shard", rows, lens, exact=True, **kw)
             fast, m_fast, g_fast = run("shard", rows, lens, **kw)
-            comm, _, g_comm = run("comm", rows, lens, **kw)
+            comm, m_comm, g_comm = run("comm", rows, lens, **kw)
+            late = kw.get("late", 4)
+            writes = late is not None and kw.get("tail_writes", True)
+            assert sorted(m_st.layers[late].source_kv if late is not None else []) == (
+                list(range(W)) if writes else []), (name, "stock source-KV writes")
+            assert same_source_kv(m_ex, m_st), (name, "exact source KV != stock")
+            assert same_source_kv(m_fast, m_comm), (name, "fast source KV != P0")
             comm_same, _, _ = run("comm", rows, lens, rs_order="same", **kw)
             planned = exact[0][3] is not None
             for r in range(W):
@@ -541,7 +575,6 @@ def main():
                 assert not same(fast[0], stock[0]), (name, "the RS order should show")
                 attn = m_fast.layers[0].self_attn
                 assert set(attn.seen_rows) == {rows}, (name, attn.seen_rows)
-                late = kw.get("late", 4)
                 tail_ars = 0 if late is None else 2 * (len(m_fast.layers) - late)   # stock late layers
                 assert g_fast.calls["ar"] == tail_ars == g_comm.calls["ar"], (name, g_fast.calls)
                 eng_shard = m_fast.layers[1].engram.wkv_calls

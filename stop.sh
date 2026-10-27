@@ -1,20 +1,20 @@
 #!/usr/bin/env bash
-# stop.sh — tear down DeepSeek-V4.1-Flash SGLang on all 3 Sparks.
+# stop.sh — tear down DeepSeek-V4.1-Flash SGLang on the configured Spark nodes.
 #
 # Stops:
-#   - deepseek_v4.1_flash_switchless-r0 on spark1 (rank 0 + API :8888)
-#   - deepseek_v4.1_flash_switchless-r1..r3 on workers
+#   - <TARGET_CONTAINER_PREFIX>-r0 on the head (rank 0 + API :8888)
+#   - <TARGET_CONTAINER_PREFIX>-r1..rN on configured workers
 #   - log-tail helper
 #   - leftover sglang.launch_server in those containers
 #
 # Keeps:
 #   - checkpoint on spark1
 #   - overlay image dsv41-3x-spark:local
-#   - shared NFSv4 exporter (vllm-fn-nfs) — Qwen/GLM still use it
+#   - any shared NFSv4 exporter — other engines may still use it
 #   - docker volume dsv41-weights unless you pass --unmount
 #
 # Usage:
-#   ./stop.sh              stop serve on all 3 nodes
+#   ./stop.sh              stop serve on the configured nodes
 #   ./stop.sh --unmount    also drop worker NFS volumes (weights stay on spark1)
 #   ./start.sh stop        same
 #
@@ -49,9 +49,15 @@ fi
 
 _abs() { readlink -f "$1" 2>/dev/null || echo "$1"; }
 
-TARGET_CONTAINER_PREFIX="${TARGET_CONTAINER_PREFIX:-deepseek_v4.1_flash_switchless}"
+TARGET_CONTAINER_PREFIX="${TARGET_CONTAINER_PREFIX:-}"
 container_name_for_rank() { printf '%s-r%s' "$TARGET_CONTAINER_PREFIX" "$1"; }
-HEAD_CTN="$(container_name_for_rank 0)"
+if [[ -n "$TARGET_CONTAINER_PREFIX" ]]; then
+  HEAD_CTN="$(container_name_for_rank 0)"
+  WORKER_CTN="$(container_name_for_rank 1)"
+else
+  HEAD_CTN="${HEAD_CTN:-dsv41-head}"
+  WORKER_CTN="${WORKER_CTN:-dsv41-worker}"
+fi
 PORT="${PORT:-8888}"
 _list() { tr ',' ' ' <<<"$1"; }
 if [[ -n "${WORKER_IPS:-}" ]]; then
@@ -68,10 +74,10 @@ else
     WORKER_HOSTS+=("${!_v:-${WORKER_IPS[$_i]}}")
   done
 fi
-WORKER_USER="${WORKER_USER:-zurih}"
+WORKER_USER="${WORKER_USER-zurih}"
 SSH_IDENTITY="$(_abs "${SSH_IDENTITY:-$HOME/.ssh/id_ed25519}")"
 NFS_VOLUME="${NFS_VOLUME:-dsv41-weights}"
-IMAGE="${IMAGE:-dsv41-4x-spark:local}"
+IMAGE="${IMAGE:-dsv41-3x-spark:local}"
 REMOTE_PY="${REMOTE_PY:-$ROOT/scripts/remote.py}"
 LOG_DIR="${LOG_DIR:-$ROOT/logs}"
 RM_TIMEOUT="${RM_TIMEOUT:-30}"
@@ -108,7 +114,8 @@ _stop_sglang_in() {
   ' 2>/dev/null || true
 }
 
-info "=== stop DeepSeek-V4.1-Flash (3× Spark SGLang) ==="
+node_count=$(( ${#WORKER_HOSTS[@]} + 1 ))
+info "=== stop DeepSeek-V4.1-Flash (${node_count}× Spark SGLang) ==="
 
 if [[ -f "$LOG_DIR/logtail.pid" ]]; then
   kill "$(cat "$LOG_DIR/logtail.pid")" 2>/dev/null || true
@@ -122,8 +129,12 @@ _rm_ctn "$HEAD_CTN"
 for idx in "${!WORKER_HOSTS[@]}"; do
   h="${WORKER_HOSTS[$idx]}"
   rank=$((idx + 1))
-  worker_ctn="$(container_name_for_rank "$rank")"
-  info "worker $WORKER_USER@$h: stop $worker_ctn"
+  if [[ -n "$TARGET_CONTAINER_PREFIX" ]]; then
+    worker_ctn="$(container_name_for_rank "$rank")"
+  else
+    worker_ctn="$WORKER_CTN"
+  fi
+  info "worker ${WORKER_USER:+$WORKER_USER@}$h: stop $worker_ctn"
   if remote_on "$h" "
     if docker ps --format '{{.Names}}' | grep -qx $(printf '%q' "$worker_ctn"); then
       docker exec $(printf '%q' "$worker_ctn") bash -lc '
@@ -132,7 +143,8 @@ for idx in "${!WORKER_HOSTS[@]}"; do
         pkill -KILL -f \"[s]glang.launch_server\" >/dev/null 2>&1 || true
       ' 2>/dev/null || true
     fi
-    timeout ${RM_TIMEOUT} docker rm -f $(printf '%q' "$worker_ctn") >/dev/null 2>&1 || docker rm -f $(printf '%q' "$worker_ctn") >/dev/null 2>&1 || true
+    timeout ${RM_TIMEOUT} docker rm -f $(printf '%q' "$worker_ctn") >/dev/null 2>&1 \
+      || docker rm -f $(printf '%q' "$worker_ctn") >/dev/null 2>&1 || true
     echo STOPPED_$h
   " 2>/dev/null | grep -q "STOPPED_$h"; then
     info "  $h: container gone"
@@ -153,13 +165,25 @@ else
   info "API down on :${PORT}"
 fi
 
-left=$(docker ps --format '{{.Names}}' 2>/dev/null | grep -E "^${TARGET_CONTAINER_PREFIX}-r[0-9]+$" || true)
+left=$(docker ps --format '{{.Names}}' 2>/dev/null | awk -v prefix="${TARGET_CONTAINER_PREFIX}-r" '
+  index($0, prefix) == 1 && substr($0, length(prefix) + 1) ~ /^[0-9]+$/ {
+    print
+  }
+')
 if [[ -n "$left" ]]; then
   warn "still running on head: $left"
 else
-  info "no ${TARGET_CONTAINER_PREFIX}-r* containers on head"
+  info "no ${TARGET_CONTAINER_PREFIX:-dsv41}-r* serving containers on head"
 fi
 
-info "kept: spark1 weights, $IMAGE overlay, vllm-fn-nfs exporter"
+nfs_exporter=$(docker ps --format '{{.Names}}' 2>/dev/null | awk '
+  $0 == "dsv41-nfs" || $0 == "vllm-fn-nfs" || $0 == "glm53-nfs" {
+    if (found == "") found = $0
+  }
+  END { print found }
+')
+kept="kept: head weights, $IMAGE overlay"
+[[ -z "$nfs_exporter" ]] || kept+=", shared NFS exporter ($nfs_exporter)"
+info "$kept"
 [[ "$UNMOUNT" == "1" ]] || info "worker NFS volume $NFS_VOLUME kept (./stop.sh --unmount to drop it)"
 info "start again with: ./start.sh"

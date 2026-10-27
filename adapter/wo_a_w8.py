@@ -21,6 +21,10 @@ DSV41_WO_A_W8_DROP=1: after the twins exist and a dequantized copy was checked b
 bf16 storage of every twinned wo_a is released (16.8 MB per layer: 722 MB per rank incl. the draft,
 which the head node returns to the KV pool); every row count is then served from the twin, prefill
 through a per-call dequantized bf16 buffer, so its numerics are unchanged.
+DSV41_WO_A_INPUT_FP8=1 (adapter/wo_a_input_fp8.py): the routes this adapter serves without calling the
+stock dispatch (DROP's 2-8 rows, MID's 9-192) round the loaded `o` tile in registers as DeepSeek's
+reference rounds o (QX); every call that reaches the stock dispatch was already rounded by that
+adapter's wrapper, so the kernels it reaches (`small`, `small_mx`) run with QX off.
 """
 import os
 
@@ -28,12 +32,15 @@ import torch
 import triton
 import triton.language as tl
 
+from wo_a_input_fp8 import ENABLED as QX
+from wo_a_input_fp8 import qdq_tile
+
 ENABLED = os.environ.get("DSV41_WO_A_W8", "0").strip() not in ("0", "", "off", "false")
 _TWINS = {}          # bf16 weight data_ptr -> (e4m3 [2,1024,4096], exponent uint8 [2,32,128])
 
 
 @triton.jit
-def _wo_a_partial_w8(X, W8, S, P, M: tl.constexpr, SX: tl.constexpr):
+def _wo_a_partial_w8(X, W8, S, P, M: tl.constexpr, SX: tl.constexpr, QX: tl.constexpr = False):
     tile, group, split = tl.program_id(0), tl.program_id(1), tl.program_id(2)
     m = tl.arange(0, 16)
     n = tile * 64 + tl.arange(0, 64)
@@ -44,6 +51,8 @@ def _wo_a_partial_w8(X, W8, S, P, M: tl.constexpr, SX: tl.constexpr):
         x = tl.load(
             X + m[:, None] * SX + group * 4096 + offsets[None, :], m[:, None] < M, 0
         )
+        if QX:  # 128 columns = four whole 32-blocks of the group's 4096
+            x = qdq_tile(x, 16, 128)
         w8 = tl.load(W8 + (group * 1024 + n[None, :]) * 4096 + offsets[:, None])
         e = tl.load(S + (group * 32 + n[None, :] // 32) * 128 + offsets[:, None] // 32)
         w = (w8.to(tl.float32) * tl.exp2(e.to(tl.float32) - 127.0)).to(tl.bfloat16)
@@ -69,10 +78,10 @@ def make_twin(w: torch.Tensor):
     return q.view(g, r, d).contiguous(), (e + 127).to(torch.uint8).contiguous()
 
 
-def _partial_w8(x, twin, m):
+def _partial_w8(x, twin, m, qx=False):
     w8, s = twin
     partial = torch.empty((8, m, 2, 1024), dtype=torch.float32, device=x.device)
-    _wo_a_partial_w8[(16, 2, 8)](x, w8, s, partial, m, x.stride(0), num_warps=4, num_stages=3)
+    _wo_a_partial_w8[(16, 2, 8)](x, w8, s, partial, m, x.stride(0), QX=qx, num_warps=4, num_stages=3)
     return partial
 
 
@@ -84,7 +93,7 @@ _MID_CFG = ((16, (4, 16, 64, 8)), (32, (2, 32, 32, 4)), (64, (1, 64, 32, 4)), (1
 
 @triton.jit
 def _wo_a_mid_kernel(X, W8, S, Y, M, SXM, SPLIT_K: tl.constexpr, BM: tl.constexpr, BN: tl.constexpr,
-                     BK: tl.constexpr):
+                     BK: tl.constexpr, QX: tl.constexpr = False):
     pid_n = tl.program_id(0)
     g = tl.program_id(1)
     pid_mk = tl.program_id(2)
@@ -97,6 +106,8 @@ def _wo_a_mid_kernel(X, W8, S, Y, M, SXM, SPLIT_K: tl.constexpr, BM: tl.constexp
     for k0 in range(pid_k * KC, (pid_k + 1) * KC, BK):
         k = k0 + tl.arange(0, BK)
         x = tl.load(X + m[:, None] * SXM + g * 4096 + k[None, :], m[:, None] < M, 0.0)
+        if QX:  # k0 is a multiple of BK = 128: whole 32-blocks
+            x = qdq_tile(x, BM, BK)
         w8 = tl.load(W8 + g * 1024 * 4096 + n[None, :] * 4096 + k[:, None])
         e = tl.load(S + g * 32 * 128 + (n[None, :] // 32) * 128 + k[:, None] // 32)
         w = (w8.to(tl.float32) * tl.exp2(e.to(tl.float32) - 127.0)).to(tl.bfloat16)
@@ -108,18 +119,19 @@ def _wo_a_mid_kernel(X, W8, S, Y, M, SXM, SPLIT_K: tl.constexpr, BM: tl.constexp
         tl.store(Y + pid_k * M * 2048 + m[:, None] * 2048 + g * 1024 + n[None, :], acc, m[:, None] < M)
 
 
-def wo_a_mid(o, twin):
-    """o [M, 2, 4096] (stride (>=8192, 4096, 1)) bf16, 9 <= M <= 192 -> bf16 [M, 2, 1024]."""
+def wo_a_mid(o, twin, qx=False):
+    """o [M, 2, 4096] (stride (>=8192, 4096, 1)) bf16, 9 <= M <= 192 -> bf16 [M, 2, 1024].
+    qx: round o as DeepSeek's reference does (adapter/wo_a_input_fp8.py) on the loaded tiles."""
     w8, s = twin
     m = o.shape[0]
     sk, bm, bn, warps = next(cfg for lim, cfg in _MID_CFG if m <= lim)
     grid = (1024 // bn, 2, triton.cdiv(m, bm) * sk)
     if sk == 1:
         y = torch.empty((m, 2, 1024), dtype=torch.bfloat16, device=o.device)
-        _wo_a_mid_kernel[grid](o, w8, s, y, m, o.stride(0), 1, bm, bn, 128, num_warps=warps, num_stages=3)
+        _wo_a_mid_kernel[grid](o, w8, s, y, m, o.stride(0), 1, bm, bn, 128, QX=qx, num_warps=warps, num_stages=3)
         return y
     y = torch.empty((sk, m, 2, 1024), dtype=torch.float32, device=o.device)
-    _wo_a_mid_kernel[grid](o, w8, s, y, m, o.stride(0), sk, bm, bn, 128, num_warps=warps, num_stages=3)
+    _wo_a_mid_kernel[grid](o, w8, s, y, m, o.stride(0), sk, bm, bn, 128, QX=qx, num_warps=warps, num_stages=3)
     return y.sum(dim=0).to(torch.bfloat16)
 
 
@@ -181,8 +193,11 @@ def install_mid(dsv4_module):
     """deepseek_v4._apply_wo_a_bf16_matmul: 9..192 rows (verify/draft at c2..c32) from the fp8 twin."""
     if not (ENABLED and (MID or DROP)) or getattr(dsv4_module, "_dsv41_wo_a_mid", False):
         return
-    dsv4_module._dsv41_wo_a_mid = True
     orig = dsv4_module._apply_wo_a_bf16_matmul
+    if QX and not getattr(orig, "_dsv41_wo_a_input_fp8", False):
+        # the routes below that fall through to `orig` must find o rounded there
+        raise RuntimeError("DSV41_WO_A_INPUT_FP8: install adapter/wo_a_input_fp8.py before wo_a_w8's mid/drop wrapper")
+    dsv4_module._dsv41_wo_a_mid = True
 
     swizzled = getattr(dsv4_module, "Mxfp8SwizzledInput", None)
 
@@ -190,14 +205,14 @@ def install_mid(dsv4_module):
         std = (o.dtype == torch.bfloat16 and o.shape[1:] == (2, 4096) and o.stride(2) == 1
                and o.stride(1) == 4096 and o.stride(0) >= 8192)
         if std and 2 <= m <= 8:
-            p = _partial_w8(o, twin, m)
+            p = _partial_w8(o, twin, m, qx=QX)
             if kw.get("fuse_mxfp8_quant", False) and swizzled is not None:
                 return swizzled(*_REFS["quantize_partial"](p))
             result = torch.empty((m, 2, 1024), dtype=o.dtype, device=o.device)
             _REFS["reduce_k"][(triton.cdiv(m * 2048, 256),)](p, result, m * 2048, num_warps=4)
             return result
         if std and 9 <= m <= 192 and kw.get("is_target_verify", False) and not kw.get("is_prefill", False):
-            return wo_a_mid(o, twin)
+            return wo_a_mid(o, twin, qx=QX)
         return orig(o, dequant_into_scratch(twin, o.device), *a, **kw)   # bit-identical bf16 weight
 
     def _apply_wo_a_bf16_matmul(o, wo_a, *a, **kw):
@@ -211,7 +226,7 @@ def install_mid(dsv4_module):
             twin = _TWINS.get(wo_a.data_ptr())
             if (twin is not None and o.dtype == torch.bfloat16 and o.shape[1:] == (2, 4096)
                     and o.stride(2) == 1 and o.stride(1) == 4096 and o.stride(0) >= 8192):
-                return wo_a_mid(o, twin)
+                return wo_a_mid(o, twin, qx=QX)
         return orig(o, wo_a, *a, **kw)
 
     dsv4_module._apply_wo_a_bf16_matmul = _apply_wo_a_bf16_matmul

@@ -26,7 +26,16 @@ def launcher_source():
     source = (ROOT / "start.sh").read_text()
     start = source.index('if [[ "${DSV41_LAUNCHER:-}" == tp4 ]]; then')
     end = source.index('case "$CMD" in')
-    return "set -euo pipefail\n" + source[start:end]
+    # The extracted production fragment begins after start.sh has parsed its
+    # managed .env and converted worker lists into arrays. Model that boundary
+    # in the fixture; do not add silent defaults to production to make a sliced
+    # launcher test pass.
+    fixture = r'''
+DSV41_LAUNCHER=tp4
+read -r -a WORKER_IPS <<< "${WORKER_IPS:-10.0.0.2 10.0.0.3 10.0.0.4}"
+read -r -a WORKER_HOSTS <<< "${WORKER_HOSTS:-worker-b worker-c worker-d}"
+'''
+    return "set -euo pipefail\n" + fixture + source[start:end]
 
 
 BASE_SETTINGS = {
@@ -47,6 +56,8 @@ BASE_SETTINGS = {
     "NCCL_IB_SUBNET_PREFIX_LEN": "30",
     "NCCL_NET": "IB",
     "NCCL_IB_DISABLE": "0",
+    "NCCL_P2P_DISABLE": "1",
+    "NCCL_SHM_DISABLE": "1",
     "IB_HCA": "rocep1s0f0,rocep1s0f1",
     "TARGET_ENGINE_ID": "deepseek_v4.1_flash_switchless",
 }
@@ -74,8 +85,28 @@ B12X_RING_ENV = " ".join((
     "B12X_ROCE_HCA=rocep1s0f0,rocep1s0f1,roceP2p1s0f0,roceP2p1s0f1",
     "B12X_ROCE_GID_INDEX=7",
     "B12X_NEXT_ROCE_GID_INDEX=7",
-    "B12X_ROCE_PEER_HCA_MAPS=0=1/3,2=0/3,3=0/2;0=1/3,2=0/2,3=0/3;0=1/2,1=0/2,3=1/3;0=0/2,1=1/2,2=1/3",
+    "B12X_ROCE_PEER_HCA_MAPS=1=0/2,2=0/3,3=1/3;0=0/2,2=1/3,3=1/2;0=1/2,1=1/3,3=0/2;0=1/3,1=0/3,2=0/2",
 ))
+
+
+def synthetic_b12x_environment(hca_names):
+    hcas = [item for item in hca_names.split(",") if item]
+    if len(hcas) < 2:
+        return ""
+    maps = []
+    for rank in range(4):
+        peers = [f"{peer}=0/1" for peer in range(4) if peer != rank]
+        maps.append(",".join(peers))
+    return " ".join((
+        f"B12X_ROCE_HCA={','.join(hcas)}",
+        "B12X_ROCE_GID_INDEX=7",
+        "B12X_NEXT_ROCE_GID_INDEX=7",
+        f"B12X_ROCE_PEER_HCA_MAPS={';'.join(maps)}",
+    ))
+
+
+SYNTHETIC_B12X_HCAS = "hca0,hca1,hca2,hca3"
+SYNTHETIC_B12X_RING_ENV = synthetic_b12x_environment(SYNTHETIC_B12X_HCAS)
 
 
 def shell(code, directory, settings=None):
@@ -90,8 +121,13 @@ def shell(code, directory, settings=None):
         "HEAD_IP": "10.0.0.1",
         "WORKER_IPS": "10.0.0.2 10.0.0.3 10.0.0.4",
         "WORKER_HOSTS": "spark2 spark3 spark4",
+        "DSV41_LAUNCHER": "tp4",
     })
     env.update(settings or {})
+    if (env.get("DSV41_LAUNCHER") == "tp4"
+            and env.get("NCCL_SWITCHLESS_RING_ONLY") == "1"
+            and "EXTRA_CONTAINER_ENV" not in (settings or {})):
+        env["EXTRA_CONTAINER_ENV"] = synthetic_b12x_environment(env.get("IB_HCA", ""))
     return subprocess.run(
         ["bash", "-c", launcher_source() + "\n" + code],
         env=env, cwd=ROOT, text=True, capture_output=True, timeout=30,
@@ -103,6 +139,7 @@ def nccl_shell(code, settings=None):
     env = dict(os.environ)
     env.update(BASE_SETTINGS)
     env.update(MANAGED_TP4_ENV)
+    env["DSV41_LAUNCHER"] = ""
     env.update(settings or {})
     return subprocess.run(
         ["bash", "-c", 'set -uo pipefail\nsource "$0"\n' + code, str(NCCL_SH)],
@@ -191,24 +228,84 @@ class ManagedB12xPolicyTests(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def run_policy(self, extra_container_env=B12X_RING_ENV, **overrides):
+    def run_policy(self, extra_container_env=None, **overrides):
+        if extra_container_env is None:
+            extra_container_env = SYNTHETIC_B12X_RING_ENV
         settings = {
             **BASE_SETTINGS,
             **MANAGED_TP4_ENV,
+            "DSV41_LAUNCHER": "tp4",
             "NCCL_SWITCHLESS_RING_ONLY": "1",
             "NCCL_IB_GID_INDEX_FORCE": "-1",
             "NCCL_SHA256": "a" * 64,
-            "IB_HCA": "rocep1s0f0,rocep1s0f1,roceP2p1s0f0,roceP2p1s0f1",
+            "IB_HCA": SYNTHETIC_B12X_HCAS,
             "EXTRA_CONTAINER_ENV": extra_container_env,
         }
         settings.update(overrides)
         return shell("validate_tp4_ring_policy", Path(self.tmp.name), settings)
 
+    def test_managed_gid_force_minus_one_does_not_fall_back_to_index_three(self):
+        result = shell(
+            """nccl_validate_config
+              printf 'auto=%s index=%s resolved=%s\\n' \
+              "${NCCL_IB_GID_AUTO:-}" "${NCCL_IB_GID_INDEX:-}" "$(resolved_gid '')" """,
+            Path(self.tmp.name),
+            {
+                **BASE_SETTINGS,
+                **MANAGED_TP4_ENV,
+                "NCCL_SWITCHLESS_RING_ONLY": "1",
+                "NCCL_SHA256": "a" * 64,
+            },
+        )
+        out = check(result)
+        self.assertEqual(out.strip(), "auto=1 index= resolved=auto")
+
+    def test_managed_gid_force_pins_a_nonnegative_index(self):
+        result = shell(
+            """nccl_validate_config
+              printf 'auto=%s index=%s resolved=%s\\n' \
+              "${NCCL_IB_GID_AUTO:-}" "${NCCL_IB_GID_INDEX:-}" "$(resolved_gid '')" """,
+            Path(self.tmp.name),
+            {
+                **BASE_SETTINGS,
+                **MANAGED_TP4_ENV,
+                "NCCL_SWITCHLESS_RING_ONLY": "1",
+                "NCCL_IB_GID_INDEX_FORCE": "7",
+                "NCCL_SHA256": "a" * 64,
+            },
+        )
+        self.assertEqual(check(result).strip(), "auto=0 index=7 resolved=7")
+
+    def test_managed_gid_force_rejects_invalid_and_conflicting_values(self):
+        base = {
+            **BASE_SETTINGS,
+            **MANAGED_TP4_ENV,
+            "NCCL_SWITCHLESS_RING_ONLY": "1",
+            "NCCL_SHA256": "a" * 64,
+        }
+        invalid = shell(
+            "nccl_validate_config",
+            Path(self.tmp.name),
+            {**base, "NCCL_IB_GID_INDEX_FORCE": "-2"},
+        )
+        self.assertNotEqual(invalid.returncode, 0)
+        self.assertIn("NCCL_IB_GID_INDEX_FORCE", invalid.stderr)
+
+        conflict = shell(
+            "nccl_validate_config",
+            Path(self.tmp.name),
+            {**base, "NCCL_IB_GID_INDEX": "3"},
+        )
+        self.assertNotEqual(conflict.returncode, 0)
+        self.assertIn("conflicts with parent-managed", conflict.stderr)
+
     def test_managed_tp4_requires_generated_b12x_ring_values(self):
         result = self.run_policy()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
-        missing = B12X_RING_ENV.replace("B12X_ROCE_PEER_HCA_MAPS=", "UNMANAGED_PEER_MAP=")
+        missing = SYNTHETIC_B12X_RING_ENV.replace(
+            "B12X_ROCE_PEER_HCA_MAPS=", "UNMANAGED_PEER_MAP="
+        )
         result = self.run_policy(extra_container_env=missing)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("B12X_ROCE_PEER_HCA_MAPS", result.stderr)
@@ -222,18 +319,20 @@ class ManagedB12xPolicyTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("B12X HCA order must match", result.stderr)
 
-        mismatch = B12X_RING_ENV.replace("B12X_NEXT_ROCE_GID_INDEX=7", "B12X_NEXT_ROCE_GID_INDEX=3")
+        mismatch = SYNTHETIC_B12X_RING_ENV.replace(
+            "B12X_NEXT_ROCE_GID_INDEX=7", "B12X_NEXT_ROCE_GID_INDEX=3"
+        )
         result = self.run_policy(extra_container_env=mismatch)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("same non-negative config.yaml GID index", result.stderr)
 
     def test_managed_tp4_rejects_duplicate_or_incomplete_rank_maps(self):
-        duplicate = B12X_RING_ENV + " B12X_ROCE_GID_INDEX=7"
+        duplicate = SYNTHETIC_B12X_RING_ENV + " B12X_ROCE_GID_INDEX=7"
         result = self.run_policy(extra_container_env=duplicate)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("exactly one config.yaml-derived B12X_ROCE_GID_INDEX", result.stderr)
 
-        incomplete = B12X_RING_ENV.rsplit(";", 1)[0]
+        incomplete = SYNTHETIC_B12X_RING_ENV.rsplit(";", 1)[0]
         result = self.run_policy(extra_container_env=incomplete)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("four config.yaml-derived rank maps", result.stderr)
@@ -244,6 +343,7 @@ class SwitchOnTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory(dir=ROOT / "tests")
         self.on = dict(BASE_SETTINGS, **MANAGED_TP4_ENV)
         self.on.update({
+            "DSV41_LAUNCHER": "tp4",
             "NCCL_SWITCHLESS_RING_ONLY": "1",
             "NCCL_OVERLAY_PIP": "1",
             "NCCL_HOST_DIR": "/nonexistent",
@@ -349,7 +449,7 @@ class SwitchOnTests(unittest.TestCase):
             NCCL_IB_EXTENDED_IPV4_GIDS="1",
             NCCL_IB_GID_INDEX_FORCE="-1",
         )
-        check(shell("validate_tp4_ring_policy", Path(self.tmp.name), settings))
+        check(shell("nccl_validate_config", Path(self.tmp.name), settings))
 
         for key in (
             "NCCL_NET",
@@ -359,10 +459,11 @@ class SwitchOnTests(unittest.TestCase):
             "NCCL_PIP_SO",
             "NCCL_SKIP_TREE_CONNECT",
             "NCCL_IB_EXTENDED_IPV4_GIDS",
+            "NCCL_IB_GID_INDEX_FORCE",
         ):
             missing = dict(settings)
             missing.pop(key)
-            result = shell("validate_tp4_ring_policy", Path(self.tmp.name), missing)
+            result = shell("nccl_validate_config", Path(self.tmp.name), missing)
             self.assertNotEqual(result.returncode, 0, f"TP4 accepted missing config value {key}")
 
     def test_tp4_ring_policy_rejects_missing_target_transport_map_values(self):
@@ -452,7 +553,13 @@ class SwitchOnTests(unittest.TestCase):
 
 class ValidationTests(unittest.TestCase):
     def run_validation(self, settings):
-        return nccl_shell("nccl_validate_config", dict(BASE_SETTINGS, **settings))
+        validation_settings = dict(
+            BASE_SETTINGS,
+            NCCL_SHA256="a" * 64,
+            EXTRA_CONTAINER_ENV=synthetic_b12x_environment(BASE_SETTINGS["IB_HCA"]),
+        )
+        validation_settings.update(settings)
+        return nccl_shell("nccl_validate_config", validation_settings)
 
     def test_accepts_ep_from_one_to_tp(self):
         for ep in ("1", "2", "4"):
@@ -476,7 +583,7 @@ class ValidationTests(unittest.TestCase):
                     settings = dict(BASE_SETTINGS)
                     settings.update(MANAGED_TP4_ENV)
                     settings.update(NCCL_SWITCHLESS_RING_ONLY="1", **{name: ""})
-                    result = shell("true", Path(directory), settings)
+                    result = shell("nccl_validate_config", Path(directory), settings)
                     self.assertNotEqual(result.returncode, 0)
                     self.assertIn(name, result.stderr)
 
@@ -537,6 +644,9 @@ class GidIndexTests(unittest.TestCase):
 
     IPV4 = "0000:0000:0000:0000:0000:ffff:c0a8:32a8"
     IPV6 = "fe80:0000:0000:0000:0000:0000:0000:0001"
+    OTHER_IPV4 = "0000:0000:0000:0000:0000:ffff:c0a8:32a9"
+    # the dotted address IPV4 maps, as the launcher would detect it
+    ADDRESS = ".".join(str(b) for b in bytes.fromhex(IPV4[-9:].replace(":", "")))
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(dir=ROOT / "tests")
@@ -570,6 +680,94 @@ class GidIndexTests(unittest.TestCase):
         out = check(nccl_shell(f'ring_gid_index {sysfs}',
                                {"NCCL_IB_GID_INDEX": "5", "IB_HCA": "rocep1s0f0"}))
         self.assertEqual(out.strip(), "5")
+
+    def test_auto_accepts_a_different_index_per_port(self):
+        """NCCL_IB_GID_AUTO=1 and no detected index: nothing is pinned, NCCL picks one per device."""
+        sysfs = self.build(Path(self.tmp.name),
+                           {"rocep1s0f0": {"0": self.IPV6, "3": self.IPV4},
+                            "rocep1s0f1": {"3": self.IPV6, "5": self.OTHER_IPV4}})
+        out = check(nccl_shell(f'ring_gid_index {sysfs}', {"NCCL_IB_GID_AUTO": "1"}))
+        self.assertEqual(out.strip(), "auto")
+
+    def test_auto_validates_a_detected_index_on_every_port(self):
+        """resolved_gid pins a detected index even with AUTO=1, so the preflight checks that index."""
+        sysfs = self.build(Path(self.tmp.name),
+                           {"rocep1s0f0": {"0": self.IPV6, "3": self.IPV4},
+                            "rocep1s0f1": {"3": self.IPV6, "5": self.OTHER_IPV4}})
+        result = nccl_shell(f'ring_gid_index {sysfs} {self.ADDRESS}', {"NCCL_IB_GID_AUTO": "1"})
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("no common IPv4 RoCE v2 GID", result.stderr)
+
+    def test_auto_detection_skips_port_qualified_entries(self):
+        """The launcher detects on port 1 of plain names only, so a:2,b:2 pins nothing."""
+        directory = Path(self.tmp.name)
+        for hca, table in {"a": {"3": self.IPV4}, "b": {"3": self.IPV6, "5": self.OTHER_IPV4}}.items():
+            base = directory / hca / "ports" / "2"
+            (base / "gid_attrs" / "types").mkdir(parents=True)
+            (base / "gids").mkdir()
+            (base / "state").write_text("4: ACTIVE\n")
+            for index, gid in table.items():
+                (base / "gids" / index).write_text(gid + "\n")
+                (base / "gid_attrs" / "types" / index).write_text("RoCE v2\n")
+        out = check(nccl_shell(f'ring_gid_index {directory} {self.ADDRESS}',
+                               {"NCCL_IB_GID_AUTO": "1", "IB_HCA": "a:2,b:2"}))
+        self.assertEqual(out.strip(), "auto")
+
+    def test_auto_detection_reads_ib_hca_as_the_launcher_does(self):
+        """The launcher does not strip a leading '=', so '=a,b' detects nothing on a."""
+        sysfs = self.build(Path(self.tmp.name),
+                           {"a": {"0": self.IPV6, "3": self.IPV4},
+                            "b": {"3": self.IPV6, "5": self.OTHER_IPV4}})
+        out = check(nccl_shell(f'ring_gid_index {sysfs} {self.ADDRESS}',
+                               {"NCCL_IB_GID_AUTO": "1", "IB_HCA": "=a,b"}))
+        self.assertEqual(out.strip(), "auto")
+        result = nccl_shell(f'ring_gid_index {sysfs} {self.ADDRESS}',
+                            {"NCCL_IB_GID_AUTO": "1", "IB_HCA": "a,b"})
+        self.assertNotEqual(result.returncode, 0)
+
+    def test_auto_reports_a_detected_index(self):
+        sysfs = self.build(Path(self.tmp.name),
+                           {"rocep1s0f0": {"0": self.IPV6, "3": self.IPV4},
+                            "rocep1s0f1": {"0": self.IPV6, "3": self.OTHER_IPV4}})
+        out = check(nccl_shell(f'ring_gid_index {sysfs} {self.ADDRESS}', {"NCCL_IB_GID_AUTO": "1"}))
+        self.assertEqual(out.strip(), "3")
+
+    def test_auto_still_needs_an_ipv4_gid_on_every_port(self):
+        sysfs = self.build(Path(self.tmp.name),
+                           {"rocep1s0f0": {"3": self.IPV4},
+                            "rocep1s0f1": {"3": self.IPV6,
+                                           "5": "0000:0000:0000:0000:0000:ffff:0000:0000"}})
+        result = nccl_shell(f'ring_gid_index {sysfs}', {"NCCL_IB_GID_AUTO": "1"})
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("rocep1s0f1", result.stderr)
+
+    def test_an_explicit_override_wins_over_auto(self):
+        sysfs = self.build(Path(self.tmp.name),
+                           {"rocep1s0f0": {"3": self.IPV4, "5": self.IPV4}})
+        out = check(nccl_shell(f'ring_gid_index {sysfs}',
+                               {"NCCL_IB_GID_AUTO": "1", "NCCL_IB_GID_INDEX": "5",
+                                "IB_HCA": "rocep1s0f0"}))
+        self.assertEqual(out.strip(), "5")
+
+    def test_worker_payload_carries_auto(self):
+        sysfs = self.build(Path(self.tmp.name),
+                           {"rocep1s0f0": {"3": self.IPV4},
+                            "rocep1s0f1": {"5": self.IPV4}})
+        payload = check(nccl_shell("nccl_worker_settings", {"NCCL_IB_GID_AUTO": "1"}))
+        result = subprocess.run(["bash", "-c", payload + f"\nring_gid_index {sysfs}"],
+                                env={"PATH": os.environ["PATH"]},
+                                text=True, capture_output=True, timeout=20)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), "auto")
+
+    def test_doctor_accepts_a_worker_auto_answer(self):
+        source = (ROOT / "start.sh").read_text()
+        doctor = source[source.index("cmd_doctor()"):]
+        doctor = doctor[:doctor.index("\n}\n")]
+        self.assertIn('[[ "$wgid" =~ ^([0-9]+|auto)$ ]]', doctor)
+        # the preflight learns each host's address, so it validates what serve will pin
+        self.assertIn('nccl_preflight "$HEAD_IP"', doctor)
+        self.assertIn('nccl_preflight $(printf \'%q\' "${WORKER_IPS[$wi]:-}")', doctor)
 
     def test_rejects_an_inactive_port(self):
         sysfs = self.build(Path(self.tmp.name), {"rocep1s0f0": {"3": self.IPV4}})
@@ -757,6 +955,7 @@ class SourceHygieneTests(unittest.TestCase):
                 "IB_HCA": "rocep1s0f0,rocep1s0f1,roceP2p1s0f0,roceP2p1s0f1",
                 "IMAGE": image,
                 "WEIGHTS_MODE": "local",
+                "NFS_SHARE": "0",
                 "WORKER_MODEL_DIR": "/models/worker",
                 "WORKER_DIR": str(directory / "worker"),
                 "EXTRA_CONTAINER_ENV": B12X_RING_ENV,
@@ -974,9 +1173,12 @@ class NfsShareOffTests(unittest.TestCase):
         source = (ROOT / "start.sh").read_text()
         status = source[source.index("cmd_status()") :]
         status = status[:status.index("\n}\n")]
-        worker = status[status.index("for h in"):]
+        worker = status[status.index("for wi in"):]
         self.assertNotIn("$COMMON_MODEL/config.json", worker)
-        self.assertIn("nfs_worker_has_model", worker)
+        self.assertIn('worker_model_has_weights "$h"', worker)
+        weights = source[source.index("worker_model_has_weights()"):]
+        weights = weights[:weights.index("\n}\n")]
+        self.assertIn('nfs_worker_has_model "$host"', weights)
 
     def test_status_prefers_authenticated_api_probe_when_key_exists(self):
         source = (ROOT / "start.sh").read_text()
@@ -1040,7 +1242,7 @@ class DualPciDomainTests(unittest.TestCase):
         argv = check(nccl_shell('a=(); switchless_ring_args a; printf "%s\\n" "${a[@]}"', on))
         envs = check(nccl_shell('switchless_ring_env_string', on))
         for output in (argv, envs):
-            self.assertIn("NCCL_IB_EXTENDED_IPV4_GIDS=1", output)
+            self.assertNotIn("NCCL_IB_EXTENDED_IPV4_GIDS=1", output)
         for name in ("NCCL_IB_PRESERVE_PCI_DOMAIN=1", "NCCL_IB_ROUTE_DIAGNOSTICS=1",
                      "NCCL_IB_QPS_PER_CONNECTION=1"):
             self.assertIn(name.split("=", 1)[0], on["EXTRA_DOCKER_ENV"])

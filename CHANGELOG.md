@@ -3,50 +3,373 @@
 Newest first. Each entry says what changed in the production stack and what was measured; the
 raw results live under `docs/results/`.
 
-## 2026-10-26 (shared ring module ownership)
+## Unreleased
 
-- The path-aware B12X RoCE package, configured-GID helper, provenance, license and derivation inputs
-  now live in the parent Spark repository at `spark/ring/b12x/`, not under this engine target.
-- `Dockerfile.canary-roce` consumes that directory through the `spark-ring` BuildKit context;
-  `start.sh` mounts the module and helper read-only on all four ranks. The managed parent config
-  remains the only source for physical HCA, GID, peer-map and rank values.
-- This is an ownership/build-input change only; no serving container was restarted and no new
-  serving qualification or benchmark result is claimed.
+- `stop.sh`: the shared NFS exporter it keeps (`dsv41-nfs`, or a reused `vllm-fn-nfs`/`glm53-nfs`) is no longer
+  reported as "still running", the `kept:` line names the exporter it found, and the banner counts the head plus the
+  configured workers instead of a fixed 3x. Report only; cleanup unchanged. Tests in `tests/test_stop_nfs_filter.py`;
+  checked live on four Sparks. Credits: SvangenStudios
+  ([#57](https://github.com/knapcio/DeepSeek-V4.1-Flash-4x-DGX-Spark-TP4/pull/57)).
 
-## 2026-09-29 (DeepSeek ring deployment; measured near, below switched README)
+- Ring mesh (`scripts/ring_mesh/plan.py`, `hairpin.sh`): the generated `show | grep -q ... || add` checks
+  read the whole output (`grep ... >/dev/null`), so under `set -o pipefail` a show command that still had output when
+  `grep -q` exited no longer died of SIGPIPE and re-added an existing rule ("Filter already exists", mesh-up aborted).
+  Test `tests/test_ring_mesh_pipefail.py` (stub `tc`/`ip`, output larger than a pipe buffer), now in CI. Credits:
+  joeym82956 ([#54](https://github.com/knapcio/DeepSeek-V4.1-Flash-4x-DGX-Spark-TP4/pull/54)).
 
-- The local Spark config now enables the pinned `cx7_hairpin_diagonal` ring plan for this DeepSeek
-  TP4 target, including all four HCAs, TP-rank peer maps, 256 KiB collectives, and
-  `B12X_ROCE_GID_INDEX=3`. The separate override is required because DeepSeek's NCCL-only
-  `NCCL_IB_GID_INDEX=-1` is still passed to the RoCE proxy otherwise. A per-node orientation fix in
-  `scripts/ring_mesh/plan.py` handles this fleet's same-port-index cabling; source remains local and
-  was synced one-way with `spark/sync_to.sh`.
-- All four ranks are healthy on the read-only local model mount. RoCEnante reports world 4 / GID 3 /
-  262144 bytes; warm-up exercises the mesh routes, `skip_sw` counters show hardware-only forwarding,
-  and the kernel-forward counter stays flat. With flow label 16383 on both sides, a 61,440-byte
-  opposite-rank `ib_write_lat` passes at 10.17-11.86 us. See [`switchless-ring.md`](docs/switchless-ring.md)
-  for the required duplex validation command.
-- SparkDash prose, 256 output tokens, C1/C2/C4, three full rounds aggregate tok/s:
-  `75.87/111.03/146.04`, `79.54/116.03/153.11`, `79.76/115.73/152.65` (all streams completed).
-  Every level is below the switched README values `87.7/120.4/163.6`, with the largest visible gap
-  at C1. Paired qeval runs score `70/75` and `71/75`; the latter is inside the ring recipe's historical
-  71-72/75 range but below the fresh-clone README score 72/75. `json_count` is the additional
-  repeatable miss; this is near-target experimental evidence, not a switched-README pass.
-- A separate authenticated five-repetition 512-token streaming probe with two fixed prose prompts
-  measured C1 medians 59.87 and 58.32 tok/s; this is close to the README's 58.4 tok/s on 45 varied
-  prompts, and supports the documented single-prompt/reduction-order caveat. Five mixed prose/code
-  C4 waves aggregated 128.51 tok/s; that is not comparable to the README's pure-prose C4 row. Raw
-  details are in the result record below.
-- Raw service, RDMA, benchmark IDs and qeval evidence: [`ring-mesh-20260929.txt`](docs/results/ring-mesh-20260929.txt).
+- Engram NVMe keepalive (`adapter/row_store.cpp`, `DSV41_ENGRAM_KEEPALIVE_MS`, default 25, 0 = off).
+  Under Linux APST the GB10's Samsung drive enters a low-power state after ~100 ms without commands
+  and the next read pays ~10 ms to wake it (bursts of 200 random 4 KiB O_DIRECT reads on 96 threads:
+  150 ms gaps -> median per-burst max 9.7 ms; 40-80 ms gaps -> 0.8-0.9 ms). A c16 decode step is
+  ~145 ms and issues its Engram reads in one burst, so every step paid the wake-up: the pool measured
+  2.0-2.4 ms per read at c16 against ~0.5 ms at c1. While lookups arrived in the last 2 s, a
+  background thread now reads one pseudo-random 4 KiB page of the packed shard every 25 ms (own
+  descriptor and buffer; served rows untouched); an idle server still lets the drive sleep. Fleet
+  A/B/A (v2.5 image, production profile, abliterated 1017, three fresh boots): sparkDash c16 prose
+  342.4 / 342.8 vs 323.5 off, code 476.3 / 477.3 vs 456.1; c4 +0.4-1.7 %; c1 unchanged. Rank-0
+  trace at c16: step 149.2 -> 139.7 / 141.7 ms, layer-1 Engram join 10.5 -> 4.0 ms after the hasher.
+  The thread pins the library (no unload under it), uses a fork-excluded buffer, and a failure to
+  start it leaves serving as before. Test: `tests/test_row_store_keepalive.py`. Full release gate
+  on the final code (abliterated, production profile): sparkDash c1 prose / code / structured / json
+  89.0 / 145.2 / 160.1 / 131.4, c16 prose 355.7, code 479.1; speedbench all 87.6 (85.9 before);
+  needles 124k/388k PASS, cold 388K 69.0 s, qeval 71/75 (same split as v2.5), T > 0 scan
+  0/35, KL long/short 0.0075 / 0.0126 PASS, issue #16 soak 1,018 requests in 30 min, 0 failures,
+  no CUDA error on any rank.
 
-## 2026-09-28 (ring planner; research-only path unchanged)
+- Two weights profiles in `.env.tp4.example`: the official `deepseek-ai/DeepSeek-V4.1-Flash-1017`
+  (`1bae0e1`, now the default `HF_REPO`/`HF_REVISION`, `MODEL_DIR` and NFS names) and the
+  abliterated `mrfakename/DeepSeek-V4.1-Flash-1017-abliterated` (`517efab`); the original V4.1
+  release stays as a commented option. Measured on the v2.5 image and production profile, same
+  protocol: official prose / code / structured / json c1 91.0 / 140.3 / 159.7 / 130.5, speedbench
+  all 86.1; abliterated 88.6 / 144.9 / 158.4 / 128.1, 85.9. README now leads with the official
+  checkpoint and lists both.
 
-- `scripts/ring_mesh/plan.py` now derives clockwise/counter-clockwise ports per node from the live
-  point-to-point subnets and verifies both PCIe domains reach the same neighbors. The former global
-  port-direction assumption rejected the current A-B-D-C physical ring, where each cable joins the
-  same port index at both ends. The generated dry-run plan passed sparkring `f16b5f4`; no host rules,
-  markers, NIC parameters, service, or container RoCEnante variables were applied. The planner also
-  writes through `Path.write_text(..., encoding="utf-8")` for the Python 3.9 control host.
+- `DSV41_WO_A_INPUT_FP8` measured on the fleet (v2.5 image, production profile, same boot protocol,
+  flag on vs off): sparkDash prose / code c1 85.4 / 140.3 vs 88.6 / 144.9, speedbench all 85.1 vs
+  85.9; qeval 71/75, T>0 scan 0/35 and the KL panels pass either way; the GPU unit test passes with
+  the hardware and the emulated e4m3 rounding. No quality difference our evals can see, ~3 % slower
+  decode: it stays off by default.
+
+- The active ring remains parent-managed: `common.ring` is the topology source, and the shared
+  `spark/ring/b12x/` package is the sole B12X RoCEnante source. The DeepSeek target consumes it
+  through the `spark-ring` BuildKit context and read-only mounts; no upstream fleet addresses,
+  HCA/GID values, or topology are copied.
+- Both canary Dockerfiles now stage the SGLang source through the existing pinned
+  `scripts/fetch-sglang-canary.sh` pipeline before running their backport verifiers. The previous
+  `fetch_runtime.sh` path supplied only the unpatched upstream tree, so a production image build
+  failed immediately at the #41303 verifier. The RoCEnante local-fetch option now requires the
+  manifest-matched `REF` and generated `PATCHES` marker instead of silently accepting that tree.
+  The pinned arm64 base has 77 layers and the Spark's `overlay2` limit is 128; consolidated the
+  backport verifiers/CPU falsifiers so the RoCEnante final stage is 35 layers (112 total). Offline
+  contracts cover both fetch paths and the layer budget. The production deployment should build
+  once on spark-a and use `scripts/ship_image_ring.sh` for parent-topology-derived adjacent-hop
+  distribution rather than rebuilding on workers.
+- The target profile now aligns the non-fabric 1017 c16 settings in `spark/config.yaml`: 1M
+  context, 16 requests, 0.78/8192 prefill, the 128 SWA tails / prefill-decode interval, prefill
+  bypass, L2 WOA prefetch, and the 25 ms Engram keepalive. The managed ring keeps its parent-derived
+  HCA/GID/peer map and 256 KiB RoCEnante cap; no upstream switched-fabric settings are copied.
+  This is source/config alignment only; local performance acceptance is still pending.
+- Managed image builds now accept ephemeral `SPARK_BUILD_ARGS` and, only when explicitly set,
+  `SPARK_BUILD_NETWORK=host`. The parent forwards these only for `deploy.sh build`; host-network
+  fallback uses Buildx `--allow network.host --network host --load`, requires an already-authorized
+  builder, and does not alter managed env or Docker daemon policy. `deploy.sh build` still leaves
+  the running service untouched. Local contract: `spark/tests/test_deploy_build_action.py`.
+
+## 2026-10-22 v2.5
+
+Production profile = the v2.4 lever set again, now on an image with the issue #16 backport, the
+logprob decode hang fixed and the Linux staging repaired. Image `Dockerfile.canary-roce` at
+`f9a1de4`, checkpoint DeepSeek-V4.1-Flash-1017 (abliterated `517efab`), one fresh boot:
+sparkDash prose / code / structured / json c1 88.6 / 144.9 / 158.4 / 128.1 (conservative fallback
+profile on the same checkpoint: 84.8 / 138.8 / 153.8 / 126.0), speedbench all 85.9 (83.1), cold
+387K prefill 68.2 s (77.0 s); KL panels against the stable 1017 image PASS (0.0062 / 0.0061),
+qeval 71/75, T>0 scan 0/35. The accelerated issue #16 reproducer passed on two cold boots
+(1,445 and 813 requests on 190K-900K cached prefixes, 0 failures, no CUDA error or Xid; see
+`docs/issue-16-swa-crash.md`).
+
+
+- `scripts/fetch-sglang-canary.sh` failed on Linux: GNU patch rejects a hunk whose leading and
+  trailing context differ in length unless it sits at the file's start or end, and the #44751,
+  #45663 accept-output, #45518 and #45726 integration patches had such hunks, so staging stopped at
+  #44751 on a DGX Spark (BSD patch on macOS accepted them, which is where the images were staged).
+  The four patches are regenerated with symmetric context from the staged trees; both GNU and BSD
+  patch now produce byte-identical files, and the pins follow. CI stages the tree on Ubuntu and
+  macOS.
+
+- Backport Divy (divyvasal) and Claude Opus 5.5's open SGLang #44923 (head
+  `6e0355d9`): the sampling info keeps a CPU greedy flag per row, and
+  `filter_batch` recomputes `is_all_greedy` / `is_any_greedy` from the rows
+  that remain. Before, a
+  merge could only clear `is_all_greedy`, so once one sampled request had
+  joined a greedy decode batch the flag stayed false after it finished, and
+  DSpark verify kept taking the eager accept path instead of the folded one
+  (`fold_eligible` requires `sampling_info.is_all_greedy`) until the whole
+  batch drained. Merges build a new list, so `copy_for_forward()` copies are
+  never changed in place; an info built without per-row flags keeps the old
+  behaviour. The flags come from request parameters and the scheduler's keep
+  indices, so every TP rank makes the same decision. Upstream reports outputs
+  unaffected (the stale flag only costs step time); the remaining greedy rows
+  go back to the path an all-greedy batch takes anyway. Not yet measured on
+  GB10; the fleet check is that a greedy stream returns to the folded path
+  after a concurrent sampled request ends.
+- Not ported, reviewed against this pin (details in `docs/upstream-watch.md`):
+  ormandj's SGLang #42861 (exp2-free FP4 indexer key decode) changes only the
+  Hopper Triton scorer, which GB10 never runs here (SM12x decode uses
+  DeepGEMM `fp4_paged_mqa_logits`); ormandj's #42864 (vectorized mHC split-K
+  reduce, 160 decode slices) is gated to SM120 upstream, needs the newer
+  `HcState` model plumbing, and would break the exact-match self-check and
+  source pins of `adapter/hc_fused.py`; omkaark's #45086 (no row-count
+  specialization of the mHC kernels) edits two kernels whose source hashes
+  `adapter/hc_fused.py` pins.
+- **`adapter/wo_a_input_fp8.py`, `DSV41_WO_A_INPUT_FP8=1`, off by default (to be A/B-tested on the
+  fleet).** Numerics parity with DeepSeek's reference: since revision
+  [`4dd75a8b`](https://huggingface.co/deepseek-ai/DeepSeek-V4.1-Flash/commit/4dd75a8b448d95ae8e284d5c5a1e4b8808bd583b) of
+  `inference/model.py` (2026-10-12, also shipped with DeepSeek-V4.1-Flash-1017) the reference rounds the
+  attention output `o` to FP8 and back before the bf16 `wo_a` einsum, in the target attention and the
+  DSpark draft attention: blocks of 32 values along each group's 4096 features, power-of-two (ue8m0)
+  scales, e4m3 round-to-nearest-even. Both checkpoints use 32x32 weight blocks, so the engine
+  dequantizes `wo_a` to bf16 and every serving path (stock GEMV / small-batch / MXFP8-epilogue / bmm /
+  einsum, `wo_a_w8`'s twin kernels, the draft's fast kernel) fed `o` unrounded; the stock
+  `wo_a_bf16_small_batch_mxfp8` quantizes `wo_a`'s output for `wo_b`, not its input. With the flag the
+  bf16 dispatch rounds `o` in place first (one Triton kernel), and `wo_a_w8`'s DROP/MID routes round
+  the loaded tile in registers (their PTX is unchanged with the flag off). Rank-local rounding is the
+  reference's: no block straddles a head, group or TP rank. `tests/test_wo_a_input_fp8.py` checks it
+  bit for bit against a transcription of the reference kernel and an independent e4m3 grid rounding.
+  No speed or quality effect is claimed; nothing is measured on GB10 yet. Credits: DeepSeek (the
+  reference change), 05yuki ([SGLang #45185](https://github.com/sgl-project/sglang/pull/45185), the
+  same step in SGLang, open) and christopherowen
+  ([spark-ds41f](https://github.com/christopherowen/spark-ds41f), which adopted it in its vLLM recipe).
+
+- Drop the SGLang #45251 grouped static-verify indexer backport: it hung every TP rank in decode
+  on a greedy `/generate` with `return_logprob` (the 18,000-token code text of the long KL panel),
+  every time, while chat traffic passed. Bisected on the fleet over the 26 backport steps with
+  thin overlays of the fix image: 24 steps answer in 7 s, adding #45251 hangs, all steps without
+  it answer (prefill SP on, long and short KL panels against stable-1017: continuation KL 0.0067
+  and 0.0073, PASS). It had never been measured on GB10.
+
+- Fix `DSV41_PREFILL_SP=1` on the current canary images. The adapter hash-pins
+  the engine functions it copies or wraps; the #42901 layer-20 tail (PR #24)
+  and #45301 (PR #48) changed two of them, so the adapter refused at import and
+  the head died about 20 s into boot. The prefill-SP layer loop now follows
+  #42901: the last KV-source layer gathers every row and writes full-prompt
+  compressed KV before the tail, as the stock loop does (checked against the
+  stock loop: exact mode identical, fast mode identical to P0). The SP region
+  is now layers 0-19. A new image-build test imports the model with every
+  adapter flag of `.env.tp4.example` on, so a pinned function that drifts fails
+  the build instead of the boot.
+- The canary images point rustup at an unreachable dist server, so the
+  `cargo --version` probe of the image preprocessor fails at once instead of
+  holding a rank before torch distributed init (one rank waited 7 minutes).
+- `stop.sh` keeps the shared `dsv41-nfs` exporter. Removing it left the worker
+  NFS volumes without a server, and the next stop hung on them.
+- The image builds again: two source verifiers followed the #45457 DSV4.1
+  encode wrapper and the #45726 layout order, and the packaging tests' inputs
+  are copied into the image.
+- README: current results (sparkDash and speedbench) of this image on the
+  conservative profile; the v2.4 table moved to `docs/history.md`.
+
+- Backport maocheng23 and Claude Opus 5.5's merged SGLang #43448
+  (`42228038`). When chunked prefill is disabled or unset, V4.1 MHC kernel
+  prewarm now derives its token buckets from `max_prefill_tokens` instead of a
+  non-positive chunk size. This fixes startup/weight-load failure for valid
+  `CHUNKED_PREFILL_SIZE=-1`, `0` and unset configurations without changing the
+  default positive-chunk profile. Extracted tests cover all four cases.
+- Backport JiaShuai0209 and Liangsheng Yin's merged SGLang #40424
+  (`720857de`) to the pinned V4.1 paths. An eager DP-attention extend now
+  slices low-ratio source inputs to the hoisted live-row prefix before request
+  indexing, so padding cannot create uninitialized request ids and a CUDA
+  device assert. Padded idle Engram batches return correctly shaped zero hashes
+  before request-table access instead of failing the extend-mode assertion.
+  Extracted production-statement tests cover padded, unpadded and idle cases.
+- Adapt Liangsheng Yin's merged SGLang #45301 (`117247ea`) to the pinned
+  V4.1 attention class split. TP-padded query storage now grows only before a
+  decoder-tail CUDA graph captures it; smaller row buckets reuse slices of the
+  same allocation, and a shape/dtype expansion after capture fails closed.
+  This prevents recorded graph nodes from retaining a freed buffer address and
+  the reported MMU fault after cache flush. Source and CPU behavior falsifiers
+  cover pointer reuse, capture state, row/head growth refusal and packaging.
+- Adapt Justin Tong's merged SGLang #44751 (`a038a0dc`) to the pinned native
+  V4.1 encoder. Images embedded in tool results are collected after results are
+  sorted into tool-call order, list-valued tool content is preserved, and a
+  tool-result-only user message stays in the current assistant turn instead of
+  dropping its reasoning. The local placeholder sanitizer still works on
+  private copies, so caller-owned request objects remain unchanged. Focused
+  tests cover all four accepted message shapes, image order, reasoning
+  retention/removal, immutability, zero-fuzz application and image packaging.
+- Port three bounded RoCEnante fixes from FujitsuPolycom/sparkring into the
+  active switchless-ring overlay. Kernel timeout state now has a flag separate
+  from the uint32 sequence, so a failure at sequence zero remains visible after
+  wrap; host diagnostics render sequence/epoch values unsigned. Proxy counters
+  sampled from Python are C atomics, and the PTX/poll-budget contracts are
+  documented precisely. CuTe kernel cache versions advance to 3. CPU simulation
+  covers both collectives, both path counts and the uint32 boundary cases; no
+  transport scheduling, model math or claimed TPS changes.
+- Adapt Yangmin Li's second SGLang #45450 commit (`1f8e4f3e`): the static
+  DSpark draft runner now captures its device-only attention-metadata prep in
+  the existing metadata glue graph. The port rebinds `out_cache_loc` to the
+  runner's pointer-stable registry buffer and caches each batch-size extend
+  length on device, eliminating the two stale/freed-pointer hazards that made
+  the older adapter experiment unsafe. It fails closed for ragged verify,
+  request windows, context parallelism, online C128 MTP, TRT-LLM and every
+  backend that does not explicitly opt in. Upstream reports this as a small
+  default-on seam optimization; no local GB10 TPS claim is made before A/B.
+- Adapt hnyls2002's merged SGLang #45586 and #45699 idle-store fixes. An idle
+  forward now returns before reading stale or unset attention metadata: with an
+  encoder-replay request window it activates a cached idle layout of the right
+  row count; otherwise it writes the translated dummy SWA slot. Upstream's
+  original encoder-replay/DSpark repro crashed at 197/200 requests and completed
+  200/200 after the fix. Non-idle routing is unchanged.
+- Vendor alphabetc1's exact merged SGLang #45726 Triton kernel and adapt only
+  its CUDA call site to the pinned request-window layout. Two kernels replace
+  the eager pointwise construction of query indices/lengths/commit masks and
+  history metadata after the existing request-group scans; CPU and HIP keep
+  the reference path. Upstream's isolated GB300 metadata benchmark improved
+  from roughly 0.89 to 0.41 ms per call at 4K and 32K rows. This is not an
+  end-to-end or GB10 performance claim before GPU parity and timing.
+- Adapt hnyls2002's merged SGLang #45579 to the pinned request-window
+  implementation: each prefill layout computes the source row for every SWA
+  history slot once, carries it through graph replay refreshes, and all layers
+  reuse that tensor instead of rebuilding it. The row formula and zero-row
+  fallback are unchanged. Upstream observed this bookkeeping in 1.7-4.8% of
+  scheduler-thread time on GB300 prefill, but did not isolate the end-to-end
+  gain; this remains a source-qualified prefill optimization pending GB10 A/B.
+- Refine #45762 with potoior's SGLang #45804: only the native DeepSeek
+  `dsv4`/`dsv41`/`dsv32` encoders inherit `SGLANG_DEFAULT_THINKING` on the
+  response-parsing side. Jinja-driven models no longer receive that unrelated
+  default, and the Responses API now mirrors Chat. Explicit request toggles
+  remain authoritative in both APIs. The follow-up is applied after #45762 so
+  the exact scope correction is reviewable and both intermediate and final
+  semantics are tested.
+- Backport Yangmin Li's merged SGLang #45630 commit (`741aea0a`): startup
+  autotuning may now select its measured FlashInfer CuTeDSL MXFP8 tactic for
+  block-FP8 linears at decode and verify row counts, instead of forcing the
+  backend heuristic below 4,096 rows. Deterministic inference still pins the
+  heuristic. Upstream measured about 2% shorter V4.1 decode steps at 16-64
+  requests per rank on GB300 and no change at smaller batches; no local GB10
+  or C1 claim is made before an A/B boot.
+- Backport liweizheng's SGLang #45518: clamp FlashInfer's fresh DSpark
+  softmax output in place to the valid `1.0` probability ceiling. FlashInfer
+  can overshoot by roughly 7e-6 on near-one-hot rows; the accept kernel treats
+  such values as invalid and rejects the draft. The zero-fuzz patch preserves
+  the existing allocation path and has source, production-function and image
+  packaging checks. Upstream measured acceptance recovery from 1.75 to 6.08
+  at temperature 0.3; no local GB10 performance claim is made yet.
+- Adapt hantenglong's SGLang #45762 so DeepSeek V4/V4.1 response parsing
+  follows `SGLANG_DEFAULT_THINKING` when a request omits the `thinking`
+  kwarg. This matches the native encoder, keeps an explicit `thinking: false`
+  authoritative, and prevents a default-on reasoning block from leaking into
+  ordinary `content`. Other `enable_thinking` model families remain opt-in.
+- Adapt the width-alignment commit from BJ Wang's SGLang #45794 to the pinned
+  Torch V4.1 prefill indexer. CUDA BF16 score widths of at least 1,024 rows are
+  padded once per request to a multiple of 64, the chunk budget uses that real
+  width, and scores are sliced back to the logical context before any mask or
+  top-k selection. Upstream H200 gains motivate a GB10 canary only; local GPU
+  parity and end-to-end timing remain required.
+- Adapt Shuwen Wang's SGLang #45793 for the pinned V4.1 KV layout: sparse
+  prefill now dequantizes eight cache tokens per Triton program instead of
+  launching one program per token. FP8 and FP4 share a masked page/address
+  mapping, and the FP4 low/high nibbles remain interleaved per output row.
+  The upstream GB300 kernel result (1.5-2.34x) is context only; this canary
+  carries no GB10 or end-to-end claim before a GPU parity/timing gate.
+- Backport 05yuki and Claude Opus 5.5's SGLang #45745: the SM12x-compatible
+  Torch V4.1 prefill indexer now applies ReLU and head weights in place on the
+  fresh einsum result before the unchanged head reduction. This preserves the
+  arithmetic order while removing two score-sized temporary tensors (about
+  2 GiB at the upstream 1-GiB score-chunk cap). The pinned adaptation has a
+  zero-fuzz patch and a fail-closed AST verifier.
+- Backport Yangmin Li's first SGLang #45450 commit (`20189751`): the draft
+  graph now restages temperature/top-k buffers only when its sampler, batch
+  size or source tensor identities change. `SamplingBatchInfo` rebinds those
+  tensors on filter/merge and does not mutate them in place, so steady decode
+  skips the #45663 staging kernel without stale values. A focused harness
+  extracts and executes the staged production method without importing the
+  accelerator stack.
+- Continue the bounded SGLang #45663 port: DSpark's folded accept path now
+  writes `correct_len`, bonus, finalized lengths and output tokens directly
+  into its graph-static buffers. This removes six post-kernel `copy_` launches
+  without changing eager behavior. The two kernel hunks are upstream-exact,
+  the older epilogue adaptation applies with zero fuzz, and source checks fail
+  closed if a copy path returns. GB10 correctness/timing remain a separate
+  promotion gate.
+- Adapt the portable part of SGLang #45663 (Kevin Mi / kevin-mii and Claude
+  Opus 5.5): DSpark sampling parameters now use the exact upstream fused
+  Triton helper instead of separate temperature-clamp and greedy-mask GPU
+  launches. The older sampler supplies the helper's otherwise-unused
+  step-temperature output from a static scratch buffer. The helper is
+  SHA-256-pinned and the integration fails closed on source drift; expected
+  GB10 TPS impact remains unmeasured.
+- Adapt SGLang #45458 (Chen Cheng / ischencheng): DeepSeek V4/V4.1
+  reasoning now ends only on the tokenizer's single `</think>` token when
+  output IDs are available. Literal `</think>` text spelled with ordinary
+  tokens stays inside reasoning; Chat and Responses cover incremental,
+  cumulative and non-streaming output, with text-only fallback preserved.
+- Adapt SGLang #45457 (Chen Cheng / ischencheng) onto the pinned V4.1 tree.
+  Added-token spellings supplied in user/tool data now encode as plain text,
+  while template-written turn, reasoning and DSML tokens keep their control
+  IDs. The exact upstream helper and test suite are SHA-256-pinned; clean
+  prompts retain #41259's parallel tokenizer rather than regressing to serial
+  encode. `SGLANG_ENABLE_DSV41_PLAIN_TEXT_ENCODE=false` is the rollback.
+- Backport SGLang #43549 (nankingjing) onto the pinned Anthropic frontend:
+  native `dsv41` conversations retain mid-conversation system messages in
+  place, so a new turn does not rewrite the leading prompt and destroy radix
+  prefix-cache reuse. Other encoding specs retain the old Jinja-probe policy.
+- Backport SGLang #41259's exact, content-verified parallel prompt encoder and
+  #45410's native DeepSeek V4/V4.1/V3.2 call sites. Long agent-shaped prompts
+  can use the tokenizers/Rayon pool instead of blocking one HTTP thread in a
+  single encode call; unsupported tokenizer pipelines and short prompts retain
+  the original path. Upstream measured identical token IDs and roughly 9x
+  faster tokenization on a 947K-token V4.1 prompt. This is source-qualified,
+  not yet measured end-to-end on this GB10 deployment.
+- Backport b12x `3f8b71d9` (Luke Alonso): when sequential prepared-kernel
+  variants have equal 256-byte-aligned scratch totals, retain the variant with
+  the larger raw requirement. This prevents an undersized arena for affected
+  exact-token-count MXFP8 MoE capacities; the regression test covers both
+  variant orderings. The b12x source pin remains `a7d7d29b`.
+
+## 2026-10-22 issue #16 resolution
+
+- Backported the runtime part of [SGLang #44001](https://github.com/sgl-project/sglang/pull/44001)
+  (Shangming Cai): `--prefill-decode-interval-min-bs N` admits queued prefills without the configured
+  decode-only delay while fewer than `N` requests are running, then restores the interval at/above `N`.
+  Its default is zero, so rebuilt images preserve the existing scheduler. The patch applies with zero fuzz,
+  has source-order and behavior regressions in both canary builds and CI, and remains opt-in pending a GB10
+  multi-user TTFT/prefill-throughput A/B.
+- Added a credited, zero-fuzz adaptation of [SGLang #42901](https://github.com/sgl-project/sglang/pull/42901)
+  for the pinned pre-`HcState` engine. Under decoder bounded replay it writes layer 20's compressed KV for all
+  prompt rows, then limits that layer's otherwise discarded indexer/attention/MoE work to the final 128 rows.
+  The fetch path, image builds and CI fail closed on source-order invariants. Upstream measured 5-10% lower TTFT
+  for 16K-200K cold prompts on GB300; GB10 performance and model-level correctness remain unmeasured, so this is
+  a source-qualified canary change rather than a promoted serving result.
+- Added an Ubuntu/macOS offline CI gate for the launcher, SGLang backport verifier, Engram/SPS guard,
+  per-host remote configuration, forced-tool detector installer, syntax checks and vendored-source identity.
+- Ported MiaAI-Lab's Engram/SPS safety guard (`6eb9a7a`, MiaAI-Lab and Claude Sonnet 5.5): an existing
+  `DSPARK_SPS_TABLE` can no longer silently arm compact ragged verification and crash CUDA-graph capture.
+  `DSPARK_SPS_ALLOW_ENGRAM=1` is the explicit future-engine-fix override. Documented SGLang's opt-in metrics
+  flags so operators know why `/metrics` otherwise returns 404 and how to expose all schedulers' `sglang:*`
+  series (MiaAI-Lab `786859e`, original verification by Zbigniew).
+- Ported Scott Woolsey Biggart and Claude Opus 5.5's Mia PR #58 backport of SGLang #39665: the
+  default image now emits typed `tool_calls` for required and named tool choice instead of returning bare DSML
+  in `message.content`. The installer is content-pinned and fails closed on base-image drift; all three image
+  recipes run the real SGLang/xgrammar grammar-and-parser regression during build.
+- Added Stanislav Bardyuk's NVIDIA/nccl #2393 acquire-fence patch to the recommended AArch64
+  switchless-ring NCCL build. It orders the CTS `nreqs` load after `idx`, preventing a reused FIFO slot's
+  stale count from hanging or truncating the IB send path on weakly ordered CPUs. The previously measured
+  sparkring release binary remains documented as historical reproduction material because it predates the fix.
+- Marked the original v2.4 image as pre-fix after a second fleet reported repeated CUDA Xid 13/43 faults under large
+  prefix-cache hits. Four reports now include two with `DSV41_PREFILL_BYPASS` disabled, so bypass is not treated as
+  the root cause. The v2.1 feature set is the documented fallback while the candidate is soaked.
+- Backported [SGLang #41303](https://github.com/sgl-project/sglang/pull/41303) to the pinned `f80c91a4b` tree. The
+  patch keeps the full SWA window for short decoder bounded-replay extends and holds one window back from ordinary
+  radix-cache matches. It is credited in the patch and README, applies with zero fuzz, and is source-verified both
+  after staging and during image build.
+- PR #18 merged the source fix and closed issue #16. No GPU or fleet action was part of the repository repair;
+  the focused two-boot, 60-90 minute regression procedure remains in
+  [`docs/issue-16-swa-crash.md`](docs/issue-16-swa-crash.md) for deployments rebuilding old v2.4 images.
+- Ported Mia upstream's per-host SSH-user support (`5685a5d`, `dd02792`, colonel-otto): an explicit empty
+  `WORKER_USER` now lets each `WORKER_HOSTS` alias select its own `User` from `~/.ssh/config`; rsync, stop,
+  Engram packing and DSpark table distribution follow the aliases, while an implicit `/home//...` worker path
+  fails closed.
+
 ## 2026-10-12 v2.4
 
 Long context and multi-user behaviour; decode unchanged (same-session A/B within noise). Release gate on the final
@@ -77,6 +400,32 @@ image against the v2.3 settings booted the same morning, raw output:
 - **Gate.** qeval 72/72/72 (reference 72/72/72), KL 0.0045 / 0.0061 (limit 0.035), T > 0 scan 0/35, prefix scan
   PASS, 60-minute c16 soak with 2,285 completions and 0 errors / restarts / OOM / Xid. The new long-context probes
   are `scripts/v24_probe.py` and `scripts/v24_soak.py`.
+
+## 2026-09-29 (DeepSeek ring deployment; measured near, below switched README)
+
+- The local Spark config now enables the pinned `cx7_hairpin_diagonal` ring plan for this DeepSeek
+  TP4 target, including all four HCAs, TP-rank peer maps, 256 KiB collectives, and
+  `B12X_ROCE_GID_INDEX=3`. The separate override is required because DeepSeek's NCCL-only
+  `NCCL_IB_GID_INDEX=-1` is still passed to the RoCE proxy otherwise. A per-node orientation fix in
+  `scripts/ring_mesh/plan.py` handles this fleet's same-port-index cabling; source remains local and
+  was synced one-way with `spark/sync_to.sh`.
+- All four ranks are healthy on the read-only local model mount. RoCEnante reports world 4 / GID 3 /
+  262144 bytes; warm-up exercises the mesh routes, `skip_sw` counters show hardware-only forwarding,
+  and the kernel-forward counter stays flat. With flow label 16383 on both sides, a 61,440-byte
+  opposite-rank `ib_write_lat` passes at 10.17-11.86 us. See [`switchless-ring.md`](docs/switchless-ring.md)
+  for the required duplex validation command.
+- SparkDash prose, 256 output tokens, C1/C2/C4, three full rounds aggregate tok/s:
+  `75.87/111.03/146.04`, `79.54/116.03/153.11`, `79.76/115.73/152.65` (all streams completed).
+  Every level is below the switched README values `87.7/120.4/163.6`, with the largest visible gap
+  at C1. Paired qeval runs score `70/75` and `71/75`; the latter is inside the ring recipe's historical
+  71-72/75 range but below the fresh-clone README score 72/75. `json_count` is the additional
+  repeatable miss; this is near-target experimental evidence, not a switched-README pass.
+- A separate authenticated five-repetition 512-token streaming probe with two fixed prose prompts
+  measured C1 medians 59.87 and 58.32 tok/s; this is close to the README's 58.4 tok/s on 45 varied
+  prompts, and supports the documented single-prompt/reduction-order caveat. Five mixed prose/code
+  C4 waves aggregated 128.51 tok/s; that is not comparable to the README's pure-prose C4 row. Raw
+  details are in the result record below.
+- Raw service, RDMA, benchmark IDs and qeval evidence: [`ring-mesh-20260929.txt`](docs/results/ring-mesh-20260929.txt).
 
 ## 2026-09-29 v2.3
 
@@ -112,6 +461,15 @@ rejects requests. Fresh-clone release gate, raw output: [`docs/results/validatio
   Checked and not applicable on this stack: a host sync before the target launch (draft end to verify start is
   2-3 us), single-CTA fp32 GEMVs (none in the decode trace), large prefill gathers over RoCE (prefill gathers already
   use NCCL).
+
+## 2026-09-28 (ring planner; research-only path unchanged)
+
+- `scripts/ring_mesh/plan.py` now derives clockwise/counter-clockwise ports per node from the live
+  point-to-point subnets and verifies both PCIe domains reach the same neighbors. The former global
+  port-direction assumption rejected the current A-B-D-C physical ring, where each cable joins the
+  same port index at both ends. The generated dry-run plan passed sparkring `f16b5f4`; no host rules,
+  markers, NIC parameters, service, or container RoCEnante variables were applied. The planner also
+  writes through `Path.write_text(..., encoding="utf-8")` for the Python 3.9 control host.
 
 ## 2026-09-25 v2.2
 

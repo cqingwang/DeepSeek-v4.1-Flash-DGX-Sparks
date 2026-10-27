@@ -1,0 +1,15 @@
+diff --git a/python/sglang/srt/models/deepseek_v4.py b/python/sglang/srt/models/deepseek_v4.py
+--- a/python/sglang/srt/models/deepseek_v4.py
++++ b/python/sglang/srt/models/deepseek_v4.py
+@@ -4741,9 +4741,8 @@ class DeepseekV4ForCausalLM(nn.Module):
+             if backend is None or not backend.is_flashinfer_cutedsl():
+                 continue
+             if method.block_fp8_as_mxfp8:
+-                # Tune large row counts; small decode/verify shapes and
+-                # deterministic execution retain their pinned tactic.
+-                method.mxfp8_prefill_autotune_min_tokens = 4096
++                # Deterministic execution keeps its pinned tactic.
++                method.mxfp8_prefill_autotune_min_tokens = 1
+             weight = layer.weight
+             scale = layer.weight_scale_inv_swizzled
+             key = (

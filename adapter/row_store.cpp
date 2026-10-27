@@ -8,14 +8,18 @@
 //   * a miss costs one pread, not two into unrelated 4 KiB pages -- either from
 //     a repacked local shard (weight+scale adjacent, and no NFS hop on a worker)
 //     or, failing that, from the owned scale shard pinned in RAM (8 B/row).
+//   * the drive is kept out of its power-saving states while lookups arrive
+//     (see keepalive below): waking it costs ~10 ms per verify step at c16.
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cerrno>
 #include <condition_variable>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <dlfcn.h>
 #include <fcntl.h>
 #include <mutex>
 #include <sys/mman.h>
@@ -262,6 +266,72 @@ class Pool {
   bool stop_ = false;
 };
 
+// NVMe keepalive. Under APST (Linux default: any power state whose exit latency is below
+// 100 ms) the drive drops to a low-power state after ~100 ms without commands, and the next
+// read pays ~10 ms to wake it. A c16 verify step is ~150 ms long and issues its Engram reads in
+// one burst, so every step's layer-1 lookup paid the wake-up: 200 misses averaged 2.3 ms per
+// read instead of ~0.25 ms (bursts of 200 4 KiB O_DIRECT reads on 96 threads, Spark_01, Samsung
+// MZALC4T0: 150 ms gaps -> median per-burst max 9.7 ms; 40-80 ms gaps or a 20-40 ms keepalive
+// -> 0.7-0.9 ms). One 4 KiB read every DSV41_ENGRAM_KEEPALIVE_MS while lookups arrived in the
+// last 2 s keeps it awake; an idle server still lets the drive sleep. The read goes to a
+// separate descriptor and buffer and never touches the cache or the served rows. Keepalive is
+// advisory: any failure to start it leaves serving exactly as without it.
+std::atomic<int64_t> g_last_lookup{0};
+std::atomic<uint64_t> g_keepalive_reads{0};
+
+int64_t now_ms() {
+  return std::chrono::duration_cast<std::chrono::milliseconds>(
+      std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
+void start_keepalive(const char *path) {
+  static std::once_flag once;
+  std::call_once(once, [path] {
+    const uint64_t period = env_u64("DSV41_ENGRAM_KEEPALIVE_MS", 25);
+    if (!period) return;
+    if (period > 10000) {
+      std::fprintf(stderr, "Engram: DSV41_ENGRAM_KEEPALIVE_MS out of range (1-10000), keepalive off\n");
+      return;
+    }
+    // The thread runs for the life of the process: pin this library so an unload cannot unmap
+    // the code under it.
+    Dl_info self;
+    if (!dladdr(reinterpret_cast<void *>(&start_keepalive), &self) || !self.dli_fname ||
+        !dlopen(self.dli_fname, RTLD_NOW | RTLD_NODELETE | RTLD_NOLOAD))
+      return;
+    const int fd = open(path, O_RDONLY | O_CLOEXEC | O_DIRECT);
+    struct stat statbuf;
+    if (fd < 0 || fstat(fd, &statbuf) || statbuf.st_size < off_t(kPage)) {
+      if (fd >= 0) close(fd);
+      return;
+    }
+    // Direct-I/O target outside fork(): a child never inherits a page a read may be filling.
+    void *page = mmap(nullptr, kPage, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (page == MAP_FAILED || madvise(page, kPage, MADV_DONTFORK)) {
+      if (page != MAP_FAILED) munmap(page, kPage);
+      close(fd);
+      return;
+    }
+    const uint64_t pages = uint64_t(statbuf.st_size) / kPage;
+    try {
+      std::thread([fd, page, pages, period] {
+        uint64_t x = 0x9e3779b97f4a7c15ULL;
+        for (;;) {
+          std::this_thread::sleep_for(std::chrono::milliseconds(int64_t(period)));
+          if (now_ms() - g_last_lookup.load(std::memory_order_relaxed) > 2000) continue;
+          x = x * 6364136223846793005ULL + 1442695040888963407ULL;  // not a page just served
+          if (pread(fd, page, kPage, off_t((x >> 17) % pages * kPage)) == ssize_t(kPage))
+            g_keepalive_reads.fetch_add(1, std::memory_order_relaxed);
+        }
+      }).detach();
+    } catch (...) {  // e.g. EAGAIN under a thread limit: serve without keepalive
+      munmap(page, kPage);
+      close(fd);
+      std::fprintf(stderr, "Engram: could not start the NVMe keepalive thread\n");
+    }
+  });
+}
+
 Pool *pool() {
   static Pool *instance = [] {
     const uint64_t threads = env_u64("DSV41_IO_THREADS", 32);
@@ -406,6 +476,7 @@ extern "C" Store *row_store_open(const char *path, uint64_t rows,
 
 extern "C" void row_store_lookup(void *opaque) {
   auto *work = static_cast<Work *>(opaque);
+  g_last_lookup.store(now_ms(), std::memory_order_relaxed);
   Pool *workers = pool();
   if (!workers || work->count < kSerialBelow) {
     serve(work, 0, work->count);
@@ -413,6 +484,9 @@ extern "C" void row_store_lookup(void *opaque) {
   }
   workers->run(work);
 }
+
+// Successful keepalive reads since process start (tests).
+extern "C" uint64_t row_store_keepalive_reads() { return g_keepalive_reads.load(); }
 
 extern "C" void row_store_stats(Store *s, uint64_t *out) {
   out[0] = s->hits.load(); out[1] = s->misses.load(); out[2] = s->reads.load();
@@ -450,6 +524,7 @@ extern "C" int row_store_attach_packed(Store *s, const char *path, uint64_t laye
       uint64_t(statbuf.st_size) < kPackedHeader + (hi - lo) * kRowBytes)
     fail("packed Engram shard is truncated");
   s->packed_fd = fd;
+  start_keepalive(path);
   return 1;
 }
 

@@ -1,0 +1,81 @@
+diff --git a/python/sglang/srt/layers/attention/deepseek_v4_backend.py b/python/sglang/srt/layers/attention/deepseek_v4_backend.py
+--- a/python/sglang/srt/layers/attention/deepseek_v4_backend.py
++++ b/python/sglang/srt/layers/attention/deepseek_v4_backend.py
+@@ -4458,6 +4458,7 @@ def make_core_attn_metadata(
+             request_layout = window_layout(
+                 req_pool_indices_repeated,
+                 raw_positions,
++                zero_row=self.token_to_kv_pool.request_window.zero_row,
+                 capacity=self.token_to_kv_pool.request_window.capacity,
+                 floor=swa_replay_start,
+                 num_groups=num_groups,
+diff --git a/python/sglang/srt/mem_cache/dsv41_request_window.py b/python/sglang/srt/mem_cache/dsv41_request_window.py
+--- a/python/sglang/srt/mem_cache/dsv41_request_window.py
++++ b/python/sglang/srt/mem_cache/dsv41_request_window.py
+@@ -13,6 +13,9 @@ class WindowLayout(msgspec.Struct, frozen=True):
+     history_pos: torch.Tensor
+     history_loc: torch.Tensor
+     history_valid: torch.Tensor
++    # Window row each history slot copies from (zero_row when invalid); every
++    # layer reads the same rows, so the layout computes them once.
++    history_src: torch.Tensor
+     commit_mask: torch.Tensor
+     size: int
+ 
+@@ -31,6 +34,7 @@ class WindowLayout(msgspec.Struct, frozen=True):
+         self.history_pos.copy_(other.history_pos)
+         self.history_loc.copy_(other.history_loc)
+         self.history_valid.copy_(other.history_valid)
++        self.history_src.copy_(other.history_src)
+         self.commit_mask.copy_(other.commit_mask)
+ 
+ 
+@@ -59,6 +63,7 @@ def window_layout(
+     req,
+     pos,
+     *,
++    zero_row: int,
+     window: int = 128,
+     capacity: int = 256,
+     floor: Optional[torch.Tensor] = None,
+@@ -107,6 +112,9 @@ def window_layout(
+         history_valid &= history_pos >= g_floor.repeat_interleave(window)
+     history_req = g_req.repeat_interleave(window)
+     history_loc = torch.arange(history_rows, device=device)
++    history_src = torch.where(
++        history_valid, history_req * capacity + history_pos % capacity, zero_row
++    )
+ 
+     commit_mask = (group_last - offset) < capacity
+     return WindowLayout(
+@@ -120,6 +128,7 @@ def window_layout(
+         history_pos,
+         history_loc,
+         history_valid,
++        history_src,
+         commit_mask,
+         history_rows + n,
+     )
+@@ -215,13 +224,6 @@ class RequestWindow:
+         self.tags[:, loc] = layout.history_pos
+         self.prepared = None
+ 
+-    def _history_src(self, layout):
+-        return torch.where(
+-            layout.history_valid,
+-            layout.history_req * self.capacity + layout.history_pos % self.capacity,
+-            self.zero_row,
+-        )
+-
+     def buffer(self, layer):
+         # The runner's capture scope includes eager warmups, before CUDA capture
+         # starts. Include the phase in the key so leaving that scope revalidates
+@@ -233,7 +235,7 @@ class RequestWindow:
+             layout = self.layout
+             if layout is None:
+                 raise RuntimeError("request-window metadata was not activated")
+-            src = self._history_src(layout)
++            src = layout.history_src
+             if not in_capture:
+                 valid = layout.history_valid
+                 if not torch.equal(

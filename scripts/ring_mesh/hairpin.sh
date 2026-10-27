@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
-# Apply the driverinit hairpin queue value from common.ring, then wait for every configured port.
-# Reinitializing a function drops its RDMA connections; the service runs this only at boot.
+# Set the mlx5 hairpin queue size (the forwarding buffer of the opposite-node paths) on the four
+# fabric functions, one at a time, and wait for each to come back. Functions already at the value
+# are skipped. hairpin_queue_size is a driverinit parameter: it resets at boot, and applying it
+# re-initialises the function (~4 s), which drops every RDMA connection on it. Never run it with a
+# new value while the engine is up. usage: hairpin.sh [PACKETS]   (default 8192; driver default 1024)
 set -euo pipefail
 
 CONFIG=${SPARK_CONFIG:-/opt/spark/config.yaml}
@@ -28,13 +31,13 @@ while IFS=$'\t' read -r netdev rdma mtu gid_index queue_size; do
   devlink dev reload "$device" action driver_reinit >/dev/null
   for attempt in $(seq 1 30); do
     [[ "$(cat "/sys/class/net/$netdev/operstate" 2>/dev/null || true)" == up ]] \
-      && ip -4 addr show "$netdev" | grep -q inet \
+      && ip -4 addr show "$netdev" | grep inet >/dev/null \
       && [[ "$(cat "/sys/class/net/$netdev/mtu" 2>/dev/null || true)" == "$mtu" ]] \
       && grep -q '4: ACTIVE' "/sys/class/infiniband/$rdma/ports/1/state" 2>/dev/null \
       && [[ "$(cat "/sys/class/infiniband/$rdma/ports/1/gids/$gid_index" 2>/dev/null || true)" != 0000:0000:0000:0000:0000:0000:0000:0000 ]] \
       && break
     sleep 2
   done
-  [[ $attempt -lt 30 ]] || { echo "  $NODE $netdev: did not return after driver re-init" >&2; exit 2; }
+  [[ $attempt -lt 30 ]] || { echo "  $NODE $netdev: did not come back after re-init" >&2; exit 2; }
   echo "  $NODE $netdev: hairpin_queue_size $current -> $queue_size, back after $((attempt * 2)) s"
 done <<< "$PORTS"

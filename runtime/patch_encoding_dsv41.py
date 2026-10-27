@@ -1,121 +1,144 @@
 #!/usr/bin/env python3
 """Sanitize textual image-placeholder tokens instead of rejecting the request.
 
-``encoding_dsv41`` raises ``ValueError`` in two places when its reserved image
-placeholder token appears in message text. Both guards are rewritten to
-sanitize-and-warn, while real image blocks remain unchanged. The patch is
-idempotent and fails closed when the pinned upstream anchors drift.
+`encoding_dsv41` raises `ValueError` in two places when its reserved image placeholder token
+(`IMAGE_PLACEHOLDER`, `<｜deepseek_image｜>` at the pinned revision) appears in a message's
+*text*; it is replaced with the plain text `[image]`:
+
+1. ``_validate_no_image_sp_tokens()`` -- string-form ``content`` / ``reasoning_content``.
+   On the Anthropic endpoint this is the one that fires; the observed failure was HTTP 500
+   on `/v1/messages`, and because the token re-enters the transcript the loop is
+   self-sustaining: every later turn in that conversation fails the same way. Measured on a
+   4x DGX Spark fleet: 111 of 145 Anthropic-protocol requests failed while the literal was
+   present.
+
+2. ``_process_image_blocks()`` -- a ``{"type": "text", ...}`` block, including text nested
+   inside a ``tool_result`` block (the function recurses into those). This is the path a tool
+   that reads a log file containing the token comes back on, and it is reached by block-form
+   content, which `/v1/chat/completions` accepts natively. Rejected with HTTP 400.
+
+Both branches become sanitize-and-warn, so such requests keep serving. The rewrite is in
+place on a ``copy.deepcopy``'d message: the SGLang #44751 adaptation copies context and
+messages before its early validation, while the older layout copied inside
+``process_image_messages``. It therefore cannot leak into the caller's dict or a cache key.
+Real image content blocks are untouched.
+
+Idempotent, per anchor. Exits non-zero if an anchor no longer matches, so a base-image change
+cannot silently drop the fix. Optionally takes the target path as argv[1].
 """
-
-from __future__ import annotations
-
 import pathlib
 import sys
 
-DEFAULT_TARGET = "/sgl-workspace/sglang/python/sglang/srt/entrypoints/openai/encoding_dsv41.py"
+DEFAULT_TARGET = (
+    "/sgl-workspace/sglang/python/sglang/srt/entrypoints/openai/encoding_dsv41.py"
+)
 TAG = "# [encoding_dsv41-placeholder-sanitize]"
+# Per-anchor sentinels. Deliberately not a single file-wide marker: the logger bootstrap
+# below also carries TAG, so a marker test would be satisfied before anchor 1 was applied.
 SENT1 = "sanitizing image placeholder token in message content"
 SENT2 = "sanitizing image placeholder token in a text block"
 RAISE1 = "Message content contains image special token"
 RAISE2 = "Text block contains image placeholder"
 LOGGER_BOOTSTRAP = "logger = logging.getLogger(__name__)  " + TAG + "\n"
 
+# ------------------------------------------------------------------ anchor 1
 OLD1 = """def _validate_no_image_sp_tokens(msg: Dict[str, Any]) -> None:
     \"\"\"Reject user-supplied image placeholder tokens in textual fields.\"\"\"
-    content = msg.get(\"content\")
+    content = msg.get("content")
     if isinstance(content, str) and IMAGE_PLACEHOLDER in content:
         raise ValueError(
-            f\"Message content contains image special token '{IMAGE_PLACEHOLDER}'. \"
-            \"Images should be provided as image content blocks.\"
+            f"Message content contains image special token '{IMAGE_PLACEHOLDER}'. "
+            "Images should be provided as image content blocks."
         )
-    reasoning_content = msg.get(\"reasoning_content\")
+    reasoning_content = msg.get("reasoning_content")
     if isinstance(reasoning_content, str) and IMAGE_PLACEHOLDER in reasoning_content:
         raise ValueError(
-            f\"reasoning_content contains image special token '{IMAGE_PLACEHOLDER}'\"
+            f"reasoning_content contains image special token '{IMAGE_PLACEHOLDER}'"
         )
 """
 
 NEW1 = """def _validate_no_image_sp_tokens(msg: Dict[str, Any]) -> None:
     \"\"\"Sanitize textual image placeholder tokens instead of rejecting the request.
 
-    Raising here turns a replayed placeholder into a self-sustaining request
-    failure. Rewrite it into plain text so the conversation can proceed.
-    # [encoding_dsv41-placeholder-sanitize]
+    Raising here turns any conversation whose text carries the literal placeholder into a
+    hard failure, and because the token then re-enters the transcript, a self-sustaining
+    error loop. # [encoding_dsv41-placeholder-sanitize]
     \"\"\"
-    content = msg.get(\"content\")
+    content = msg.get("content")
     if isinstance(content, str) and IMAGE_PLACEHOLDER in content:
         logger.warning(
-            \"encoding_dsv41: sanitizing image placeholder token in message content \"
-            \"(upstream would raise) # [encoding_dsv41-placeholder-sanitize]\"
+            "encoding_dsv41: sanitizing image placeholder token in message content "
+            "(upstream would raise) # [encoding_dsv41-placeholder-sanitize]"
         )
-        msg[\"content\"] = content.replace(IMAGE_PLACEHOLDER, \"[image]\")
-    reasoning_content = msg.get(\"reasoning_content\")
+        msg["content"] = content.replace(IMAGE_PLACEHOLDER, "[image]")
+    reasoning_content = msg.get("reasoning_content")
     if isinstance(reasoning_content, str) and IMAGE_PLACEHOLDER in reasoning_content:
         logger.warning(
-            \"encoding_dsv41: sanitizing image placeholder token in reasoning_content \"
-            \"(upstream would raise) # [encoding_dsv41-placeholder-sanitize]\"
+            "encoding_dsv41: sanitizing image placeholder token in reasoning_content "
+            "(upstream would raise) # [encoding_dsv41-placeholder-sanitize]"
         )
-        msg[\"reasoning_content\"] = reasoning_content.replace(IMAGE_PLACEHOLDER, \"[image]\")
+        msg["reasoning_content"] = reasoning_content.replace(IMAGE_PLACEHOLDER, "[image]")
 """
 
 
-def ensure_logger(source: str) -> str:
-    """插入模块 logger，保持补丁在不同上游导入布局下可重放。"""
-    if LOGGER_BOOTSTRAP in source:
-        return source
-    if "import logging" not in source:
+def ensure_logger(src: str) -> str:
+    """Insert `import logging` and a module-level logger if the file has none."""
+    if LOGGER_BOOTSTRAP in src:
+        return src
+    if "import logging" not in src:
         anchor = "from typing import Any, Dict, List, Optional, Tuple, Union\n"
-        if source.count(anchor) != 1:
+        if src.count(anchor) != 1:
             raise SystemExit("logger: cannot find the typing import anchor")
-        source = source.replace(anchor, "import logging\n" + anchor)
+        src = src.replace(anchor, "import logging\n" + anchor)
     anchor = "import logging\n"
-    index = source.index(anchor) + len(anchor)
-    lines = source[index:].splitlines(keepends=True)
-    import_count = 0
-    for line in lines:
-        if line.startswith(("import ", "from ")) or not line.strip():
-            import_count += 1
+    idx = src.index(anchor) + len(anchor)
+    lines = src[idx:].splitlines(keepends=True)
+    n = 0
+    for ln in lines:
+        if ln.startswith(("import ", "from ")) or not ln.strip():
+            n += 1
         else:
             break
-    insert_at = index + sum(len(line) for line in lines[:import_count])
-    return source[:insert_at] + "\n" + LOGGER_BOOTSTRAP + source[insert_at:]
+    at = idx + sum(len(x) for x in lines[:n])
+    return src[:at] + "\n" + LOGGER_BOOTSTRAP + src[at:]
 
 
 OLD2 = """                raise ValueError(
-                    f\"Text block contains image placeholder '{IMAGE_PLACEHOLDER}': \"
-                    f\"'{text[:100]}'. Images should be separate content blocks.\"
+                    f"Text block contains image placeholder '{IMAGE_PLACEHOLDER}': "
+                    f"'{text[:100]}'. Images should be separate content blocks."
                 )
 """
 NEW2 = """                logger.warning(
-                    \"encoding_dsv41: sanitizing image placeholder token in a text block \"
-                    \"(upstream would raise) # [encoding_dsv41-placeholder-sanitize]\"
+                    "encoding_dsv41: sanitizing image placeholder token in a text block "
+                    "(upstream would raise) # [encoding_dsv41-placeholder-sanitize]"
                 )
                 block = dict(block)
-                block[\"text\"] = text.replace(IMAGE_PLACEHOLDER, \"[image]\")
+                block["text"] = text.replace(IMAGE_PLACEHOLDER, "[image]")
 """
 
 
-def patch_text_block(source: str) -> tuple[str, bool]:
-    if source.count(OLD2) != 1:
-        return source, False
-    return source.replace(OLD2, NEW2), True
+def patch_text_block(src: str) -> tuple:
+    """Require the complete pinned raise block, including indentation."""
+    if src.count(OLD2) != 1:
+        return src, False
+    return src.replace(OLD2, NEW2), True
 
 
-def verify(source: str) -> list[str]:
-    problems: list[str] = []
-    if source.count(NEW1) != 1 or source.count(NEW2) != 1:
+def verify(src: str) -> list:
+    problems = []
+    if src.count(NEW1) != 1 or src.count(NEW2) != 1:
         problems.append("complete sanitize anchors do not match; re-derive the patch")
-    if RAISE1 in source:
+    if RAISE1 in src:
         problems.append("anchor 1 still raises")
-    if RAISE2 in source:
+    if RAISE2 in src:
         problems.append("anchor 2 still raises")
-    if SENT1 not in source:
+    if SENT1 not in src:
         problems.append("anchor 1 sanitize missing")
-    if SENT2 not in source:
+    if SENT2 not in src:
         problems.append("anchor 2 sanitize missing")
-    if LOGGER_BOOTSTRAP not in source:
+    if LOGGER_BOOTSTRAP not in src:
         problems.append("logger bootstrap missing")
-    if "import logging\n" not in source:
+    if "import logging\n" not in src:
         problems.append("import logging missing")
     return problems
 
@@ -123,34 +146,35 @@ def verify(source: str) -> list[str]:
 def main() -> int:
     target = pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else DEFAULT_TARGET)
     if not target.is_file():
-        print(f"ERROR: target not found: {target} (base image changed?)", file=sys.stderr)
+        print("ERROR: target not found: %s (base image changed?)" % target, file=sys.stderr)
         return 1
-    source = target.read_text()
-    changed: list[str] = []
-    source = ensure_logger(source)
-    if SENT1 not in source:
-        if source.count(OLD1) != 1:
-            print(
-                f"ERROR: expected exactly 1 match for anchor 1, found {source.count(OLD1)} -- re-derive the patch",
-                file=sys.stderr,
-            )
+    src = target.read_text()
+    changed = []
+    src = ensure_logger(src)
+    did1, did2 = SENT1 in src, SENT2 in src
+    if not did1:
+        if src.count(OLD1) != 1:
+            print("ERROR: expected exactly 1 match for anchor 1, found %d -- re-derive the patch"
+                  % src.count(OLD1), file=sys.stderr)
             return 1
-        source = source.replace(OLD1, NEW1)
+        src = src.replace(OLD1, NEW1)
         changed.append("anchor1(string content)")
-    if SENT2 not in source:
-        source, applied = patch_text_block(source)
-        if not applied:
-            print("ERROR: anchor 2 not found -- base image changed, re-derive the patch", file=sys.stderr)
+    if not did2:
+        src, applied2 = patch_text_block(src)
+        if not applied2:
+            print("ERROR: anchor 2 not found -- base image changed, re-derive the patch",
+                  file=sys.stderr)
             return 1
         changed.append("anchor2(text block / tool_result)")
-    problems = verify(source)
+    problems = verify(src)
     if problems:
-        print(f"ERROR: post-patch verification failed: {'; '.join(problems)}", file=sys.stderr)
+        print("ERROR: post-patch verification failed: %s" % "; ".join(problems),
+              file=sys.stderr)
         return 1
-    target.write_text(source)
-    print(f"patched {target}: {', '.join(changed) or 'logger only'}")
+    target.write_text(src)
+    print("patched %s: %s" % (target, ", ".join(changed) or "logger only"))
     return 0
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    sys.exit(main())

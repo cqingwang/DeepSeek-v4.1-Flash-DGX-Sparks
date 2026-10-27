@@ -17,8 +17,9 @@ rows: rank r owns rows [r*M/W, (r+1)*M/W).
                engine keys on the row count is keyed on the FULL chunk row count
                (sp_logical_rows(), used by _hc_combine / hc_post here, by hc_fused and by
                hc_prefill_fused)
-  layer 21   : the tail rows of R and prev_pre are gathered (byte copy) and the late layers
-               run stock
+  layer 20   : (the last KV-source layer, late_layer_start since SGLang #42901) R and
+               prev_pre are gathered (byte copy) for its full-prompt compressed-KV write,
+               then its tail rows and the late layers run stock
   no tail    : R and the last pre are gathered at exit
 
 Modes
@@ -99,18 +100,21 @@ if "compare" in DEBUG:
 DEBUG_CHUNKS = int(os.environ.get("DSV41_PREFILL_SP_DEBUG_CHUNKS", "64"))
 DEBUG_DUMP = os.environ.get("DSV41_PREFILL_SP_DEBUG_DUMP", "").strip()
 
-# Engine sources (sglang dsv4.1 f80c91a4b as in dsv41-4x-spark:ds41-verify-0924d), sha256[:16]
-# of inspect.getsource(inspect.unwrap(obj)). The loop below is a copy of the first; the others
-# are the call sites and kernel gates whose behaviour the exactness argument depends on.
+# Engine sources (sglang dsv4.1 f80c91a4b plus the scripts/fetch-sglang-canary.sh patch train),
+# sha256[:16] of inspect.getsource(inspect.unwrap(obj)). The loop below is a copy of the first;
+# the others are the call sites and kernel gates whose behaviour the exactness argument depends
+# on. Re-pinned for #42901 (the last KV-source layer writes full-prompt compressed KV before the
+# tail) and #45301 (MQALayer.forward takes its zeroed padded-query rows from a shared buffer;
+# wrapped here, not copied). tests/test_adapter_engine_pins.py checks these in the image build.
 _EXPECTED = {
-    "v4.DeepseekV4Model._forward_layers_hc_pre_from_prev": "bc059d80f038e7f8",
+    "v4.DeepseekV4Model._forward_layers_hc_pre_from_prev": "2675ec391cc23f1b",
     "v4.DeepseekV4DecoderLayer.forward_hc_pre_from_prev": "49dc092d369923cf",
     "v4.DeepseekV4DecoderLayer._hc_combine": "da5688eff1cf6fab",
     "v4.DeepseekV4DecoderLayer._hc_mix_stats": "0a6edf4b45cd160b",
     "v4.DeepseekV4DecoderLayer.hc_post": "8adb8062e8e66c31",
     "v4.DeepseekV4DecoderLayer._run_moe_ffn_dp_sync": "065622659105f3fe",
     "v4.DeepseekV4Model.forward": "3ab2a4745377b83b",
-    "v4.MQALayer.forward": "d21dfc6533e96207",
+    "v4.MQALayer.forward": "167b94e235b3eab6",
     "v2.DeepseekV2MoE.forward": "d931dfa4d2acacd8",
     "v2.DeepseekV2MoE.forward_normal": "9da361af16dafbec",
     "engram.Engram.forward": "841b358015e044b8",
@@ -704,6 +708,20 @@ def _sp_forward_layers(self, p, positions, hidden_states, forward_batch, input_i
     try:
         for i in range(self.start_layer, self.end_layer):
             if tail is not None and i == self.late_layer_start:
+                if self.tail_writes_source_kv:
+                    # The last KV-source layer writes compressed KV for the whole prompt
+                    # before the tail, so it needs every row, on the unsharded engine path.
+                    _ctx.plan = None
+                    in_region = False
+                    full_R = _gather_rows(p, R) if p.sharded else R
+                    full_pre = _gather_rows(p, prev_pre) if p.sharded else prev_pre
+                    self.layers[i].write_tail_source_kv(
+                        hidden_states=full_R,
+                        prev_pre=full_pre,
+                        positions=positions,
+                        forward_batch=forward_batch,
+                    )
+                    del full_R, full_pre
                 saved_full = attn_backend.enter_late_layer_tail(forward_batch)
                 _ctx.plan = None
                 in_region = False

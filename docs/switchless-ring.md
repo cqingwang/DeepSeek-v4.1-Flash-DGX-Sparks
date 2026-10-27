@@ -1,6 +1,6 @@
 # Switchless ring: four Sparks, no RoCE switch
 
-> **Workspace boundary:** this document preserves the target's standalone/upstream recipe and uses illustrative `/24` examples below. In the parent Spark workspace, the active topology and all host-specific values come from `spark/config.yaml.common.ring`; the current physical order is A→B→C→D→A. Do not copy the example addresses, HCA/GID indexes, or launcher values into the managed target. `spark/program.py` derives NCCL and B12X maps, and the TP4 launcher requires those generated B12X values.
+> **Workspace boundary:** this document preserves the target's standalone/upstream recipe and uses illustrative `/24` examples below. In the parent Spark workspace, the active topology and all host-specific values come only from `spark/config.yaml.common.ring`; the current physical order is A→B→C→D→A. The shared B12X RoCEnante implementation lives in `spark/ring/b12x/`, while `spark/program.py` derives its runtime maps and the target launcher only verifies/consumes those managed values. Do not copy the example addresses, HCA/GID indexes, or launcher values into the managed target.
 
 `NCCL_SWITCHLESS_RING_ONLY=1` boots this stack on four DGX Sparks cabled as a ring
 (a-b-c-d-a, one DAC per adjacency per rail, no switch in between). It is **off by
@@ -124,7 +124,7 @@ deployment has to bring. The preflight refuses a library without the marker.
 | Marker | `grep -qa SWITCHLESS_RING_ONLY libnccl.so.2.30.7` succeeds |
 | GID | the RoCE v2 GID at `NCCL_IB_GID_INDEX` is populated and identical in index on every rank |
 
-**Route A: sparkring's published runtime.** Release
+**Route A: sparkring's published runtime (historical binary).** Release
 [`native-runtime-sm121-aa8fa11831af`](https://github.com/FujitsuPolycom/sparkring/releases/tag/native-runtime-sm121-aa8fa11831af),
 asset `native-runtime-files-20260908.tar` (sha256
 `aa8fa11831afaa4539e0b74442fd1ea25dd8cf49ad5edb6fd95e7f05fdf5ce86`), which carries
@@ -140,12 +140,30 @@ ln -sf libnccl.so.2.30.7 libnccl.so.2
 grep -qa SWITCHLESS_RING_ONLY libnccl.so.2.30.7 && echo 'marker ok'
 ```
 
-**Route B: build it.** NVIDIA/nccl `v2.30.7-1` (`73cf112295c33aee2b895f329f592f2a9b4b0f97`)
+This prebuilt binary predates the AArch64 CTS acquire-fence fix below. It is
+retained for exact reproduction of the measured ring, but Route B is recommended
+for unattended service on DGX Spark.
+
+**Route B: build it (recommended).** NVIDIA/nccl `v2.30.7-1` (`73cf112295c33aee2b895f329f592f2a9b4b0f97`)
 with sparkring's `nccl-2.30.7-dual-pci-domain.patch`
 ([DUAL_PCI_DOMAIN.md](https://github.com/FujitsuPolycom/sparkring/blob/main/spark_transport/nccl/DUAL_PCI_DOMAIN.md))
-applied **alone**: it already contains the switchless-cycle change, and the two must not
-be layered. Build the aarch64/SM121 target as that document describes and install the
-result as `libnccl.so.2.30.7` plus the `libnccl.so.2` symlink.
+applied **alone** for the switchless-cycle change; do not layer a second ring patch.
+Then apply [`patches/nccl-2393-aarch64-cts-fence.patch`](../patches/nccl-2393-aarch64-cts-fence.patch),
+a credited backport of [NVIDIA/nccl#2393](https://github.com/NVIDIA/nccl/pull/2393):
+
+```bash
+git checkout 73cf112295c33aee2b895f329f592f2a9b4b0f97
+git apply /path/to/this-repo/patches/nccl-2393-aarch64-cts-fence.patch
+```
+
+The sender polls `idx` and then `nreqs` from a CTS FIFO written by RDMA. On
+weakly ordered AArch64 CPUs, the second load can otherwise observe a reused
+slot's stale count and leave the proxy spinning forever. The acquire fence is
+on the successful CTS path and compiles to `dmb ishld` on AArch64. Build the
+aarch64/SM121 target as the sparkring document describes and install the result
+as `libnccl.so.2.30.7` plus the `libnccl.so.2` symlink. The existing launcher
+preflight proves the ring marker, but cannot prove this instruction is present;
+retain the source/build receipt with the installed library.
 
 **Checking it landed.** `doctor` runs the preflight on the head and on every worker before
 any container is replaced; see [Expected logs](#expected-logs) for the lines.
@@ -496,11 +514,31 @@ NCCL_DEBUG_SUBSYS=INIT,ENV,NET    # add NET while validating; drop it afterwards
   (the ring spans the tensor-parallel group). `EP_SIZE` only decides how the MoE
   all-to-all is grouped, so `1 <= EP_SIZE <= TP_SIZE` is accepted and `EP_SIZE=2`
   is a common choice on this fabric.
-* **A wrong GID index is the usual failure.** All ports listed in `IB_HCA` must
-  share one nonzero IPv4-mapped RoCE v2 GID; the preflight finds it or validates
-  your `NCCL_IB_GID_INDEX` override. Management IPs need not appear in the GID table.
+* **A wrong GID index is the usual failure.** By default, all ports listed in
+  `IB_HCA` must share one nonzero IPv4-mapped RoCE v2 GID; the preflight finds it or
+  validates your `NCCL_IB_GID_INDEX` override. With `NCCL_IB_GID_AUTO=1` and no
+  explicit index, a GID matching the host IP is still pinned and validated on every
+  port. If none matches, each port is checked independently and NCCL chooses its
+  GID per device. Management IPs need not appear in the GID table.
 * **Do not also set `NCCL_SWITCHLESS_RING_ONLY=1` with a switched fabric.** The ring
   skips the tree, which is a performance loss when the tree is reachable.
+* **A link-local IPv6 setting can take GID index 3 away from the IPv4 address** (seen on another
+  ring). There, 11 of 16 fabric functions had a link-local `fe80` GID at index 3 instead of the
+  IPv4 one. Those 11 were exactly the ports whose NetworkManager connection had `ipv6.method
+  link-local`; the 5 with `ipv6.method disabled` already had the IPv4 GID at 3. The mesh needs it
+  there (`plan.py` refuses the node, and the fabric document pins `roce_gid_index` 3), and 3 is also
+  the launcher's fallback when no index is detected. Fix each affected fabric connection with the
+  engine down, then reload the driver:
+
+  ```bash
+  nmcli -g ipv6.method con show <connection>     # link-local on the affected ports
+  sudo nmcli con mod <connection> ipv6.method disabled && sudo nmcli con up <connection>
+  sudo modprobe -r mlx5_ib && sudo modprobe mlx5_ib
+  ```
+
+  Then check that `gids/3` on every fabric function ends in `ffff:<ipv4 as hex>` (`inventory.sh`
+  prints it as `gid3`). There, that held on all 16 afterwards and RoCEnante came up with
+  `gid_index=3`. The setting is stored in the connection profile; a reboot was not tested.
 * **A ring is not a non-blocking fabric.** Opposite ranks talk through a transit
   node, so a four-node ring's bisection bandwidth is one link, not two. Without the
   opposite-node paths below, expect the decode numbers under Measured rather than the switched ones.
@@ -530,8 +568,11 @@ ChrisLou-bioinfo and ZackO2o); not reproduced on this fleet, which is switched:
 
 ## RoCEnante on the ring: hardware-forwarded opposite-node paths
 
-**Status: research-only**, as sparkring labels its hardware-forwarded mesh (`plan.py` writes `"status": "research-only"`).
-It is off by default, and nothing in this section changes a switched setup.
+**Historical standalone reference (2026-09-25):** the sparkring planner labels generated
+hardware-forwarding plans `"status": "research-only"`. For the managed Spark deployment, whether
+these paths are configured is controlled only by the parent `spark/config.yaml` and its live
+verification; this historical section is not permission to change host fabric settings or a
+second source of runtime values. Nothing here changes a switched setup.
 
 RoCEnante's one-shot all-reduce and all-gather write every rank's payload straight into every
 peer's buffers, and a four-node ring has no link between opposite nodes, so out of the box a ring
@@ -552,7 +593,7 @@ flat); a marked packet that misses the rule is dropped, never routed in software
 two paths per peer over its four RDMA functions: the neighbours over their own cable, the opposite
 node through each neighbour (one path per PCIe domain). `DSV41_ROCE_RING=1` makes the SG17 overlay
 load `b12x.comm.roce_ring`, sparkring's path-aware RoCEnante (shared source and provenance in
-`spark/ring/b12x/`), instead of `b12x.comm.roce`; unset, nothing changes.
+the parent workspace's `spark/ring/b12x/`), instead of `b12x.comm.roce`; unset, nothing changes.
 `DSV41_L2_PREFETCH` hooks either package. It hooks only these RoCEnante one-shot modules: on a ring
 boot with `SGLANG_ROCE_ALLREDUCE=0` the collectives go through NCCL, the prefetch learns no plan
 (`collectives=0 ... this graph runs without prefetch` on every captured graph) and is inert, with no
@@ -598,8 +639,6 @@ the two before it (the fast loader's boot-to-boot spread).
 
 ### Setup
 
-> **Workspace-managed deployment:** this checkout is managed by the parent Spark repository. Use `spark/config.yaml.common.ring` for the physical fabric and the target engine entry for backend policy; `program.py query-model` and `deploy.sh` generate the launcher environment. The manual `.env.tp4` edits below apply only to an independent standalone clone. In this workspace, do not copy `env.txt` into a managed `.env` by hand.
-
 1. **The ring as above**, with both planes addressed (four RDMA functions per node, MTU 9000, the
    RoCEv2 GID at index 3), and the NIC profile sparkring's hardware forwarding was qualified on:
    `hairpin_num_queues` 4, `flow_steering_mode` `hmfs`, eswitch `legacy`, `hw-tc-offload on` on all
@@ -616,20 +655,20 @@ the two before it (the fast loader's boot-to-boot spread).
    cc -O2 -Wall -Wextra ~/sparkring/spark_transport/fabric/cx7_hairpin_diagonal/native/mlx5_rdma_tx_rewrite_probe.c \
       -o /tmp/mlx5-rdma-tx-rewrite-probe -libverbs -lmlx5 && sudo install -m 755 /tmp/mlx5-rdma-tx-rewrite-probe /opt/dsv41-mesh/bin/
    ```
-3. **The plan**, from the head. In the managed workspace, topology and SSH endpoints are read from the parent Spark config; specify the target whose runtime rank order and B12X contract must be checked:
+3. **The plan**, read-only, from the managed topology and live inventory:
 
    ```bash
-   python3 scripts/ring_mesh/plan.py --sparkring ~/sparkring --target deepseek_v4.1_flash_switchless --out ring-mesh
+   python3 scripts/ring_mesh/plan.py --sparkring ~/sparkring --out ring-mesh
    ```
 
-   `plan.py` reads the configured physical order, both port planes and target settings through
-   `spark/program.py`; live SSH inventory checks the configured interfaces, IPs, HCA, MTU, GID,
-   hairpin and steering state. A mismatch stops planning. The planner does not infer a replacement
-   topology from live addresses. Once inventory matches, it has sparkring build the RoCEnante selection:
-   per node two `/32` routes, two
-   tc rules and two markers. It writes `mesh-up-<host>.sh` / `mesh-down-<host>.sh` and `env.txt`,
-   including a diagnostic `EXTRA_CONTAINER_ENV` string whose B12X peer paths use the physical A→B→C→D ranks and are checked against `query-model` output. NCCL peer-HCA variables are not injected for the current SparkRing build because it selects local ports by peer RoCE GID subnet. `env.txt` is for parity review;
-   the parent deployment remains the only writer of the active managed environment.
+   `plan.py` reads rank order, both fabric planes, addresses, HCA/GID and management SSH targets
+   from the parent `spark/config.yaml` via `spark/program.py ring-topology --json`. It refuses
+   non-reciprocal or non-adjacent configured edges, then compares read-only live inventory with
+   that SSOT before asking sparkring to generate `fabric.json` and per-node
+   `mesh-up-<node>.sh` / `mesh-down-<node>.sh`. It does not infer a new ring from hostnames or
+   subnets, support `--reversed`, or write `env.txt`; NCCL/B12X runtime maps remain parent-managed.
+   Optional positional host arguments are audit-only and must exactly match the parent rank/SSH
+   order.
 4. **Install on every node** with the engine stopped (applying the hairpin size re-initialises each
    fabric function); `$HOST` is that node's name as given to `plan.py`:
 
@@ -641,27 +680,23 @@ the two before it (the fast loader's boot-to-boot spread).
    sudo systemctl daemon-reload && sudo systemctl enable --now dsv41-mesh
    ```
 
-   `dsv41-mesh.service` runs at every boot: it waits for the fabric links, sets `hairpin_queue_size`
-   (a `driverinit` parameter that resets at boot) and applies the routes, rules and markers; `mesh-up.sh`
-   refuses a rule that did not land in hardware. Start the engine after it is active.
-   On a first install, re-run `plan.py` once the unit is active. `plan.py` takes the RoCE size cap from the
-   hairpin queue size it finds, so a plan made before the unit set 8192 emits the safe 80 KB cap (81920)
-   instead of 262144.
+   `dsv41-mesh.service` runs at every boot: it waits for the fabric links, applies the configured
+   `hairpin_queue_size` (a `driverinit` parameter that resets at boot), then applies routes, rules
+   and markers; `mesh-up.sh` refuses a rule that did not land in hardware. The current
+   `scripts/ring_mesh/hairpin.sh` gets each node's devices, MTU, GID and queue size from the parent
+   `ring-local-fabric` command. Applying it reinitializes RDMA functions: only run it with the
+   engine stopped and after reviewing the parent config and a recovery plan. Do not change the
+   queue size as part of ordinary deployment.
 5. **Verify the path** before booting the engine: every rule shows `in_hw` (`tc -s filter show dev
    <netdev> ingress`), and an RDMA write to the opposite node goes through the neighbour's rule, not its
-   kernel. Start `ib_write_lat` on the receiver and the client on the sender with matching
-   `-d <dev> -x 3 --flow_label=16383 -s 61440 -n 100`; set `--flow_label=16383` on **both** ends so
-   the reverse RC response uses the corresponding marked path too. The client's positional host is
-   the peer's management IP (the perftest control socket); `-d` and `-x` select the RoCE data path.
-   A's `rocep1s0f0` to D's `rocep1s0f1` measured 10.17-11.86 us here, versus 8.5 us direct; the
-   neighbour's hardware rule counters rise and its `IpForwDatagrams` stays flat.
-6. **Standalone `.env.tp4` only:** for an independent clone, build `Dockerfile.canary-roce` and use
-   the generated backend values according to that clone's configuration. In the managed Spark
-   workspace, `query-model` and `deploy.sh` already provide `B12X_ROCE_HCA`, GID and peer maps from
-   `common.ring`; keep target serving limits such as `SGLANG_ROCE_MAX_SIZE` and `DSV41_ROCE_GATHER`
-   in the target configuration. Do not append `env.txt` to the active managed `.env`.
-   The boot log shows `RoCEnante ready: world=4 hcas=rocep1s0f0,rocep1s0f1,roceP2p1s0f0,roceP2p1s0f1`
-   and `DSV41_L2_PREFETCH: RoCE collectives prefetch the next weights into L2`.
+   kernel (`ib_write_lat -d <dev> -x 3 --flow_label=16383` against the opposite node's port: ~10 us at
+   61 KB here against 8.5 us to a direct neighbour; the neighbour's rule counters rise and its
+   `IpForwDatagrams` does not).
+6. **Managed serving configuration**: do not append generated values to `.env.tp4`; this planner
+   no longer emits an `env.txt`, and fabric/HCA/GID/peer-map/NCCL settings are generated from the
+   parent `spark/config.yaml` and propagated by `spark/deploy.sh`. Keep only serving-profile
+   choices in the parent engine config. Confirm the actual runtime env and collective logs after
+   deployment; this standalone document and its historic output are not live evidence.
 
 ### The size cap and the hairpin queues
 
@@ -678,11 +713,11 @@ in CUDA graphs, all four ranks, drops summed over all 16 functions:
 | queue 8192, two-wave off: us/op | 24 | 35 | 40 | 60 | 95 | 274 (two-wave on) |
 | queue 8192: drops | 0 | 0 | 0 | 0 | 0 | 64 |
 
-At 1024 keep `SGLANG_ROCE_MAX_SIZE=DSV41_ROCE_GATHER=81920` (every c1 decode collective is 50-60 KB, so
-c1 loses nothing); at 8192 the 256 KB cap also moves c2-c4 and the draft's 129 KB vocabulary gathers.
-`plan.py` picks the cap from the smallest queue it finds. The package's two-wave schedule (direct
-paths first, forwarded paths after, from 128 KB) only costs once nothing drops:
-`B12X_ROCE_TWO_WAVE_THRESHOLD_BYTES=0` turns it off.
+At 1024 the historical standalone measurements kept
+`SGLANG_ROCE_MAX_SIZE=DSV41_ROCE_GATHER=81920`; at 8192 the tested 256 KB cap also moved c2-c4
+and the draft's 129 KB vocabulary gathers. These are dated experimental values, not planner
+outputs or managed defaults. The active target cap and B12X schedule belong in the parent engine
+configuration and require a controlled, same-workload A/B before changing.
 
 ### Mesh pitfalls
 
@@ -699,6 +734,14 @@ paths first, forwarded paths after, from 128 KB) only costs once nothing drops:
   NCCL while the step was 5 % faster. Compare step time (`spec_verify_ct`) or qeval's median over its
   75 tasks; that median itself moves 2-3 % from run to run (81.8 / 84.7 / 85.9 on one boot here), so take
   the median of several runs.
+- **One hop may cross a plain L2 switch** instead of a DAC (tested with one switch, one hop, both
+  planes). The marked 0x88b5 frames crossed it: an `ib_write_lat --flow_label=16383` (both sides) at
+  61 KB to the opposite node through that hop counted 32,001 packets on the neighbour's rule, all of
+  them in hardware (`Sent software 0`), at 11.5 us typical against 10.1 us on a DAC-only path of the
+  same ring. The engine then served on that ring (RoCEnante on all four functions, qeval 71/75).
+  That dated standalone planner inferred adjacency from `/24` subnets; the current managed planner
+  instead validates every configured endpoint against `common.ring` and accepts no `/24` shortcut.
+  A switch that filters EtherTypes would drop the marked frames; untested here.
 - CPU pinning does not help: the scheduler on the X925 cores measured -5.5 %, the proxy threads alone
   on dedicated X925 cores neutral.
 

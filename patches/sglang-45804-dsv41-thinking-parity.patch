@@ -1,0 +1,95 @@
+diff --git a/python/sglang/srt/entrypoints/openai/chat_encoding.py b/python/sglang/srt/entrypoints/openai/chat_encoding.py
+--- a/python/sglang/srt/entrypoints/openai/chat_encoding.py
++++ b/python/sglang/srt/entrypoints/openai/chat_encoding.py
+@@ -278,6 +278,16 @@
+     expands their single placeholder ids rather than re-tokenizing text.
+     """
+     return spec in ("inkling", "kimi_k3", "dsv41")
++
++
++def spec_prompt_reads_default_thinking_env(spec: Optional[str]) -> bool:
++    """Whether the native encoder defaults ``thinking`` from the environment.
++
++    The response parser must mirror the prompt encoder. Jinja-driven models do
++    not consume this environment default and therefore must not inherit it on
++    the parsing side.
++    """
++    return spec in ("dsv4", "dsv41", "dsv32")
+ 
+ 
+ def encode_simple_chat(
+diff --git a/python/sglang/srt/entrypoints/openai/serving_chat.py b/python/sglang/srt/entrypoints/openai/serving_chat.py
+--- a/python/sglang/srt/entrypoints/openai/serving_chat.py
++++ b/python/sglang/srt/entrypoints/openai/serving_chat.py
+@@ -2845,6 +2845,16 @@
+             # output into reasoning_content.
+             return request.reasoning_effort not in (None, "none", "no_think")
+ 
++        if chat_encoding.spec_prompt_reads_default_thinking_env(
++            self.chat_encoding_spec
++        ):
++            # Mirror the native DeepSeek encoder: an explicit request value
++            # wins, otherwise both prompt and parser use the same env default.
++            chat_template_kwargs = request.chat_template_kwargs or {}
++            if "thinking" in chat_template_kwargs:
++                return chat_template_kwargs["thinking"] is True
++            return envs.SGLANG_DEFAULT_THINKING.get()
++
+         config = self.template_manager.reasoning_config
+         if config is None:
+             # Fallback to parser-level defaults when template toggle config
+@@ -2870,18 +2880,10 @@
+                 )
+             if mode in ("explicit_thinking", "explicit_enable_thinking"):
+                 toggle = mode.replace("explicit_", "")
+-                kwargs = request.chat_template_kwargs or {}
+-                if toggle in kwargs:
+-                    return kwargs.get(toggle) is True
+-                # dsv4/dsv41 encoding treats a missing thinking kwarg as
+-                # SGLANG_DEFAULT_THINKING and appends the thinking opener.
+-                # The parser must use that same default: the opener is not
+-                # in the completion, so leaving reasoning off leaks the
+-                # thinking block into content. enable_thinking templates do
+-                # not read this env, so they stay opt-in.
+-                if toggle == "thinking":
+-                    return bool(envs.SGLANG_DEFAULT_THINKING.get())
+-                return False
++                return (
++                    request.chat_template_kwargs is not None
++                    and request.chat_template_kwargs.get(toggle) is True
++                )
+             logger.warning(
+                 "Unknown reasoning_default mode '%s', defaulting to reasoning disabled",
+                 mode,
+diff --git a/python/sglang/srt/entrypoints/openai/serving_responses.py b/python/sglang/srt/entrypoints/openai/serving_responses.py
+--- a/python/sglang/srt/entrypoints/openai/serving_responses.py
++++ b/python/sglang/srt/entrypoints/openai/serving_responses.py
+@@ -54,6 +54,7 @@
+     parse_response_input,
+     render_for_completion,
+ )
++from sglang.srt.entrypoints.openai import chat_encoding
+ from sglang.srt.entrypoints.openai.protocol import (
+     ChatCompletionMessageParam,
+     ChatCompletionRequest,
+@@ -81,6 +82,7 @@
+ from sglang.srt.entrypoints.openai.serving_chat import OpenAIServingChat
+ from sglang.srt.entrypoints.openai.tool_server import MCPToolServer, ToolServer
+ from sglang.srt.entrypoints.openai.utils import to_openai_style_logprobs
++from sglang.srt.environ import envs
+ from sglang.srt.function_call.function_call_parser import FunctionCallParser
+ from sglang.srt.function_call.json_array_parser import JsonArrayParser
+ from sglang.srt.managers.io_struct import GenerateReqInput
+@@ -996,6 +998,12 @@
+             return effort not in (None, "none", "no_think")
+         if self.template_manager.force_reasoning:
+             return True
++        if chat_encoding.spec_prompt_reads_default_thinking_env(
++            self.chat_encoding_spec
++        ):
++            # _process_messages reuses the native DeepSeek prompt encoder;
++            # keep the Responses parser on the same default thinking state.
++            return envs.SGLANG_DEFAULT_THINKING.get()
+         config = self.template_manager.reasoning_config
+         if config is None:
+             # Parser-only models (DeepSeek-R1, …) carry the thinking default in

@@ -127,9 +127,24 @@ cp .env.tp4.example .env.tp4          # HEAD_IP / WORKER_* / MODEL_DIR / fabric,
 ./start-tp4.sh serve                  # ./start-tp4.sh stop | status | logs | smoke
 ```
 
+The commands above are for the standalone launcher. In this workspace's parent-managed
+switchless deployment, build the selected image only once on `spark-a`, then run
+`scripts/ship_image_ring.sh` there before the parent `spark/deploy.sh` start path. The shipper
+derives the adjacent A→B→C→D transfer hops from the local `spark/ring` topology/config, binds
+each transfer to its high-speed fabric address, loads the same saved image on each rank, and
+checks the resulting image IDs. Do not use the standalone `start-tp4.sh build` fan-out for this
+managed path; it would rebuild the same large image on every worker.
+
 `build` needs github.com during the image's `fetch` stage (and pypi.org, or `BUILD_ARGS="--build-arg
 PIP_INDEX=<mirror>/simple"`). The fetched trees can be inspected on a host with
 `scripts/fetch_runtime.sh runtime/fetched`.
+Both canary Dockerfiles now invoke `scripts/fetch-sglang-canary.sh` in their default fetch stage,
+so the pinned source is patched and verified before the image-stage verifiers run. If the Docker
+build network itself is unreliable, pre-stage on the build node with
+`scripts/fetch_runtime.sh runtime/fetched b12x b12x-next` and
+`scripts/fetch-sglang-canary.sh`, then select `--build-arg FETCH_STAGE=fetch_local` for the
+RoCEnante recipe; that path checks the pinned `REF` and generated `PATCHES` marker and rejects an
+unpatched SGLang tree.
 
 The boot log must show these lines, otherwise the line is not active:
 

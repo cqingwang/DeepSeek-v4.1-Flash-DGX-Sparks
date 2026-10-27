@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# start-tp4.sh — DeepSeek-V4.1-Flash on 4× DGX Spark (TP4/EP4).
+# start-tp4.sh — DeepSeek-V4.1-Flash on 4× DGX Spark (TP4/EP1 managed profile).
 #
 # Same engine, image and commands as start.sh, with a profile of its own:
 #   .env.tp4      settings for this profile (copied from .env.tp4.example on first run)
@@ -14,9 +14,10 @@
 # Usage: ./start-tp4.sh doctor | build | share | pack | serve | stop | status | logs | smoke
 #
 # DSV41_LAUNCHER=tp4 is the only switch that arms TP4 behavior inside start.sh
-# and the adapter: the named Dockerfile, EXTRA_CONTAINER_ENV, the shared-pad
-# defaults, the anchored worker rsync, EP 1/2 on the ring, and the production
-# hooks. ./start.sh leaves it unset, and that path stays as it was.
+# and the adapter. In the managed Spark workspace, the parent owns the environment,
+# rank order and BuildKit ring context; `build` compiles once on rank 0 and invokes
+# the adjacent-hop image shipper. ./start.sh leaves the switch unset, preserving
+# the standalone three-node path.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export ENV_FILE="$ROOT/.env.tp4"
