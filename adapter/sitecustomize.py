@@ -46,6 +46,10 @@ class EngramLoader(importlib.abc.Loader):
         elif module.__name__ == 'sglang.srt.model_executor.model_runner':
             from prefill_empty_cache import install
             install(module)
+            # TEST ONLY, gated before the import: eager forward host / GPU timing (adapter/moe_launch_prepared.py)
+            if os.environ.get('DSV41_MOE_LAUNCH_TIMING', '0').strip().lower() not in ('0', 'off', 'false', '', 'no'):
+                from moe_launch_prepared import install_forward_timing
+                install_forward_timing(module)
         elif module.__name__ == 'sglang.srt.layers.attention.deepseek_v4_backend':
             # sglang#39187 backport: dense prefill indexer scored in bounded row chunks.
             # Gate checked BEFORE the import so a disabled flag imports nothing. v1 targets
@@ -235,13 +239,20 @@ class EngramLoader(importlib.abc.Loader):
             if os.environ.get('DSV41_L2_PREFETCH', '0').strip() not in ('0', 'off', 'false', ''):
                 from l2_prefetch import install_router as install_l2_prefetch_router
                 install_l2_prefetch_router(module)
-        elif module.__name__ in ('b12x.comm.roce.roce_oneshot', 'b12x.comm.roce_ring.roce_oneshot'):
+        elif module.__name__ in ('b12x.comm.roce.roce_oneshot', 'b12x.comm.roce_ring.roce_oneshot',
+                                 'b12x.comm.roce_twoshot.roce_oneshot'):
             # Gated on DSV41_L2_PREFETCH: RoCEnante all-reduce/all-gather fork the prefetch branch.
             # Outside sglang; the finder sees its first import whichever package imports it first,
             # and install_model re-checks sys.modules in case it was imported before the finder.
             if os.environ.get('DSV41_L2_PREFETCH', '0').strip() not in ('0', 'off', 'false', ''):
                 from l2_prefetch import install_roce as install_l2_prefetch_roce
                 install_l2_prefetch_roce(module)
+            # Gated on DSV41_ROCE_TWOSHOT=1 (which also selects this package): the per-call row
+            # threshold DSV41_ROCE_TWOSHOT_ROWS of the two-shot all-reduce (adapter/roce_twoshot.py).
+            if (module.__name__ == 'b12x.comm.roce_twoshot.roce_oneshot'
+                    and os.environ.get('DSV41_ROCE_TWOSHOT', '0').strip() == '1'):
+                from roce_twoshot import install as install_roce_twoshot
+                install_roce_twoshot(module)
         elif module.__name__ == 'sglang.srt.layers.logits_processor':
             # Gated on DSV41_CERT_HEAD: the target-verify LM head through the certified path.
             if os.environ.get('DSV41_CERT_HEAD', '0').strip().lower() not in ('0', 'off', 'false', '', 'no'):
@@ -304,6 +315,7 @@ class EngramFinder(importlib.abc.MetaPathFinder):
                             'sglang.srt.models.deepseek_v2',
                             'b12x.comm.roce.roce_oneshot',
                             'b12x.comm.roce_ring.roce_oneshot',
+                            'b12x.comm.roce_twoshot.roce_oneshot',
                             'sglang.srt.layers.attention.dsv4.metadata',
                             'sglang.srt.layers.logits_processor'):
             return None

@@ -4,47 +4,41 @@
 
 ## Current results
 
-Image `Dockerfile.canary-roce` built from `f9a1de4` (SGLang `dsv4.1` `f80c91a4b` + the credited backports, without #45251) plus this release's Engram NVMe keepalive (`adapter/row_store.cpp`), the "Production profile" block of [`.env.tp4.example`](.env.tp4.example) with `EP_SIZE=1`, 1M context, checkpoint [`deepseek-ai/DeepSeek-V4.1-Flash-1017`](https://huggingface.co/deepseek-ai/DeepSeek-V4.1-Flash-1017) at `1bae0e1`, GPU clock capped at 2200 MHz, measured 2026-10-23 on one fresh boot per checkpoint with the host memory compacted first. The abliterated variant of the same checkpoint is a second weights profile in `.env.tp4.example`; its numbers on the same image, profile and protocol follow each table. Speculative decoding makes tok/s depend on the generated text, so other DeepSeek releases give somewhat different numbers on the same prompts.
-
-### sparkDash 1.8.8
-
-256 new tokens, temperature 0, thinking off.
-
-**Decode, aggregate tok/s (per stream in brackets)**
-
-| prompt type | c1 | c2 | c4 | c8 | c16 |
-|---|---:|---:|---:|---:|---:|
-| prose | **91.3** | 115.0 (58.1) | 174.0 (44.8) | 242.8 (32.0) | 359.7 (24.2) |
-| code | 142.9 | 186.1 (94.1) | 255.2 (66.0) | 341.4 (45.5) | 471.6 (31.9) |
-| structured | 160.8 | 222.2 (114.3) | 215.7 (67.1) | 248.7 (41.7) | 393.5 (35.2) |
-| json | 130.6 | 184.9 (96.3) | 322.8 (82.5) | 461.4 (59.6) | 726.9 (47.2) |
-
-**Prefill, cold, tok/s** (measured on the same image without the NVMe keepalive, which leaves prefill unchanged: cold 388K 67.8 s with it, 67.4 s without)
-
-| 4k | 16k | 32k | 64k | 128k |
-|---:|---:|---:|---:|---:|
-| 4798 | 5976 | 6196 | 6241 | 6291 |
-
-Abliterated checkpoint ([`mrfakename/DeepSeek-V4.1-Flash-1017-abliterated`](https://huggingface.co/mrfakename/DeepSeek-V4.1-Flash-1017-abliterated) `517efab`), same image, profile and protocol, c1: prose 89.0, code 145.2, structured 160.1, json 131.4; c16 aggregate: prose 355.7, code 479.1; prefill 4k-128k 4855-6214 tok/s. Its edit touches only `attn.wo_b` and `shared_experts.w2` of the main layers (the DSpark draft layers are identical), so the two run within a few percent of each other.
-
-**How these were measured.** sparkDash DecodeBench after two discarded warm-up prose c1 runs; c1 is the median of three runs, c4 the median of two, c2 / c8 / c16 one run each (c1 runs: prose 91.2 / 91.4 / 91.3; code 141.7 / 142.9 / 143.3; structured 155.1 / 160.8 / 160.9; json 130.1 / 130.6 / 131.4). sparkDash's prose c1 is a single prompt, and the non-prose types use a different prompt at each concurrency, so per-stream values are not comparable across columns. Prefill: sparkDash prefill bench, cold (salted prompts), after a 4k warm-up, median of the second and third of three runs per length; its filler is one repeated token, so the Engram row cache inflates these numbers ([MiaAI-Lab#21](https://github.com/MiaAI-Lab/DeepSeek-v4.1-Flash-DGX-Sparks/issues/21)).
+v2.6: image `Dockerfile.canary-roce` with this release's adapters and RoCE runtime (SGLang `dsv4.1` `f80c91a4b` + the credited backports, without #45251), the "Production profile" block of [`.env.tp4.example`](.env.tp4.example) with `EP_SIZE=1`, 1M context, checkpoint [`mrfakename/DeepSeek-V4.1-Flash-1017-abliterated`](https://huggingface.co/mrfakename/DeepSeek-V4.1-Flash-1017-abliterated) at `517efab`, GPU clock capped at 2200 MHz, measured 2026-10-26 on fresh boots with the host memory compacted first and the first run after each boot discarded. Speculative decoding makes tok/s depend on the generated text, so other DeepSeek releases give somewhat different numbers on the same prompts.
 
 ### speedbench
 
-[speedbench](https://github.com/knapcio/speedbench) 0.3 (`6733653`), full mode: 73 frozen prompts in six categories (prompt set speedbench-v1), c1, temperature 0, 256 output tokens, thinking off, run on the head against `127.0.0.1:8888`. Decode tok/s, geometric mean over the prompts of each category:
+[speedbench](https://github.com/knapcio/speedbench) 0.3 (`6733653`), full mode: 73 frozen prompts in six categories (prompt set speedbench-v1), c1, temperature 0, 256 output tokens, thinking off, run on the head. Decode tok/s, geometric mean over the prompts of each category, median of two full runs on the release-gate boot:
 
 | tok/s | prose | code | structured | agentic | multilingual | long context | all 73 prompts |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| official 1017 | 64.7 | 106.8 | 109.5 | 98.3 | 70.0 | 91.0 | 87.5 |
-| abliterated | 64.3 | 110.2 | 105.1 | 100.6 | 68.4 | 92.2 | 87.6 |
+| c1 | **65.6** | 112.2 | 107.0 | 103.8 | 70.1 | 92.7 | **89.3** |
 
-Median time to first token 205 ms (abliterated 208 ms); 73 of 73 prompts valid on both, none failed.
+Runs: all 88.84 / 89.80, prose 65.04 / 66.14, code 111.57 / 112.84, structured 106.36 / 107.71, agentic 103.4 / 104.2, multilingual 69.51 / 70.70, long context 92.96 / 92.40. Median time to first token 206 / 208 ms; 73 of 73 prompts valid in both runs, none failed.
 
-**Correctness checks on the same boot.** Needle retrieval PASS at 124k and 388k tokens (passphrase at 50 % depth; 21 s and 68 s); cold prefill of a 388K-token varied-text prompt 67.8 s (5,720 tok/s); `scripts/qeval.py` 71 / 75 (code 24/25, format 7/7, json 6/8, math 13/14, prose 5/5, reason 16/16); T > 0 scan (`ds_gate.py tscan`, 35 outputs) 0 garbled, 0 errors; `/v1/messages` with the image placeholder token in text and with thinking enabled without a budget: both answered; native `/generate` with top-10 logprobs on 16.5k-40k-token prompts answered. The abliterated boot passed the same checks (qeval 71/75 with the same split, cold 388K 69.0 s), plus `ds_gate.py kld` long and short panels against the stable 1017 image (continuation KL 0.0075 / 0.0126) and the issue #16 accelerated reproducer (`scripts/issue16_repro.py`: 190K-900K cached prefixes with 512-4096 fresh tokens, alternating c1/c4): 1,018 requests in 30 minutes, 0 failures, no CUDA error or Xid on any rank ([docs/issue-16-swa-crash.md](docs/issue-16-swa-crash.md)).
+**Under load** (speedbench load: closed loop, 90 s per level, 256 output tokens, thinking off; one fresh boot of the same image and profile)
+
+| concurrency | block tok/s | per stream, median tok/s | TTFT, median |
+|---|---:|---:|---:|
+| c1 | 77.3 | 83.3 | 207 ms |
+| c4 | 131.7 | 38.7 | 310 ms |
+| c16 | **211.0** | 16.0 | 539 ms |
+
+Block tok/s is all completion tokens over the wall time of the level, including request start and prefill, so the c1 value sits below the decode geomean above.
+
+**Prefill, cold, tok/s** (4k and 64k: speedbench longctx, unique salt per request, median of three documents per size, same boot as the load table; 388K: one cold varied-text prompt on the release-gate boot)
+
+| 4k | 64k | 388K |
+|---:|---:|---:|
+| 5309 | 5970 | 5770 (65.2 s) |
+
+The official checkpoint ([`deepseek-ai/DeepSeek-V4.1-Flash-1017`](https://huggingface.co/deepseek-ai/DeepSeek-V4.1-Flash-1017) `1bae0e1`, the default weights profile in `.env.tp4.example`) was not re-measured on this release. On the v2.5 image on 2026-10-26, same speedbench protocol: c1 all 88.4 (prose 66.0, code 108.4, structured 111.0), c4 132.3, c16 200.0 block tok/s, cold prefill 4k 4,605 and 128k 5,783 tok/s. This release's switches leave c1 decode unchanged (T = 0 outputs byte-identical), so its c1 carries over; its c16 and short-prefill gains were measured on the abliterated checkpoint only. The abliterated edit touches only `attn.wo_b` and `shared_experts.w2` of the main layers (the DSpark draft layers are identical), so the two run within a few percent of each other.
+
+**Correctness checks.** On the release-gate boot: needle retrieval PASS at 124k and 388k tokens (passphrase at 50 % depth; 19.8 s and 66.6 s); cold prefill of a 388K-token varied-text prompt 65.2 s (5,770 tok/s); `scripts/qeval.py` 71 / 75 (code 24/25, format 7/7, json 6/8, math 13/14, prose 5/5, reason 16/16), the same score and split as v2.5; T > 0 scan (`ds_gate.py tscan`, 35 outputs) 0 garbled, 0 errors; `/v1/messages` with the image placeholder token in text and with thinking enabled without a budget: both answered; the issue #16 accelerated reproducer (`scripts/issue16_repro.py`: 190K-900K cached prefixes with 512-4096 fresh tokens, alternating c1/c4) 410 requests in 15 minutes, 0 failures ([docs/issue-16-swa-crash.md](docs/issue-16-swa-crash.md)). Exactness against v2.5: 75 qeval prompts at T = 0 with top-20 logprobs and cold prefills, on four fresh boots (v2.5, two-shot only, the full v2.6 set, v2.5 again): every v2.6 output byte-identical to v2.5. Sampling at T > 0 (v2.5 profile, 12,000 samples): the second token's counts match the verify row's own probabilities (chi-square p 0.61).
 
 **Fixed: logprob decode hang.** Images built from `57a9888` and earlier main commits hang every rank on a greedy native `/generate` with `return_logprob` on long code prompts. The cause was the SGLang #45251 backport, now removed; see the CHANGELOG.
 
-Earlier measurements, including the v2.4 table on the original checkpoint, the per-stage tables and the experiments that were tried and not adopted, are in [docs/history.md](docs/history.md); what changed when is in [CHANGELOG.md](CHANGELOG.md).
+Earlier measurements, including the v2.5 sparkDash tables (sparkDash is no longer used here), the v2.4 table on the original checkpoint, the per-stage tables and the experiments that were tried and not adopted, are in [docs/history.md](docs/history.md); what changed when, with the v2.6 A / B / A' table, is in [CHANGELOG.md](CHANGELOG.md).
 
 ## What the production profile runs
 
@@ -55,12 +49,15 @@ Earlier measurements, including the v2.4 table on the original checkpoint, the p
 | Experts | `EP_SIZE=1`, `DSV41_MOE_B12X_NEXT=1`, `DSV41_MOE_B12X_NEXT_DETERMINISTIC=1` | every rank holds a quarter of all 384 experts and the routed MoE runs on b12x main: no expert-group straggler at the MoE all-reduce (all-reduce 5.9 → ~2.6 ms per step), MoE time unchanged. The deterministic reduction (per-slot buffer and a fixed-order sum instead of atomics) costs nothing measurable and makes greedy output bit-identical run to run; its <= 8-row plans use a Triton route planner and zero the barrier words in one fill (bit-identical to b12x's internal planner) |
 | Engram | `DSV41_CACHE_GIB=4`, `DSV41_CACHE_WAYS=16`, `DSV41_ENGRAM_PREFETCH=1`, `DSV41_ENGRAM_KEEPALIVE_MS=25` (default) | row cache (67–76 % hits) and row lookups on a side stream, rows bit-identical. While lookups arrive, one 4 KiB read every 25 ms keeps the NVMe drive out of its power-saving states: at c16 the drive slept between steps and each step's row reads paid ~10 ms to wake it (c16 step 149 → 140 ms, +5-6 % c16 aggregate; c1 unchanged) |
 | Draft | `DSPARK_BLOCK_SIZE=5`, `SGLANG_DSPARK_FOLDED_SAMPLING=2` | k=5 wins on code, ties on prose; sampled requests stay in the CUDA graph |
-| Draft sampling | `DSV41_DRAFT_TAU=0.7`, `DSV41_BLOCK_VERIFY=1` | sharper draft proposals and block verification for sampled rows, both exact in distribution |
+| Draft sampling | `DSV41_DRAFT_TAU=0.7`, `DSV41_BLOCK_VERIFY=1` | sharper draft proposals and block verification for sampled rows, both exact in distribution. Since v2.6 the acceptance threshold forms `1 - w` before adding `S`, so FP32 no longer rounds `S` against 1 (sampled rows only; greedy unaffected) |
 | Verify length | `DSV41_VERIFY_CAP=conf:0.1`, `DSV41_ROUTER_LIVE=1` | verifies only the drafts the confidence head expects to survive; the other verify rows reuse the anchor row's experts inside the router kernel, so they read no extra weights; greedy outputs identical |
 | Kernels | `DSV41_SHARED_PAD_K=1`, `DSV41_WO_A_W8=1`, `DSV41_WO_A_W8_MID=1`, `DSV41_WO_A_W8_DROP=1`, `DSV41_DRAFT_HEAD_FP8=1` | shared expert kept on the b12x kernel; `wo_a` and the draft LM head read exact fp8 twins of their weights |
 | Replicated linears | `DSV41_REPLICATED_SPLIT=wqkv_a,engram.wkv`, `DSV41_DRAFT_MAIN_PROJ_SPLIT=1`, `DSV41_SPLIT_COMPACT_GATHER=1` | layers every rank computed in full are split by columns across ranks and all-gathered; enabled only where bit-identical on all ranks. A rank with a narrower slice runs its GEMM on a window of the widest slice's width, so no pad precedes the gather, and with the compact gather each rank sends only its own columns, which RoCEnante writes in place (no pad, reorder or cat; checked byte for byte against the old path per layer and row count at boot) |
 | Transport | `SGLANG_ROCE_ALLREDUCE=1`, `SGLANG_ROCE_MAX_SIZE=2097152`, `DSV41_ROCE_GATHER=2097152`, `B12X_ROCE_HCA=rocep1s0f0,roceP2p1s0f0` | TP all-reduces and all-gathers up to 2 MiB over the one-shot RDMA kernel on both rails |
+| Two-shot all-reduce | `DSV41_ROCE_TWOSHOT=1`, `DSV41_ROCE_TWOSHOT_ROWS=18`, `B12X_ROCE_PIPE_BLOCKS=4`, `B12X_ROCE_PIPE_CHUNK_BYTES=65536` | all-reduces of 18 rows or more (the wide verify and draft steps at higher concurrency) take a pipelined two-shot path: each rank sends its quarter to the row owner, which sums the four partials in FP32 in rank order and rounds once, as the one-shot does, then the reduced rows are gathered back. Half the bytes on the wire, bit-identical output; smaller all-reduces stay one-shot. c16 +3.7 % alone (+4.9 % with the two prefill switches below), c1 / c4 unchanged |
 | Prefill | `CHUNKED_PREFILL_SIZE=8192`, `MEM_FRACTION_STATIC=HEAD_MEM_FRACTION_STATIC=0.78`, `DSV41_INDEXER_CHUNKED=1`, `SPARK_PREFILL_TP_SPLIT=1` | bounded indexer transient (sglang#39187) plus the SG18 row split across ranks from 32k context; 8192-token chunks are 17-28 % faster on 400K-1M cold prompts, and the 0.78 fraction gives back the ~3 GiB the larger chunk costs at 1M (at 0.80 the head dropped to 2.7 GiB available) |
+| Prefill MoE launch | `DSV41_MOE_LAUNCH_PREPARED=plan` | eager (prefill) b12x MoE launches reuse a launch plan prepared once per launch contract instead of redoing the host-side quant, routing, tile and kernel-lookup decisions on every call; barrier fill, route planner, pointers and stream stay per call, and the plan is dropped on any `B12X_NEXT_*` environment change or kernel-cache change. Same kernels and arguments, bit-identical |
+| Prefill indexer | `DSV41_INDEXER_NOSYNC=1` | the eager prefill indexer of the eight index-source layers builds its compressed-slot ids with one device gather and pinned non-blocking copies instead of a per-request `.item()` and a pageable copy (two host syncs per request per layer). Integer ops in the same order, bit-identical. With the MoE launch plan: cold 4k prefill +16 %, 64k +3.4 %, TTFT -4 % (c1 214 → 206 ms, c16 563 → 539 ms) |
 | Multi-user | `--prefill-decode-interval 2`, `DSV41_PREFILL_BYPASS=256` | a short request that arrives during a long cold prefill is admitted next to the in-flight chunk and decoded between chunks: answered in 4.6 s instead of after the prefill (80 s at 400K); the admission adapter only acts after the engine's own memory check and reads only rank-identical state |
 | Prefix cache | `--swa-prefix-tails 128` | room for 128 sliding-window prefix tails instead of 64: a long session stays cached when another long session runs (388K revisit 1.5 s instead of an 89 s re-prefill); costs KV pool |
 | Loading | `DSV41_FAST_LOAD=1`, `DSV41_FAST_LOAD_TP_SLICE=auto`, `DSV41_AUTOTUNE_KEEP=1` | engine start 343 s → ~120 s; at EP1 each rank reads only its slice of every expert, into 256 MiB pinned slabs (330 allocations instead of ~94k, which gave back ~0.7M tokens of KV pool); MoE autotune cache kept across boots |
@@ -142,6 +139,9 @@ DSV41 indexer chunked (sglang#39187 backport) ARMED: ...
 Initialized DSpark draft runner. ... gamma=5, verify_num_draft_tokens=6
 max_total_num_tokens=..., chunked_prefill_size=4096, ... max_running_requests=16
 RoCEnante ready: world=4 hcas=...
+DSV41_ROCE_TWOSHOT: two-shot all-reduce armed, DSV41_ROCE_TWOSHOT_ROWS=18 at install ...
+[moe_launch_prepared] armed: prepared=plan direct-op=no timing=off sources pinned ok
+DSV41 indexer nosync: DSV41_INDEXER_NOSYNC=1 ...
 [moe_b12x_next] armed: routed MoE on b12x_next a7d7d29b ...
 [moe_b12x_next] INFO: routed MoE at EP_SIZE=1 ...
 DSV41 hc_fused: first call (4096 rows) bit-identical to stock
@@ -155,16 +155,16 @@ The simpler images (`Dockerfile` on the stock base, `Dockerfile.canary` without 
 
 ## Measuring
 
-- Bench with sparkDash's decode and prefill benches, never with a hand-rolled loop; discard the first two runs after a boot (cold Engram row cache, first-run warm-up).
+- Bench with [speedbench](https://github.com/knapcio/speedbench) (full, load and longctx modes), never with a hand-rolled loop; discard the first run after a boot (cold Engram row cache, first-run warm-up).
 - Any `#running-req` in the engine log above the concurrency being benched means foreign traffic landed in the window.
 - A dashboard polling `nvidia-smi` every 2 s on every node costs ~0.6 ms per decode step; poll every 10 s (`POLL_INTERVAL_GPU=10000`, `POLL_INTERVAL_BANDWIDTH=10000`).
-- sparkDash's fixed prompts are greedy: a change that alters rounding can flip a near-tie early in the 256 tokens and move c1 by ±10 % without changing speed. Kernel A/Bs here use step time on several prompts as well.
+- Fixed benchmark prompts are greedy: a change that alters rounding can flip a near-tie early in the 256 tokens and move c1 by ±10 % without changing speed. Kernel A/Bs here use step time on several prompts as well.
 - Release gate tools: `scripts/qeval.py` (75 tasks), `scripts/ds_gate.py kld` (greedy-continuation KL against a reference stack, long and short panels) and `ds_gate.py tscan` (T > 0 garble scan), `scripts/prefix_scan.py` (shared long prefix at c8, cold vs warm, plus cold-vs-warm logprob drift on full and mid-document cache hits).
 - Greedy text equality is not a correctness gate for prefill changes: identical cold prompts of ~70k tokens produce different greedy continuations run to run. Correctness of the backports rests on the bitwise CPU tests, the needle tests and qeval.
 
 ## Rollback
 
-Every layer is an env change: `EP_SIZE=2` without `DSV41_MOE_B12X_NEXT` returns the routed MoE to FlashInfer, `DSV41_FAST_LOAD=0` restores the stock loader, `SGLANG_ROCE_ALLREDUCE=0` drops the RDMA transport, `SPARK_PREFILL_TP_SPLIT=0` the row split, `IMAGE=dsv41-4x-spark:canary` the RoCEnante overlay, `IMAGE=dsv41-4x-spark:local` the branch; unsetting `DSV41_SPEC_SYNC_FREE`, `DSV41_EAGER_GLUE`, `DSV41_SPLIT_COMPACT_GATHER` and `DSV41_L2_PREFETCH_WOA` turns off the v2.2 decode-step changes, unsetting `DSV41_CERT_HEAD` the v2.3 certified head (`DSV41_REPLICATED_SPLIT_WINDOW=0` and `DSV41_MOE_B12X_NEXT_DET_TRITON=0` the two that are on by default). Upstream's profile: `MAX_RUNNING_REQUESTS=8`, `CHUNKED_PREFILL_SIZE=1024`, `EXTRA_CONTAINER_ENV=""` (and `EP_SIZE=4`, `DSV41_CACHE_GIB=0` for the exact upstream example). The adapters stay in the image but do nothing when their gate is unset.
+Every layer is an env change: `EP_SIZE=2` without `DSV41_MOE_B12X_NEXT` returns the routed MoE to FlashInfer, `DSV41_FAST_LOAD=0` restores the stock loader, `SGLANG_ROCE_ALLREDUCE=0` drops the RDMA transport, `SPARK_PREFILL_TP_SPLIT=0` the row split, `IMAGE=dsv41-4x-spark:canary` the RoCEnante overlay, `IMAGE=dsv41-4x-spark:local` the branch; unsetting `DSV41_SPEC_SYNC_FREE`, `DSV41_EAGER_GLUE`, `DSV41_SPLIT_COMPACT_GATHER` and `DSV41_L2_PREFETCH_WOA` turns off the v2.2 decode-step changes, unsetting `DSV41_CERT_HEAD` the v2.3 certified head (`DSV41_REPLICATED_SPLIT_WINDOW=0` and `DSV41_MOE_B12X_NEXT_DET_TRITON=0` the two that are on by default). Unsetting `DSV41_ROCE_TWOSHOT`, `DSV41_MOE_LAUNCH_PREPARED` and `DSV41_INDEXER_NOSYNC` returns to the v2.5 profile. Upstream's profile: `MAX_RUNNING_REQUESTS=8`, `CHUNKED_PREFILL_SIZE=1024`, `EXTRA_CONTAINER_ENV=""` (and `EP_SIZE=4`, `DSV41_CACHE_GIB=0` for the exact upstream example). The adapters stay in the image but do nothing when their gate is unset.
 
 ## Known limits
 
@@ -176,6 +176,7 @@ Every layer is an env change: `EP_SIZE=2` without `DSV41_MOE_B12X_NEXT` returns 
 - Single-stream prose speed is bounded by DSpark acceptance (~3 accepted tokens per step on prose against ~6 on code); no configuration changes that.
 - The fast loader leaves the KV pool 3–13 % smaller than the stock loader (6.7–7.3 M vs 7.5–7.8 M tokens) and more variable between boots; `DSV41_FAST_LOAD=0` restores it at ~220 s per boot ([docs/fast-load.md](docs/fast-load.md)).
 - RoCEnante is a new transport in the decode path; b12x has one open report of a rank wedging under long mixed-context traffic on an earlier revision ([b12x#313](https://github.com/local-inference-lab/b12x/issues/313)). The overlay's result-boundary health check fails the step instead of hanging, and NCCL is one env change away.
+- The two-shot all-reduce is measured on a switched fabric only and is not available with `DSV41_ROCE_RING=1`; on the ring leave `DSV41_ROCE_TWOSHOT` unset.
 
 ## License
 
@@ -187,7 +188,7 @@ This repository is a downstream profile of **[MiaAI-Lab/DeepSeek-v4.1-Flash-DGX-
 
 Other work this profile builds on:
 
-- **kpham-sgl**, [sgl-project/sglang#39187](https://github.com/sgl-project/sglang/pull/39187): the bounded dense-indexer prefill transient, backported here as `adapter/indexer_chunked*.py`.
+- **kpham-sgl**, [sgl-project/sglang#39187](https://github.com/sgl-project/sglang/pull/39187): the bounded dense-indexer prefill transient, backported here as `adapter/indexer_chunked*.py` (whose prefill slot ids `DSV41_INDEXER_NOSYNC` builds without host syncs).
 - **BBuf** and the SGLang `dsv4.1` branch contributors ([#39370](https://github.com/sgl-project/sglang/pull/39370), [#39646](https://github.com/sgl-project/sglang/pull/39646), [#39648](https://github.com/sgl-project/sglang/pull/39648), [#39653](https://github.com/sgl-project/sglang/pull/39653)): the decode kernel work in the optional `Dockerfile.canary` image.
 - **Vineel Bhat, Claude Fable 5.1 and hnyls2002**, [SGLang #41303](https://github.com/sgl-project/sglang/pull/41303): keeping a full SWA window for short decoder bounded-replay extends and holding the window back from ordinary prefix-cache matches; backported to the pinned tree in `patches/sglang-41303-bounded-replay-window.patch`.
 - **Yi (Vincent) Zhong**, [SGLang #42901](https://github.com/sgl-project/sglang/pull/42901): avoiding discarded layer-20 indexer, attention and MoE work on early prompt rows under decoder bounded replay. The adaptation for the pinned pre-`HcState` tree is in `patches/sglang-42901-layer20-tail.patch`; it is source-qualified but has not yet been benchmarked on GB10.
@@ -216,9 +217,11 @@ Other work this profile builds on:
 - **DeepSeek**, [`inference/model.py` revision `4dd75a8b`](https://huggingface.co/deepseek-ai/DeepSeek-V4.1-Flash/commit/4dd75a8b448d95ae8e284d5c5a1e4b8808bd583b) of DeepSeek-V4.1-Flash (2026-10-12; the same code ships with [DeepSeek-V4.1-Flash-1017](https://huggingface.co/deepseek-ai/DeepSeek-V4.1-Flash-1017)): the reference rounds the attention output to FP8 (32-value blocks, power-of-two scales) before `wo_a`, in the target and the DSpark draft attention. Mirrored by the opt-in `adapter/wo_a_input_fp8.py` (`DSV41_WO_A_INPUT_FP8=1`, off by default: measured ~3 % slower decode with the same eval results).
 - **05yuki**, [SGLang #45185](https://github.com/sgl-project/sglang/pull/45185) (open): the same quantize-dequantize of `o` before the bf16 `wo_a` in SGLang's V4 attention and DSpark draft, including the fp32 emulation of the e4m3 rounding that `DSV41_WO_A_INPUT_FP8_EMULATE=1` follows.
 - **christopherowen**, [spark-ds41f](https://github.com/christopherowen/spark-ds41f): adopted the reference's WO-A input quantization in its vLLM recipe for DGX Spark (first inside the W8A16 GEMM's tile load, then in the sparse MLA kernels' output store), which pointed us to the change.
+- **Barron, Gnanapragasam and Tschannen**, ["A Fix for Softmax and Cross-Entropy"](https://jonbarron.info/softmaxfix/) (Eq. 5), as applied to verification kernels in **Christopher Owen** (christopherowen)'s [spark-ds41f #584](https://github.com/christopherowen/spark-ds41f/tree/9065a471a6b0e63529211931fab5793fce9f27a1/experiments/2026-10-25-softmax-fix): the rounding of probabilities against 1 that led us to audit block verification. `adapter/block_verify.py` now forms `1 - w` before adding `S` in the acceptance threshold (`tests/test_block_verify_numerics.py`, against an FP64 oracle); the full log-domain form of Eq. 5 is not ported.
 - **hushengkai**, for independently reproducing the EP2 / Engram cache / shared-expert padding changes on a second 4x GB10 fleet.
-- **rhys101**, [DeepSeek-V4.1-Flash-vLLM-DGX-Spark-8](https://github.com/rhys101/DeepSeek-V4.1-Flash-vLLM-DGX-Spark-8): the SG17 SGLang overlay that routes small tensor-parallel all-reduces to RoCEnante (reused with a TP4 adaptation in `Dockerfile.canary-roce`) and the SG18 native prefill TP split (`adapter/spark_prefill_dense.py`, combined with the indexer backport in `adapter/indexer_chunked_v3.py`).
-- **local-inference-lab / Luke Alonso and Jason (original-el8)**, [b12x](https://github.com/local-inference-lab/b12x): RoCEnante, the one-shot RDMA all-reduce (`runtime/b12x`, Apache-2.0, frozen at the SG17 revision), and the fused MoE kernels that run the routed experts (`runtime/b12x_next`: b12x main at `a7d7d29b`, renamed so both revisions live in one image, with the local M64 prefill admission and Luke Alonso's [scratch-alignment fix](https://github.com/local-inference-lab/b12x/commit/3f8b71d991df31a9aa851604fc999fd72f08aa93)).
+- **rhys101**, [DeepSeek-V4.1-Flash-vLLM-DGX-Spark-8](https://github.com/rhys101/DeepSeek-V4.1-Flash-vLLM-DGX-Spark-8): the SG17 SGLang overlay that routes small tensor-parallel all-reduces to RoCEnante (reused with a TP4 adaptation in `Dockerfile.canary-roce`, which the two-shot all-reduce plugs into) and the SG18 native prefill TP split (`adapter/spark_prefill_dense.py`, combined with the indexer backport in `adapter/indexer_chunked_v3.py`).
+- **local-inference-lab / Luke Alonso and Jason (original-el8)**, [b12x](https://github.com/local-inference-lab/b12x): RoCEnante, the one-shot RDMA all-reduce (`runtime/b12x`, Apache-2.0, frozen at the SG17 revision), and the fused MoE kernels that run the routed experts (`runtime/b12x_next`: b12x main at `a7d7d29b`, renamed so both revisions live in one image, with the local M64 prefill admission and Luke Alonso's [scratch-alignment fix](https://github.com/local-inference-lab/b12x/commit/3f8b71d991df31a9aa851604fc999fd72f08aa93)); the prepared eager MoE launch (`adapter/moe_launch_prepared.py`, `DSV41_MOE_LAUNCH_PREPARED`) mirrors b12x main's `_launch_dynamic_flat`.
+- **Luke Alonso**, [flashinfer-ai/flashinfer#6915](https://github.com/flashinfer-ai/flashinfer/pull/6915): the pipelined two-shot RoCE all-reduce (reduce-scatter to the row owner, FP32 sum in rank order, all-gather back, staging and the wire overlapped per chunk) behind the opt-in `DSV41_ROCE_TWOSHOT` switch, ported onto rhys101's RoCEnante path in `runtime/b12x/b12x/comm/roce_twoshot` (Apache-2.0; `runtime/b12x/twoshot-provenance.json`). In the production profile since v2.6 (c16 +3.7 %, bit-identical).
 - **luxingcom (LuZ)**, [LuZ DGX Spark TP4 ring](https://github.com/luxingcom/LuZ-0.1.7-DeepSeek-v4.1-Flash-DGXspark-TP4-Ring): the first integration of b12x's fused MoE into SGLang on a four-Spark fleet, which showed the route.
 - **FujitsuPolycom and the sparkring contributors**, [sparkring](https://github.com/FujitsuPolycom/sparkring): the hardware-forwarded opposite-node paths and the path-aware RoCEnante (`runtime/b12x/b12x/comm/roce_ring`) that run the production line on a switchless ring, plus the maintained [atomic-counter](https://github.com/FujitsuPolycom/sparkring/commit/2d83bb60402fc2de5708ddcf3f962a007772600f), [memory-scope](https://github.com/FujitsuPolycom/sparkring/commit/e4d092181007f9a1060b9c172804b37f37c782f3), and [sequence-wrap timeout](https://github.com/FujitsuPolycom/sparkring/commit/f91b5c87ef2352014b8724388ab26c6ad441a0e1) fixes.
 - **Stanislav Bardyuk**, [NVIDIA/nccl #2393](https://github.com/NVIDIA/nccl/pull/2393): the AArch64 acquire fence for the IB CTS FIFO, backported as an additional patch in the recommended switchless-ring NCCL build.
@@ -236,4 +239,4 @@ Other work this profile builds on:
 - **yalindogusahin** ([Mia PR #4](https://github.com/MiaAI-Lab/DeepSeek-v4.1-Flash-DGX-Sparks/pull/4)), **RustyAiLab** ([PR #5](https://github.com/MiaAI-Lab/DeepSeek-v4.1-Flash-DGX-Sparks/pull/5), [PR #8](https://github.com/MiaAI-Lab/DeepSeek-v4.1-Flash-DGX-Sparks/pull/8)) and **BHCC2025** ([PR #26](https://github.com/MiaAI-Lab/DeepSeek-v4.1-Flash-DGX-Sparks/pull/26)): NFS exporter reuse, the single-rail shell fixes, `remote.py` reading `.env` defaults, and re-sharing before `pack` (GID auto-selection is opt-in here).
 - **bertholomus** ([Mia PR #10](https://github.com/MiaAI-Lab/DeepSeek-v4.1-Flash-DGX-Sparks/pull/10)): reading each node's HCA port state, used here as a `doctor` check.
 - **motzudao** ([Mia #31](https://github.com/MiaAI-Lab/DeepSeek-v4.1-Flash-DGX-Sparks/issues/31)): the report that a custom `EXTRA_SGLANG_ARGS` dropped the required FP8 GEMM backend.
-- **MiaAI-Lab/sparkDash**, the benchmark used for every number below.
+- **MiaAI-Lab/sparkDash**, the benchmark behind the README numbers up to v2.5 (now in [docs/history.md](docs/history.md)).

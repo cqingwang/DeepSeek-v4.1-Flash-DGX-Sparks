@@ -11,6 +11,16 @@ The v1 adapter (indexer_chunked.py) covers image e087e662, which uses self.candi
 
 Gate: ``DSV41_INDEXER_CHUNKED=1``.  Budget: ``DSV41_INDEXER_LOGITS_BUDGET_BYTES``
 (default 2 GiB of fp32 logits).  Off = stock path untouched.
+
+``DSV41_INDEXER_NOSYNC=1`` (default off; needs DSV41_INDEXER_CHUNKED=1): the eager prefill indexer of every
+index-source layer builds its compressed-slot ids without host synchronizations. The stock per-request loop indexes
+``req_to_token`` with a 0-dim CUDA tensor (``req_pool_indices[r]``), which PyTorch turns into ``.item()``, a full
+stream sync per request and layer (8 per c1 prefill, 128 per bs16 prefill), and copies the request starts with
+``torch.tensor(..., device=cuda)``, a pageable copy that syncs the stream again. With the knob the slot ids come from
+one gather over device indices (``repeat_interleave`` with a host ``output_size``) and both host lists reach the GPU
+as pinned non-blocking copies. Integer ops only, same elements in the same order: k_slots, ks, the selected slots,
+page/raw indices and the candidate masks are bit-identical (tests/test_indexer_nosync.py). Read per call through
+adapter/ab_variant.py when the in-boot A/B is armed (a RUNTIME key), else once.
 """
 import inspect
 import logging
@@ -33,6 +43,60 @@ def budget_bytes():
     except ValueError:
         value = DEFAULT_BUDGET_BYTES
     return value if value > 0 else DEFAULT_BUDGET_BYTES
+
+
+try:  # DSV41_AB_VARIANTS in-boot A/B (test only)
+    import ab_variant as _ab
+except ImportError:
+    _ab = None
+
+_OFF = ("0", "off", "false", "", "no")
+
+
+def _nosync_reader():
+    """() -> bool for DSV41_INDEXER_NOSYNC: per call under the armed in-boot A/B, else fixed at build time."""
+    if _ab is not None and getattr(_ab, "ACTIVE", False) and "DSV41_INDEXER_NOSYNC" in getattr(_ab, "KNOWN", ()):
+        return lambda: nosync_value(_ab.env("DSV41_INDEXER_NOSYNC", "0"))
+    fixed = nosync_value(os.environ.get("DSV41_INDEXER_NOSYNC", "0"))
+    return lambda: fixed
+
+
+def nosync_value(raw):
+    """One parser for both readers: '', 0, off, false, no (any case) = off."""
+    return str(raw or "0").strip().lower() not in _OFF
+
+
+def h2d(values, dtype, device):
+    """torch.tensor(values, dtype=dtype, device=device) without the stream sync of a pageable host copy: a pinned
+    staging tensor and a non-blocking copy (the caching host allocator keeps the block until the copy has run)."""
+    host = torch.tensor(values, dtype=dtype)
+    if device.type != "cuda":
+        return host.to(device)
+    return host.pin_memory().to(device, non_blocking=True)
+
+
+def slot_ids_nosync(req_to_token, req_pool_indices, lc_per_req, ratio, device):
+    """(k_slots or None, starts) of the stock per-request loop
+
+        for r, lc in enumerate(lc_per_req):
+            starts.append(start)
+            if lc: chunks.append(req_to_token[req_pool_indices[r], arange(lc) * ratio].to(int64) // ratio); start += lc
+        k_slots = cat(chunks)
+
+    with no host read of device data: request r's lc rows come from one gather at (req_pool_indices[r],
+    (j - starts[r]) * ratio) for j in [starts[r], starts[r] + lc). Requests with lc == 0 contribute no rows."""
+    starts, start = [], 0
+    for lc in lc_per_req:
+        starts.append(start)
+        start += lc
+    if start == 0:
+        return None, starts
+    n = len(lc_per_req)
+    meta = h2d(list(lc_per_req) + starts, torch.int64, device)       # one copy: counts, then starts
+    counts, first = meta[:n], meta[n:]
+    rows = torch.repeat_interleave(req_pool_indices[:n], counts, output_size=start)
+    cols = torch.arange(start, device=device) - torch.repeat_interleave(first, counts, output_size=start)
+    return req_to_token[rows, cols * ratio].to(torch.int64) // ratio, starts
 
 
 def _split_local(indexer, q_fp4, q_sf, k_fp4, k_sf, weights, ks, lens, lengths, q_lengths,
@@ -143,6 +207,7 @@ def make_index_topk_dense(module, quantize_fp4_indexer_tensor, budget):
     CandidateMasks = module.CandidateMasks
     published_masks = module.published_masks
     _DENSE_INDEXER_LOGITS_BUDGET_BYTES = budget
+    _nosync = _nosync_reader()
 
     # ---- begin verbatim from sglang#39187 (deepseek_v4_backend.py @ cb8dd033) ----
 
@@ -171,17 +236,24 @@ def make_index_topk_dense(module, quantize_fp4_indexer_tensor, budget):
         # per-token count (pos + 1) // ratio bounds each row below.
         lc_per_req = [s // ratio for s in seq_lens_cpu]
         req_pool_indices = forward_batch.req_pool_indices.to(torch.int64)
-        slot_chunks, starts, start = [], [], 0
-        for r, lc in enumerate(lc_per_req):
-            starts.append(start)
-            if lc == 0:
-                continue
-            j = torch.arange(lc, device=device)
-            slot_chunks.append(
-                self.req_to_token[req_pool_indices[r], j * ratio].to(torch.int64)
-                // ratio
+        nosync = _nosync()  # ds41 DSV41_INDEXER_NOSYNC (off = the verbatim loop below)
+        if nosync:
+            _k_slots, starts = slot_ids_nosync(
+                self.req_to_token, req_pool_indices, lc_per_req, ratio, device
             )
-            start += lc
+            slot_chunks = [] if _k_slots is None else [_k_slots]
+        else:
+            slot_chunks, starts, start = [], [], 0
+            for r, lc in enumerate(lc_per_req):
+                starts.append(start)
+                if lc == 0:
+                    continue
+                j = torch.arange(lc, device=device)
+                slot_chunks.append(
+                    self.req_to_token[req_pool_indices[r], j * ratio].to(torch.int64)
+                    // ratio
+                )
+                start += lc
         empty_mask = torch.zeros(0, 0, dtype=torch.bool, device=device)
         num_tokens = pos.shape[0]
         # TODO: move this to candidate indexer
@@ -191,7 +263,7 @@ def make_index_topk_dense(module, quantize_fp4_indexer_tensor, budget):
                     request_masks=[empty_mask for _ in lc_per_req]
                 )
             return
-        k_slots = torch.cat(slot_chunks)
+        k_slots = slot_chunks[0] if nosync else torch.cat(slot_chunks)
         k_fp4, k_sf = pool.get_low_ratio_index_k_fp4(layer.layer_id, k_slots)
 
         q = indexer.queries(q_lora, layer.freqs_cis[pos])  # [T, H, 128] fp4 grid
@@ -202,6 +274,7 @@ def make_index_topk_dense(module, quantize_fp4_indexer_tensor, budget):
         weights = indexer.head_weights(x).float()
         compress_lens = ((pos + 1) // ratio).to(torch.int32)
         ks = torch.repeat_interleave(
+            h2d(starts, torch.int32, device) if nosync else
             torch.tensor(starts, dtype=torch.int32, device=device),
             q_lens.to(torch.int64),
             output_size=num_tokens,
@@ -375,3 +448,8 @@ def install(module):
 
         cls.__init__ = __init__
     logger.warning("DSV41 indexer chunked v3 (sglang#39187 verbatim + SG18 prefill TP split=%s) ARMED: <= %d MiB fp32 logits per row chunk, tail-only candidate masks; DSV41_INDEXER_CHUNKED=0 disables", split_on, budget >> 20)
+    if nosync_value(os.environ.get("DSV41_INDEXER_NOSYNC", "0")) or (_ab is not None and getattr(_ab, "ACTIVE", False)):
+        print("DSV41 indexer nosync: DSV41_INDEXER_NOSYNC=%s (in-boot A/B %s): index-source slot ids without host "
+              "syncs when on" % (os.environ.get("DSV41_INDEXER_NOSYNC", "0"),
+                                 "armed, read per call" if _ab is not None and getattr(_ab, "ACTIVE", False) else "off"),
+              flush=True)

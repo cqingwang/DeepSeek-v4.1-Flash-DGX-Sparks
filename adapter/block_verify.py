@@ -15,8 +15,11 @@ q_i = the distribution the draft token was actually sampled from.
 Measured offline on engine-exact p and q (capture schema v4, coding-with-thinking traffic):
 2.927 -> 2.999 tokens per step (+2.5 %).
 
-Random draws come from torch's device generator in the same order on every TP rank, exactly like
-the stock sampler's torch.rand calls, so all ranks take the same decision.
+Random draws come from torch's device generator; this function consumes the same shapes in the same
+order as before. Equal draw consumption does not make rank-local values equal: the TP ranks agree on
+the published decision because SGLang synchronizes the eager sampled accept (DSPARK_ACCEPT_SAMPLE;
+spec_sync_free only skips graph-accept sites). Greedy rows: an all-greedy batch never calls this; in a
+mixed batch it runs on every row and SelectMixedAccept keeps the greedy rows' own AcceptGreedy result.
 """
 import os
 
@@ -50,7 +53,11 @@ def block_accept_probs(X, target_probs, draft_probs, eta=None, gumbel=None, live
     h = torch.empty(bs, g, device=dev)
     if g > 1:
         s = (w[:, :g - 1, None] * target_probs[:, 1:g].float() - draft_probs[:, 1:g].float()).clamp_min(0).sum(-1)
-        h[:, :g - 1] = s / (s + 1 - w[:, :g - 1]).clamp_min(1e-30)
+        # (1 - w) first: exact in FP32 for w in [0.5, 1] (Sterbenz), so S's digits below an ULP of 1
+        # survive the sum. (s + 1) - w rounded S against 1: the effective (clipped) threshold moved by up
+        # to ~0.5 on the rows tested; the raw value was unbounded (w = 1, S < 2^-24 rounds the denominator
+        # to 0 and the 1e-30 floor). Positive S below 1e-30 still meets that inherited floor.
+        h[:, :g - 1] = s / (s + (1 - w[:, :g - 1])).clamp_min(1e-30)
     h[:, g - 1] = w[:, g - 1]
     if eta is None:
         eta = torch.rand(bs, g, device=dev)

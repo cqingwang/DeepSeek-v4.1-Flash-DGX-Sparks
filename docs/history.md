@@ -2,11 +2,53 @@
 
 Every dated table, note and rejected experiment that used to live in the README, moved here unchanged when the README was reduced to the current state (2026-09-24). What changed in which commit is in [CHANGELOG.md](../CHANGELOG.md); the current numbers are in the [README](../README.md#current-results).
 
-All rows below were taken with sparkDash up to 1.8.6. sparkDash 1.8.7 replaced the code prompts (c1 and the concurrent waves), so the code columns here are not comparable with the README's current table; the prose, structured and prefill prompts are unchanged.
+The rows from before the sparkDash 1.8.8 sections were taken with sparkDash up to 1.8.6. sparkDash 1.8.7 replaced the code prompts (c1 and the concurrent waves), so those code columns are not comparable with the 1.8.8 tables; the prose, structured and prefill prompts are unchanged. From v2.6 (2026-10-27) the README reports speedbench only.
+
+## Production 2026-10-23 (v2.5 + NVMe keepalive, main `1059dfe`), sparkDash 1.8.8 and speedbench
+
+The README's results from 2026-10-23 until v2.6, moved here unchanged. sparkDash has not been used since 2026-10-25; later numbers are speedbench only.
+
+Image `Dockerfile.canary-roce` built from `f9a1de4` (SGLang `dsv4.1` `f80c91a4b` + the credited backports, without #45251) plus this release's Engram NVMe keepalive (`adapter/row_store.cpp`), the "Production profile" block of [`.env.tp4.example`](.env.tp4.example) with `EP_SIZE=1`, 1M context, checkpoint [`deepseek-ai/DeepSeek-V4.1-Flash-1017`](https://huggingface.co/deepseek-ai/DeepSeek-V4.1-Flash-1017) at `1bae0e1`, GPU clock capped at 2200 MHz, measured 2026-10-23 on one fresh boot per checkpoint with the host memory compacted first. The abliterated variant of the same checkpoint is a second weights profile in `.env.tp4.example`; its numbers on the same image, profile and protocol follow each table. Speculative decoding makes tok/s depend on the generated text, so other DeepSeek releases give somewhat different numbers on the same prompts.
+
+#### sparkDash 1.8.8
+
+256 new tokens, temperature 0, thinking off.
+
+**Decode, aggregate tok/s (per stream in brackets)**
+
+| prompt type | c1 | c2 | c4 | c8 | c16 |
+|---|---:|---:|---:|---:|---:|
+| prose | **91.3** | 115.0 (58.1) | 174.0 (44.8) | 242.8 (32.0) | 359.7 (24.2) |
+| code | 142.9 | 186.1 (94.1) | 255.2 (66.0) | 341.4 (45.5) | 471.6 (31.9) |
+| structured | 160.8 | 222.2 (114.3) | 215.7 (67.1) | 248.7 (41.7) | 393.5 (35.2) |
+| json | 130.6 | 184.9 (96.3) | 322.8 (82.5) | 461.4 (59.6) | 726.9 (47.2) |
+
+**Prefill, cold, tok/s** (measured on the same image without the NVMe keepalive, which leaves prefill unchanged: cold 388K 67.8 s with it, 67.4 s without)
+
+| 4k | 16k | 32k | 64k | 128k |
+|---:|---:|---:|---:|---:|
+| 4798 | 5976 | 6196 | 6241 | 6291 |
+
+Abliterated checkpoint ([`mrfakename/DeepSeek-V4.1-Flash-1017-abliterated`](https://huggingface.co/mrfakename/DeepSeek-V4.1-Flash-1017-abliterated) `517efab`), same image, profile and protocol, c1: prose 89.0, code 145.2, structured 160.1, json 131.4; c16 aggregate: prose 355.7, code 479.1; prefill 4k-128k 4855-6214 tok/s. Its edit touches only `attn.wo_b` and `shared_experts.w2` of the main layers (the DSpark draft layers are identical), so the two run within a few percent of each other.
+
+**How these were measured.** sparkDash DecodeBench after two discarded warm-up prose c1 runs; c1 is the median of three runs, c4 the median of two, c2 / c8 / c16 one run each (c1 runs: prose 91.2 / 91.4 / 91.3; code 141.7 / 142.9 / 143.3; structured 155.1 / 160.8 / 160.9; json 130.1 / 130.6 / 131.4). sparkDash's prose c1 is a single prompt, and the non-prose types use a different prompt at each concurrency, so per-stream values are not comparable across columns. Prefill: sparkDash prefill bench, cold (salted prompts), after a 4k warm-up, median of the second and third of three runs per length; its filler is one repeated token, so the Engram row cache inflates these numbers ([MiaAI-Lab#21](https://github.com/MiaAI-Lab/DeepSeek-v4.1-Flash-DGX-Sparks/issues/21)).
+
+#### speedbench
+
+[speedbench](https://github.com/knapcio/speedbench) 0.3 (`6733653`), full mode: 73 frozen prompts in six categories (prompt set speedbench-v1), c1, temperature 0, 256 output tokens, thinking off, run on the head against `127.0.0.1:8888`. Decode tok/s, geometric mean over the prompts of each category:
+
+| tok/s | prose | code | structured | agentic | multilingual | long context | all 73 prompts |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| official 1017 | 64.7 | 106.8 | 109.5 | 98.3 | 70.0 | 91.0 | 87.5 |
+| abliterated | 64.3 | 110.2 | 105.1 | 100.6 | 68.4 | 92.2 | 87.6 |
+
+Median time to first token 205 ms (abliterated 208 ms); 73 of 73 prompts valid on both, none failed.
+
+**Correctness checks on the same boot.** Needle retrieval PASS at 124k and 388k tokens (passphrase at 50 % depth; 21 s and 68 s); cold prefill of a 388K-token varied-text prompt 67.8 s (5,720 tok/s); `scripts/qeval.py` 71 / 75 (code 24/25, format 7/7, json 6/8, math 13/14, prose 5/5, reason 16/16); T > 0 scan (`ds_gate.py tscan`, 35 outputs) 0 garbled, 0 errors; `/v1/messages` with the image placeholder token in text and with thinking enabled without a budget: both answered; native `/generate` with top-10 logprobs on 16.5k-40k-token prompts answered. The abliterated boot passed the same checks (qeval 71/75 with the same split, cold 388K 69.0 s), plus `ds_gate.py kld` long and short panels against the stable 1017 image (continuation KL 0.0075 / 0.0126) and the issue #16 accelerated reproducer (`scripts/issue16_repro.py`: 190K-900K cached prefixes with 512-4096 fresh tokens, alternating c1/c4): 1,018 requests in 30 minutes, 0 failures, no CUDA error or Xid on any rank ([docs/issue-16-swa-crash.md](docs/issue-16-swa-crash.md)).
 
 ## Production 2026-10-22 (v2.5, image `f9a1de4`, before the NVMe keepalive), sparkDash 1.8.8
 
-The v2.5 README table: official 1017 checkpoint `1bae0e1`, production profile, one fresh boot, same protocol as the current README.
+The v2.5 README table: official 1017 checkpoint `1bae0e1`, production profile, one fresh boot, same protocol as the 2026-10-23 sparkDash table above.
 
 | prompt type | c1 | c2 | c4 | c8 | c16 |
 |---|---:|---:|---:|---:|---:|

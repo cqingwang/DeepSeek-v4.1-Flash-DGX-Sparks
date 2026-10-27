@@ -1,0 +1,58 @@
+{
+ "package": "b12x.comm.roce_twoshot",
+ "summary": "Copy of the production b12x.comm.roce (RoCEnante one-shot, unchanged and still the default) with the pipelined two-shot all-reduce of flashinfer-ai/flashinfer#6915 ported in. Selected only by DSV41_ROCE_TWOSHOT=1 (runtime/roce_twoshot_adapt.py); routed per call by DSV41_ROCE_TWOSHOT_ROWS (adapter/roce_twoshot.py, default 0 = every all-reduce one-shot).",
+ "license": "Apache-2.0 (runtime/b12x/LICENSE). FlashInfer: Copyright 2025-2026 NVIDIA; Copyright 2023-2026 FlashInfer community (FlashInfer NOTICE). b12x / RoCEnante: local-inference-lab.",
+ "source": {
+  "pull_request": "https://github.com/flashinfer-ai/flashinfer/pull/6915",
+  "title": "feat(experimental/b12x): extend RoCE collectives and neighbor-ring transport",
+  "author": "Luke Alonso (lukealonso)",
+  "state_when_ported": "OPEN",
+  "head_commit": "effeb496bbe2301bf23bc0a0510cbd3e0e0f2703",
+  "base_commit": "c1282f0cf0ba6651de711a22fbbf736e35a364f3",
+  "path": "flashinfer/experimental/b12x/comm/roce/",
+  "upstream_sha256": {
+   "_twoshot_cute.py": "7a7995424ed4f13ac14f5e89c2defd9571c2b0dbf7a858c2fd581253fe54b88a",
+   "_roce_proxy.c": "8dab010e63fc6e5a5670b002135432b19241619b707fa2467ef517c42b0f49e4",
+   "roce_oneshot.py": "1b4f1da89b5690bf236ce368afe60468c3f36f758be775ca08fc6f4b20ddc707",
+   "_oneshot_cute.py": "f4277ee4e8e64d6ec6dbdfe5814eb88bf0547cc0bc54f19344e07df06d32fa5a",
+   "_allgather_cute.py": "06d0ca8e7dc8803ff3dec12cbe4e8ddc11727d28953e85654272156ce72e00ce",
+   "_proxy.py": "8a47e04f2059a1ef52df0e9b0ff502a5e41ee86a63337213465143521e93dab0"
+  }
+ },
+ "base_of_the_copy": {
+  "package": "b12x.comm.roce (runtime/b12x/source-provenance.json: b12x 85d3681 + RoCEnante 081b2359, ds41 columns all-gather)",
+  "production_sha256": {
+   "__init__.py": "17070372720121037728d2a3fdd9f53739929c751f1e17f16a124ce8991c589e",
+   "_allgather_cute.py": "4ec1bb11cdba1f0a23c30b9cebc366381417a1cf18eef7f7dbbb2567190bdb33",
+   "_cute_intrinsics.py": "11737796a80a0966c04ee347d5ef83a662bde16dc188022134d2cbaa1567410b",
+   "_oneshot_cute.py": "e796a354c363be8153b9112f5b46b6249c7762e0293c2e3d8541ba036bcf3802",
+   "_proxy.py": "db0aaca54df8589f65500ee3a07a39a1d005262d9821b3f9e01ebced7523ced0",
+   "_roce_proxy.c": "a35f54cf75d6abf2427c5d144300647685816060348883d2cbf51d153efc5c70",
+   "api.py": "aaa3dac7a1e06cd8ee54ac1d722dfa1a58d1c1a02118f12b54ed9b763d6fed68",
+   "roce_oneshot.py": "df4bcacb3acb6d9a43955857238975285dd185eacf3db6493da481b563aeb213"
+  }
+ },
+ "ported": [
+  "_twoshot_cute.py: the upstream kernel body (doorbell, chunked staging, owner reduction in FP32 rank order, chunked all-gather, pipe_done-gated epoch) unchanged, behind a ds41 sequence-0 guard",
+  "_roce_proxy.c: per-slot op kind, the pipe region (pipe_send, pipe_recv[src][2], pipe_flag[2][src][chunk][hca]), post_striped, post_pipe_chunk, run_pipe_op with the pipe_done release, kind dispatch in proxy_main",
+  "roce_oneshot.py: pipe_bytes / pipe_blocks / pipe_chunk_bytes, the counter layout, pipe geometry and the two-shot launch",
+  "_oneshot_cute.py, _allgather_cute.py (both kernels): kind[slot] = 0 before the doorbell"
+ ],
+ "ds41_changes": [
+  "a separate package so the production one-shot stays byte-identical; ABI 103 (stock 3) and a distinct cached proxy library name",
+  "ported onto the older vendored RoCEnante (no _routes/_tuning/_preparation, no ring or variable-length gathers, HCA = rail); ctrl region grown to 4096 bytes",
+  "imports adapted to this b12x _lib (functools.cache instead of program_cache / attach_programs); compile ids comm.roce_twoshot.*",
+  "routing by rows (pipe_min_rows / pipe_min_rows_fn, _twoshot_plan.py) instead of a byte threshold; pipe_bytes <= max_size so misaligned tensors stage through the one-shot alignment scratch (no pointer-dependent routing); explicit twoshot= override for the probe",
+  "a two-shot op after the 32-bit sequence wrapped fails closed (ready words, pipe flags and pipe_done compare equal to seq, exact until a wrap); upstream instead stops every op at INT32_MAX, which would stop a long-running server; one-shot ops keep the stock behaviour",
+  "not ported from the same PR: the neighbor-ring transport, the variable-length all-gather and the sequence-space exhaustion stop",
+  "every kernel of the copy (one-shot, both all-gathers, two-shot) poisons the runtime at sequence 0 before touching a flag or payload (error word and peer 0xFFFFFFFF, poison 0xFFFFFFFF, epoch frozen); the host refuses further collectives once the doorbell sequence is within 2^20 of the wrap (sticky), so in practice no kernel reaches sequence 0",
+  "ROCE_TWOSHOT_ROUTE is logged once per (threshold, rows, bytes, dtype), so each in-boot A/B variant's routed shapes are provable"
+ ],
+ "verified_offline_2026_10_25": [
+  "tests/test_roce_twoshot.py: production package hashes; copy kernels differ from production only by the kind word; kernel/proxy ctrl words; owner reduction uses the one-shot helpers in rank order; 4-rank byte-level protocol model bit-identical to the one-shot (uneven, empty shards, 64-chunk cap); routing; adapter; overlay selection",
+  "the proxy builds with gcc -Wall -Wextra -Werror against libibverbs (Linux arm64); roce_layout matches the Python model",
+  "every CuTe kernel of the copy (one-shot, all-gather, two-shot bf16/fp32, ranks 0 and 3) compiles for sm_121a with nvidia-cutlass-dsl 4.6.3, no GPU: 33-40 registers, no local memory; the copy's one-shot SASS differs from production by one STG.E.STRONG.SYS (the kind word)",
+  "tests/test_roce_twoshot.py SequenceWrap simulates every copy kernel's control flow at sequence 0 against CPU words with every flag reporting ready (no flag or payload touched, error/poison set, epoch frozen; fails with the guard removed) and the host guard; all kernels recompile for sm_121a with the same registers"
+ ],
+ "verified_on_fleet_2026_10_26": "four DGX Sparks (GB10, TP4, CX-7 through a RoCE switch), DSV41_ROCE_TWOSHOT_ROWS=18, B12X_ROCE_PIPE_BLOCKS=4, B12X_ROCE_PIPE_CHUNK_BYTES=65536: T=0 outputs with top-20 logprobs byte-identical to production on 75 qeval prompts in a fresh-boot A / B / A' bracket; speedbench load c16 +3.7 to +4.9 %, c1 / c4 within noise"
+}
