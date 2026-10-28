@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""CPU checks for RoCEnante on a switchless ring (b12x.comm.roce_ring + scripts/ring_mesh/plan.py).
+"""CPU checks for RoCEnante on a switchless ring (b12x.comm.roce_ring + spark/ring/mesh/plan.py).
 
 - B12X_ROCE_PEER_HCA_MAPS: one ';'-separated map per rank is picked by rank, B12X_ROCE_PEER_HCA_MAP
   still wins, a wrong count refuses.
@@ -57,7 +57,7 @@ paths = _load(
     "roce_ring_paths",
     *(path / "_path_config.py" for path in ROCE_RING_CANDIDATES),
 )
-plan = _load("ring_mesh_plan", ROOT / "scripts/ring_mesh/plan.py")
+plan = _load("ring_mesh_plan", ROOT.parent / "ring/mesh/plan.py")
 
 
 class Uint32(int):
@@ -207,6 +207,12 @@ def synthetic_topology():
             "flow_steering_mode": "hmfs",
             "hairpin_num_queues": 4,
             "hairpin_queue_size": 8192,
+            "mesh": {
+                "runtime_root": "/opt/spark-ring-mesh",
+                "state_root": "/run/spark-ring-mesh",
+                "sparkring_commit": "f16b5f43208c188c018c43820ccf52955006d1a5",
+                "probe_source_sha256": "8684a6961b8e86aa474fa2310ff71e4cdf219a63a72ceb5593b2f95e54812792",
+            },
         },
     }
 
@@ -282,12 +288,17 @@ class Plan(unittest.TestCase):
                 ),
                 [],
             )
-        fabric = plan.topology(self.invs, self.document, self.order)
+        fabric = plan.topology(
+            self.invs,
+            self.document,
+            self.order,
+            self.document["ring"]["mesh"]["state_root"],
+        )
         self.assertEqual(fabric["roce_gid_index"], 7)
         self.assertEqual(fabric["expected_ethernet_mtu"], 9000)
         for rank, name in enumerate(self.order):
             generated = fabric["ranks"][rank]
-            self.assertEqual(generated["ssh_alias"], self.document["nodes"][name]["ssh"])
+            self.assertEqual(generated["ssh_alias"], name)
             self.assertEqual(generated["management_netdev"], f"management-rank-{rank}")
             self.assertEqual(generated["ports"]["clockwise"][0]["peer_rank"], (rank + 1) % 4)
             self.assertEqual(generated["ports"]["counter_clockwise"][0]["peer_rank"], (rank - 1) % 4)

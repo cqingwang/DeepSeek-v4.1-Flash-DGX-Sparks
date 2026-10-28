@@ -646,21 +646,20 @@ the two before it (the fast loader's boot-to-boot spread).
    `hairpin_num_queues` 4, `flow_steering_mode` `hmfs`, eswitch `legacy`, `hw-tc-offload on` on all
    four fabric netdevs (sparkring's
    [driver configuration notes](https://github.com/FujitsuPolycom/sparkring/blob/main/docs/GLM53_SPARK_MTP3_MESH_QUICKSTART.md#connectx-7-driver-configuration-for-hardware-forwarding)).
-   `scripts/ring_mesh/inventory.sh` prints all of it per node; `plan.py` refuses a node whose links,
+   `spark/ring/mesh/inventory.sh` prints all of it per node; `plan.py` refuses a node whose links,
    MTU, GID, TC offload or steering mode do not match.
 2. **The source marker**, built on every node from a sparkring checkout at `f16b5f4`
    (source sha256 `8684a696…`; it built to `2828c07e…` here, the binary sparkring records):
 
    ```bash
    git clone https://github.com/FujitsuPolycom/sparkring ~/sparkring && git -C ~/sparkring checkout f16b5f4
-   sudo install -d /opt/dsv41-mesh/bin
-   cc -O2 -Wall -Wextra ~/sparkring/spark_transport/fabric/cx7_hairpin_diagonal/native/mlx5_rdma_tx_rewrite_probe.c \
-      -o /tmp/mlx5-rdma-tx-rewrite-probe -libverbs -lmlx5 && sudo install -m 755 /tmp/mlx5-rdma-tx-rewrite-probe /opt/dsv41-mesh/bin/
+   # 主机运行目录来自 config.yaml.common.ring.mesh.runtime_root；不要手工复制到 target runtime_assets。
+   python3 spark/ring/mesh/install.py
    ```
 3. **The plan**, read-only, from the managed topology and live inventory:
 
    ```bash
-   python3 scripts/ring_mesh/plan.py --sparkring ~/sparkring --out ring-mesh
+   python3 spark/ring/mesh/plan.py --sparkring ~/sparkring --out ring-mesh
    ```
 
    `plan.py` reads rank order, both fabric planes, addresses, HCA/GID and management SSH targets
@@ -675,17 +674,13 @@ the two before it (the fast loader's boot-to-boot spread).
    fabric function); `$HOST` is that node's name as given to `plan.py`:
 
    ```bash
-   sudo install -m 755 ring-mesh/mesh-up-$HOST.sh /opt/dsv41-mesh/mesh-up.sh
-   sudo install -m 755 ring-mesh/mesh-down-$HOST.sh /opt/dsv41-mesh/mesh-down.sh
-   sudo install -m 755 scripts/ring_mesh/hairpin.sh /opt/dsv41-mesh/
-   sudo install -m 644 scripts/ring_mesh/dsv41-mesh.service scripts/ring_mesh/dsv41-mesh-marker@.service /etc/systemd/system/
-   sudo systemctl daemon-reload && sudo systemctl enable --now dsv41-mesh
+   python3 spark/ring/mesh/install.py --sparkring ~/sparkring --apply
    ```
 
-   `dsv41-mesh.service` runs at every boot: it waits for the fabric links, applies the configured
+   `spark-ring-mesh.service` runs at every boot: it waits for the fabric links, applies the configured
    `hairpin_queue_size` (a `driverinit` parameter that resets at boot), then applies routes, rules
    and markers; `mesh-up.sh` refuses a rule that did not land in hardware. The current
-   `scripts/ring_mesh/hairpin.sh` gets each node's devices, MTU, GID and queue size from the parent
+   `spark/ring/mesh/hairpin.sh` gets each node's devices, MTU, GID and queue size from the parent
    `ring-local-fabric` command. Applying it reinitializes RDMA functions: only run it with the
    engine stopped and after reviewing the parent config and a recovery plan. Do not change the
    queue size as part of ordinary deployment.
@@ -723,7 +718,7 @@ configuration and require a controlled, same-workload A/B before changing.
 
 ### Mesh pitfalls
 
-- **Never re-initialise a fabric function, stop `dsv41-mesh` or a marker while the engine runs.**
+- **Never re-initialise a fabric function, stop `spark-ring-mesh` or a marker while the engine runs.**
   Opposite-node traffic stops, and a re-init drops every RDMA queue pair on that function; the RoCE
   health check then fails the step. `hairpin.sh` skips functions already at the value, so re-running
   it with the same value is safe.
@@ -748,7 +743,7 @@ configuration and require a controlled, same-workload A/B before changing.
   on dedicated X925 cores neutral.
 
 Rollback: `DSV41_ROCE_RING=0 SGLANG_ROCE_ALLREDUCE=0` without `DSV41_ROCE_GATHER` in `.env.tp4`, then
-`sudo systemctl disable --now dsv41-mesh` on every node (removes the markers, rules and routes).
+`sudo systemctl disable --now spark-ring-mesh` on every node (removes the markers, rules and routes).
 
 ## Measured
 
