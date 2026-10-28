@@ -1,0 +1,177 @@
+{
+  "source": {
+    "product": "SparkDash PrefillBench",
+    "version": "1.8.8"
+  },
+  "target": {
+    "sparkId": "spark-a",
+    "host": "192.168.2.180",
+    "port": 8888,
+    "modelId": "deepseek-v4.1-flash",
+    "imageId": "sha256:718f5c79a371221fa8d8c0cb503329c5d4f4e7e585501991d2e01c9c53673c0d",
+    "network": "local A-B-C-D switchless ring"
+  },
+  "protocol": {
+    "contextSizes": [
+      65536
+    ],
+    "jobs": 3,
+    "statistic": "arithmetic mean across job medians",
+    "filler": "SparkDash repeated-filler benchmark"
+  },
+  "runs": [
+    {
+      "run": 1,
+      "benchId": "dee297a0-6723-4b4d-b74f-7ba28cf8938a",
+      "job": {
+        "benchId": "dee297a0-6723-4b4d-b74f-7ba28cf8938a",
+        "sparkId": "spark-a",
+        "status": "completed",
+        "startedAt": 1793158497615,
+        "completedAt": 1793158524010,
+        "config": {
+          "port": 8888,
+          "modelId": "deepseek-v4.1-flash",
+          "contextSizes": [
+            65536
+          ],
+          "contextLength": null
+        },
+        "progress": {
+          "currentContext": null,
+          "completedLevels": 1,
+          "totalLevels": 1,
+          "message": "Done"
+        },
+        "results": [
+          {
+            "targetTokens": 65536,
+            "promptTokens": 65560,
+            "promptChars": 279696,
+            "prefillTps": 5372.53,
+            "method": "ttft",
+            "cachedTokens": 0,
+            "samples": 2,
+            "samplesRequested": 2,
+            "lowConfidence": false,
+            "overheadMs": 250.32,
+            "ttftMs": 12453.13,
+            "ttftContentMs": 12453.13,
+            "completionTokens": 2,
+            "durationMs": 23738.08,
+            "model": "deepseek-v4.1-flash",
+            "error": null
+          }
+        ],
+        "error": null,
+        "durationMs": 26395,
+        "owner": null
+      }
+    },
+    {
+      "run": 2,
+      "benchId": "2b2f3882-56cc-4d02-9d09-a446403adc52",
+      "job": {
+        "benchId": "2b2f3882-56cc-4d02-9d09-a446403adc52",
+        "sparkId": "spark-a",
+        "status": "completed",
+        "startedAt": 1793158524690,
+        "completedAt": 1793158549348,
+        "config": {
+          "port": 8888,
+          "modelId": "deepseek-v4.1-flash",
+          "contextSizes": [
+            65536
+          ],
+          "contextLength": null
+        },
+        "progress": {
+          "currentContext": null,
+          "completedLevels": 1,
+          "totalLevels": 1,
+          "message": "Done"
+        },
+        "results": [
+          {
+            "targetTokens": 65536,
+            "promptTokens": 65556,
+            "promptChars": 279696,
+            "prefillTps": 5998.65,
+            "method": "ttft",
+            "cachedTokens": 0,
+            "samples": 2,
+            "samplesRequested": 2,
+            "lowConfidence": false,
+            "overheadMs": 290.8,
+            "ttftMs": 11219.26,
+            "ttftContentMs": 11219.26,
+            "completionTokens": 2,
+            "durationMs": 22480.4,
+            "model": "deepseek-v4.1-flash",
+            "error": null
+          }
+        ],
+        "error": null,
+        "durationMs": 24658,
+        "owner": null
+      }
+    },
+    {
+      "run": 3,
+      "benchId": "26cc8235-6680-4807-917a-04c69d33980f",
+      "job": {
+        "benchId": "26cc8235-6680-4807-917a-04c69d33980f",
+        "sparkId": "spark-a",
+        "status": "completed",
+        "startedAt": 1793158549534,
+        "completedAt": 1793158574239,
+        "config": {
+          "port": 8888,
+          "modelId": "deepseek-v4.1-flash",
+          "contextSizes": [
+            65536
+          ],
+          "contextLength": null
+        },
+        "progress": {
+          "currentContext": null,
+          "completedLevels": 1,
+          "totalLevels": 1,
+          "message": "Done"
+        },
+        "results": [
+          {
+            "targetTokens": 65536,
+            "promptTokens": 65561,
+            "promptChars": 279696,
+            "prefillTps": 5981.47,
+            "method": "ttft",
+            "cachedTokens": 0,
+            "samples": 2,
+            "samplesRequested": 2,
+            "lowConfidence": false,
+            "overheadMs": 264.55,
+            "ttftMs": 11225.23,
+            "ttftContentMs": 11225.23,
+            "completionTokens": 2,
+            "durationMs": 22499.54,
+            "model": "deepseek-v4.1-flash",
+            "error": null
+          }
+        ],
+        "error": null,
+        "durationMs": 24705,
+        "owner": null
+      }
+    }
+  ],
+  "summary": {
+    "values": [
+      5372.53,
+      5998.65,
+      5981.47
+    ],
+    "mean": 5784.216666666666,
+    "target": 65536
+  }
+}

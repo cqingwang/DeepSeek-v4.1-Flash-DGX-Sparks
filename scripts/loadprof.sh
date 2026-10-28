@@ -6,7 +6,8 @@
 #   sed 's/readMB=//' disk.log | awk '{if(prev!=""){printf "%s +%.2f GB/s\n", $1, ($2-prev)/5000}; prev=$2}'
 set -u
 OUT=${1:-~/loadprof}; mkdir -p "$OUT"
-L=${LOG:-logs-tp4/dsv41.log}
+RUNTIME_ASSETS=${RUNTIME_ASSETS:-/opt/runtime_assets/deepseek_v4.1_flash_switchless}
+L=${LOG:-$RUNTIME_ASSETS/logs/dsv41.log}
 until docker ps --format '{{.Names}}' | grep -q '^dsv41-head$'; do sleep 2; done
 until grep -aq "Load weight begin" "$L" 2>/dev/null; do sleep 2; done
 ( while true; do echo "$(date +%T) $(awk '$3=="nvme0n1"{printf "readMB=%.0f", $6*512/1e6}' /proc/diskstats) $(grep -E 'MemFree|MemAvailable|^Cached' /proc/meminfo | tr -s ' ' | tr '\n' ' ')"; sleep 5; done ) > "$OUT/disk.log" 2>&1 &

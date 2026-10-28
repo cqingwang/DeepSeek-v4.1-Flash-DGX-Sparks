@@ -26,41 +26,43 @@ set -uo pipefail
 LABEL="${1:?usage: armsuite.sh <label> [--long]}"
 LONG=0
 [[ "${2:-}" == "--long" ]] && LONG=1
-ROOT="$HOME/dsv41-4x-spark"
-KEY="$(cat "$ROOT/state-tp4/api-key")"
-OUT="$ROOT/bench-results/arms/$LABEL"
+TARGET_ID="${TARGET_ENGINE_ID:-deepseek_v4.1_flash_switchless}"
+DEPLOY_ROOT="${DEPLOY_ROOT:-/opt/spark/$TARGET_ID}"
+RUNTIME_ASSETS="${RUNTIME_ASSETS:-/opt/runtime_assets/$TARGET_ID}"
+KEY="$(cat "$RUNTIME_ASSETS/state/api-key")"
+OUT="$RUNTIME_ASSETS/results/arms/$LABEL"
 mkdir -p "$OUT"
 export MODEL=deepseek-v4.1-flash
 
 # Node list and ssh user come from the profile, not from literals: the same
 # checkout drives a 3-node and a 4-node fleet, and a hard-coded list goes stale.
-NODES="$(sed -n 's/^HEAD_IP=//p; s/^WORKER_IPS=//p' "$ROOT/.env.tp4" | tr -d '"' | tr '\n' ' ')"
+NODES="$(sed -n 's/^HEAD_IP=//p; s/^WORKER_IPS=//p' "$DEPLOY_ROOT/.env.tp4" | tr -d '"' | tr '\n' ' ')"
 [[ -n "${NODES// /}" ]] || NODES="$(hostname -I | awk '{print $1}')"
-SSH_USER="$(sed -n 's/^WORKER_USER=//p' "$ROOT/.env.tp4" | tr -d '"' | head -1)"
+SSH_USER="$(sed -n 's/^WORKER_USER=//p' "$DEPLOY_ROOT/.env.tp4" | tr -d '"' | head -1)"
 : "${SSH_USER:=$(id -un)}"
 
 {
   echo "=== arm $LABEL @ $(date '+%F %T %Z') ==="
-  echo "--- overlay image: $(docker image inspect dsv41-4x-spark:local --format '{{.Id}}' 2>/dev/null)"
-  echo "--- engine env: $(docker exec dsv41-head sh -c 'echo "FLASHMLA_BACKEND=$SGLANG_SM120_FLASHMLA_BACKEND"' 2>/dev/null)"
+  echo "--- overlay image: $(docker image inspect lmsysorg/sglang:dsv41 --format '{{.Id}}' 2>/dev/null)"
+  echo "--- engine env: $(docker exec "$TARGET_ID-r0" sh -c 'echo "FLASHMLA_BACKEND=$SGLANG_SM120_FLASHMLA_BACKEND"' 2>/dev/null)"
 } | tee "$OUT/meta.txt"
 
 echo "--- [1/5] greedy fingerprint"
-URL=http://127.0.0.1:8899/v1/chat/completions API_KEY="$KEY" \
-  python3 "$ROOT/scripts/verify/fingerprint.py" 2>&1 | tee "$OUT/fingerprint.txt"
+URL=http://127.0.0.1:8888/v1/chat/completions API_KEY="$KEY" \
+  python3 "$DEPLOY_ROOT/scripts/verify/fingerprint.py" 2>&1 | tee "$OUT/fingerprint.txt"
 
 echo "--- [2/5] pure decode (sparkDash protocol, n=9)"
-URL=http://127.0.0.1:8899/v1 API_KEY="$KEY" MAX_TOKENS=256 ROUNDS=9 \
-  python3 "$ROOT/bench/prose_bench_sparkdash.py" 2>&1 | tee "$OUT/prose.txt"
+URL=http://127.0.0.1:8888/v1 API_KEY="$KEY" MAX_TOKENS=256 ROUNDS=9 \
+  python3 "$DEPLOY_ROOT/bench/prose_bench_sparkdash.py" 2>&1 | tee "$OUT/prose.txt"
 
 echo "--- [3/5] prefill gradient 8K/32K/100K"
 for T in 8000 32000 100000; do
-  docker exec dsv41-head python3 /opt/dsv41/scripts/verify/prefill_distinct.py "$T" 1 2>&1 \
+  docker exec "$TARGET_ID-r0" python3 /opt/dsv41/scripts/verify/prefill_distinct.py "$T" 1 2>&1 \
     | tee -a "$OUT/prefill.txt"
 done
 
 echo "--- [4/5] concurrency + TTFT (direct 8899)"
-python3 "$ROOT/bench/bench_tp.py" --base http://127.0.0.1:8899/v1 --model deepseek-v4.1-flash \
+python3 "$DEPLOY_ROOT/bench/bench_tp.py" --base http://127.0.0.1:8888/v1 --model deepseek-v4.1-flash \
   --key "$KEY" --conc 1,2,4,8 --max-tokens 400 --prompt-type code 2>&1 | tee "$OUT/conc.txt"
 
 echo "--- [5/5] idle memory floor (every node in the profile)"
@@ -77,7 +79,7 @@ done | tee "$OUT/mem.txt"
 
 if [[ "$LONG" -eq 1 ]]; then
   echo "--- [6/6] long-context needles under memguard (600K, 900K)"
-  nohup python3 "$ROOT/scripts/verify/memguard.py" "$OUT/memguard.log" 1.5 >/dev/null 2>&1 &
+  nohup python3 "$DEPLOY_ROOT/scripts/verify/memguard.py" "$OUT/memguard.log" 1.5 >/dev/null 2>&1 &
   GUARD=$!
   sleep 2
   for spec in "600000 21" "900000 22"; do

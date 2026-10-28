@@ -267,7 +267,6 @@ $*"; }
         self.assertIn('ssh -n -o BatchMode=yes "$REMOTE_USER@$target_management" "$REMOTE_VERIFY_AND_LOAD"', source)
         self.assertNotIn('ssh -n -o BatchMode=yes -o ConnectTimeout=15 -b "$source_fabric"', source)
         self.assertIn("docker image inspect --format '{{.Id}}'", source)
-        self.assertIn('archive_image_id "$IMAGE_ARCHIVE"', source)
         self.assertIn('archive_image_id "$PARTIAL_ARCHIVE"', source)
         self.assertIn('sha256sum -c -', source)
         self.assertIn('REMOTE_VERIFY_AND_LOAD', source)

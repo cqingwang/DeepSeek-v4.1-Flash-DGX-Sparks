@@ -121,7 +121,8 @@ HF_REVISION="${HF_REVISION:-fb2764a5cf321eaa5070ca8f9e892818f477c16d}"
 EXPECTED_SHARDS="${EXPECTED_SHARDS:-48}"
 
 BASE_IMAGE="${BASE_IMAGE:-lmsysorg/sglang:dev-dsv41}"
-IMAGE="${IMAGE:-dsv41-3x-spark:local}"
+IMAGE="${IMAGE:-lmsysorg/sglang:dsv41}"
+MODEL_CONTAINER_PATH="${MODEL_CONTAINER_PATH:-/models/DeepSeek-V4.1-Flash-1017}"
 # What `build` compiles, and extra flags for it. A site that runs one of the optional
 # canary images sets BUILD_DOCKERFILE=Dockerfile.canary so `./start.sh build` produces
 # $IMAGE from the recipe the profile names instead of retagging it with the base one;
@@ -132,6 +133,7 @@ if [[ -n "${SPARK_BUILD_ARGS:-}" ]]; then
   BUILD_ARGS="${BUILD_ARGS:+$BUILD_ARGS }$SPARK_BUILD_ARGS"
 fi
 SPARK_BUILD_NETWORK="${SPARK_BUILD_NETWORK:-default}"
+SPARK_BUILDX_BUILDER="${SPARK_BUILDX_BUILDER:-}"
 container_name_for_rank() { printf '%s-r%s' "$TARGET_CONTAINER_PREFIX" "$1"; }
 if [[ -n "${TARGET_CONTAINER_PREFIX:-}" ]]; then
   if [[ -n "${TARGET_ENGINE_ID:-}" && "$TARGET_CONTAINER_PREFIX" != "$TARGET_ENGINE_ID" ]]; then
@@ -175,8 +177,13 @@ DSV41_STATS_SECONDS="${DSV41_STATS_SECONDS:-60}"
 DSPARK_SPS_TABLE="${DSPARK_SPS_TABLE:-/state/dspark_sps.json}"
 DSPARK_STS_TABLE="${DSPARK_STS_TABLE:-/state/dspark_sts.json}"
 # Node-local repacked Engram shards (see scripts/pack_engram.py). ~68 GiB/node.
-ENGRAM_DIR="${ENGRAM_DIR:-$HOME/dsv41-engram}"
-WORKER_ENGRAM_DIR="${WORKER_ENGRAM_DIR:-$WORKER_DIR/engram}"
+RUNTIME_ASSETS="${RUNTIME_ASSETS:-$HOME/.local/share/spark/runtime_assets/${TARGET_ENGINE_ID:-deepseek_v4.1_flash_switchless}}"
+STATE_DIR="${STATE_DIR:-$RUNTIME_ASSETS/state}"
+LOG_DIR="${LOG_DIR:-$RUNTIME_ASSETS/logs}"
+RESULTS_DIR="${RESULTS_DIR:-$RUNTIME_ASSETS/results}"
+CACHE_DIR="${CACHE_DIR:-$RUNTIME_ASSETS/cache}"
+ENGRAM_DIR="${ENGRAM_DIR:-$RUNTIME_ASSETS/engram}"
+WORKER_ENGRAM_DIR="${WORKER_ENGRAM_DIR:-$ENGRAM_DIR}"
 DSV41_PACKED_DIR="${DSV41_PACKED_DIR:-/engram}"
 CONTEXT_LENGTH="${CONTEXT_LENGTH:-409600}"
 MEM_FRACTION_STATIC="${MEM_FRACTION_STATIC:-0.95}"
@@ -195,8 +202,6 @@ SKIP_VERIFY="${SKIP_VERIFY:-1}"
 SKIP_SMOKE="${SKIP_SMOKE:-0}"
 SMOKE_QUICK="${SMOKE_QUICK:-1}"
 API_KEY="${API_KEY:-}"
-STATE_DIR="${STATE_DIR:-$ROOT/state}"
-LOG_DIR="${LOG_DIR:-$ROOT/logs}"
 SERVE_LOG="${SERVE_LOG:-$LOG_DIR/dsv41.log}"
 REMOTE_PY="$ROOT/scripts/remote.py"
 NFS_VOLUME="${NFS_VOLUME:-dsv41-weights}"
@@ -228,7 +233,18 @@ warn() { echo "${YELLOW}[!]${NC} $*"; }
 err()  { echo "${RED}[x]${NC} $*" >&2; }
 die()  { err "$@"; exit 1; }
 
-mkdir -p "$LOG_DIR" "$STATE_DIR"
+if [[ "${RUNTIME_ASSETS_MANAGED:-0}" == 1 ]]; then
+  [[ "$RUNTIME_ASSETS" == /opt/runtime_assets/* ]] \
+    || die "managed runtime_assets 必须位于 /opt/runtime_assets/<target>: $RUNTIME_ASSETS"
+  [[ "$(basename "$RUNTIME_ASSETS")" == "${TARGET_ENGINE_ID:?managed target id is required}" ]] \
+    || die "runtime_assets 目录名必须与 TARGET_ENGINE_ID 完全一致: $RUNTIME_ASSETS"
+  [[ "$STATE_DIR" == "$RUNTIME_ASSETS"/* && "$LOG_DIR" == "$RUNTIME_ASSETS"/* \
+     && "$RESULTS_DIR" == "$RUNTIME_ASSETS"/* && "$CACHE_DIR" == "$RUNTIME_ASSETS"/* \
+     && "$ENGRAM_DIR" == "$RUNTIME_ASSETS"/* \
+     && "$WORKER_ENGRAM_DIR" == "$RUNTIME_ASSETS"/* ]] \
+    || die "managed runtime 子目录必须全部位于 runtime_assets/<target> 下"
+fi
+mkdir -p "$LOG_DIR" "$STATE_DIR" "$RESULTS_DIR" "$CACHE_DIR" "$ENGRAM_DIR"
 
 # shellcheck source=files/nfs-share.sh
 source "$ROOT/files/nfs-share.sh"
@@ -278,8 +294,8 @@ worker_model_has_weights() {
 
 worker_model_mount_spec() {
   case "${WEIGHTS_MODE:-volume}" in
-    local) printf 'type=bind,source=%s,target=%s,readonly' "$WORKER_MODEL_DIR" "/models/DeepSeek-V4.1-Flash" ;;
-    volume) printf 'type=volume,source=%s,target=%s,readonly' "$NFS_VOLUME" "/models/DeepSeek-V4.1-Flash" ;;
+    local) printf 'type=bind,source=%s,target=%s,readonly' "$WORKER_MODEL_DIR" "$MODEL_CONTAINER_PATH" ;;
+    volume) printf 'type=volume,source=%s,target=%s,readonly' "$NFS_VOLUME" "$MODEL_CONTAINER_PATH" ;;
     *) return 2 ;;
   esac
 }
@@ -382,34 +398,34 @@ gid_index_remote() {
 }
 
 docker_common_args() {
-  local -n _a=$1
   local src hip gid _kv managed_tp4_ring=0
+  local -a _args=()
   src=$(model_src)
   hip="$2"
   gid="$3"
   [[ -d "$src" ]] || die "model mount src missing: $src"
   [[ "${DSV41_LAUNCHER:-}" == tp4 && "$NCCL_SWITCHLESS_RING_ONLY" == 1 ]] \
     && managed_tp4_ring=1
-  _a+=(
+  _args+=(
     --network host --ipc host --privileged --cap-add IPC_LOCK --gpus all
     --shm-size "${SHM_SIZE:-32g}"
     --ulimit "memlock=-1:-1" --ulimit stack=67108864
     --device /dev/infiniband:/dev/infiniband
-    -v "$src:/models/DeepSeek-V4.1-Flash:ro"
+    -v "$src:$MODEL_CONTAINER_PATH:ro"
     -v "$STATE_DIR:/state"
-    -v "$HOME/.cache:/root/.cache"
+    -v "$CACHE_DIR:/root/.cache"
     -e "OFFLOAD_MODE=$OFFLOAD_MODE"
     -e "DSV41_CACHE_GIB=$DSV41_CACHE_GIB"
     -e "DSV41_IO_THREADS=$DSV41_IO_THREADS"
     -e "DSV41_RESIDENT_SCALES=$DSV41_RESIDENT_SCALES"
     -e "DSV41_CACHE_WAYS=$DSV41_CACHE_WAYS"
     -e "DSV41_STATS_SECONDS=$DSV41_STATS_SECONDS"
-    -v "$ENGRAM_DIR:/engram"
+    -v "$ENGRAM_DIR:/engram:ro"
     -e "DSV41_PACKED_DIR=$DSV41_PACKED_DIR"
     -e "DSPARK_SPS_TABLE=$DSPARK_SPS_TABLE"
     -e "DSPARK_STS_TABLE=$DSPARK_STS_TABLE"
-    -e "DSV41_SOURCE=/models/DeepSeek-V4.1-Flash"
-    -e "MODEL_PATH=/models/DeepSeek-V4.1-Flash"
+    -e "DSV41_SOURCE=$MODEL_CONTAINER_PATH"
+    -e "MODEL_PATH=$MODEL_CONTAINER_PATH"
     -e "STATE_PATH=/state"
     -e "SERVER_PORT=$PORT"
     -e "NNODES=$NNODES"
@@ -446,7 +462,6 @@ docker_common_args() {
     -e "DSV41_SHARED_PAD_BUF_ROWS=${DSV41_SHARED_PAD_BUF_ROWS:-256}"
     -e "SGLANG_FLASHINFER_MOE_FUSED_FINALIZE=${SGLANG_FLASHINFER_MOE_FUSED_FINALIZE:-1}"
     -e "SGLANG_DSV41_REASONING_EFFORT=${SGLANG_DSV41_REASONING_EFFORT:-75}"
-    -e "DSV41_MAX_NEW_TOKENS=$DSV41_MAX_NEW_TOKENS"
     -e "DSV41_LOOP_ABORT=${DSV41_LOOP_ABORT:-1}"
     -e "DSV41_LOOP_NGRAM=${DSV41_LOOP_NGRAM:-32}"
     -e "DSV41_LOOP_REPEATS=${DSV41_LOOP_REPEATS:-4}"
@@ -455,11 +470,14 @@ docker_common_args() {
     -e "CUDA_DEVICE_ORDER=PCI_BUS_ID"
     -e "SGLANG_ENABLE_DSV41_ENGRAM_HOST_TABLE=0"
     -e "DSV41_TP_PAD=${DSV41_TP_PAD:-1}"
+    -e "B12X_COMPILE_CACHE_DIR=/root/.cache/b12x-compile"
+    -e "B12X_NEXT_COMPILE_CACHE_DIR=/root/.cache/b12x-next-compile"
+    -e "B12X_ROCE_CACHE_DIR=/root/.cache/b12x-roce"
     -e "VLLM_HOST_IP=$hip"
     -e "HOST_IP=$hip"
   )
   if [[ "$managed_tp4_ring" != 1 ]]; then
-    _a+=(
+    _args+=(
       -e "NCCL_CROSS_NIC=${NCCL_CROSS_NIC:-1}"
       -e "NCCL_IB_MERGE_NICS=${NCCL_IB_MERGE_NICS:-0}"
       -e "NCCL_IB_SUBNET_AWARE_ROUTING=${NCCL_IB_SUBNET_AWARE_ROUTING:-1}"
@@ -472,32 +490,33 @@ docker_common_args() {
       -e "NCCL_DEBUG_SUBSYS=${NCCL_DEBUG_SUBSYS:-INIT}"
     )
   else
-    _a+=(-e "NCCL_IB_EXTENDED_IPV4_GIDS=$NCCL_IB_EXTENDED_IPV4_GIDS")
+    _args+=(-e "NCCL_IB_EXTENDED_IPV4_GIDS=$NCCL_IB_EXTENDED_IPV4_GIDS")
   fi
-  [[ -z "$gid" || "$gid" == auto ]] || _a+=(-e "NCCL_IB_GID_INDEX=$gid")
+  [[ -z "$gid" || "$gid" == auto ]] || _args+=(-e "NCCL_IB_GID_INDEX=$gid")
   if [[ -n "${API_KEY}" ]]; then
-    _a+=(-e "API_KEY=$API_KEY")
+    _args+=(-e "API_KEY=$API_KEY")
   fi
   if [[ -n "${EXTRA_SGLANG_ARGS:-}" ]]; then
-    _a+=(-e "EXTRA_SGLANG_ARGS=$EXTRA_SGLANG_ARGS")
+    _args+=(-e "EXTRA_SGLANG_ARGS=$EXTRA_SGLANG_ARGS")
   fi
   for _kv in ${EXTRA_DOCKER_ENV:-}; do
-    [[ -z "$_kv" ]] || _a+=(-e "$_kv")
+    [[ -z "$_kv" ]] || _args+=(-e "$_kv")
   done
   # Generic passthrough so an experiment is one .env line, not a launcher edit.
-  [[ "${DSV41_TRITON_CACHE:-0}" != 1 ]] || _a+=(-e "TRITON_CACHE_DIR=/state/triton")
+  [[ "${DSV41_TRITON_CACHE:-0}" != 1 ]] || _args+=(-e "TRITON_CACHE_DIR=/root/.cache/triton")
 
   # EXTRA_CONTAINER_ENV="FOO=1 BAR=2" (whitespace separated KEY=VALUE pairs).
   if [[ -n "${EXTRA_CONTAINER_ENV:-}" ]]; then
     local _kv
-    for _kv in ${EXTRA_CONTAINER_ENV}; do _a+=(-e "$_kv"); done
+    for _kv in ${EXTRA_CONTAINER_ENV}; do _args+=(-e "$_kv"); done
   fi
   if [[ "$NCCL_SWITCHLESS_RING_ONLY" == "1" ]]; then
-    switchless_ring_args _a
-    nccl_mount_args _a || die "NCCL setup for the switchless ring failed"
+    switchless_ring_args _args
+    nccl_mount_args _args || die "NCCL setup for the switchless ring failed"
   elif [[ -f "$NCCL_HOST_DIR/libnccl.so.2.30.7" || -f "$NCCL_HOST_DIR/libnccl.so.2" ]]; then
-    _a+=(-v "$NCCL_HOST_DIR:$NCCL_CONTAINER_DIR:ro" -e "LD_LIBRARY_PATH=$NCCL_CONTAINER_DIR")
+    _args+=(-v "$NCCL_HOST_DIR:$NCCL_CONTAINER_DIR:ro" -e "LD_LIBRARY_PATH=$NCCL_CONTAINER_DIR")
   fi
+  _append_array_args "$1" "${_args[@]}"
 }
 
 # Every rank builds its own planner, so the SPS/STS calibration has to exist on
@@ -513,12 +532,12 @@ push_spec_tables() {
         # Every rank derives its verify schedule from its own copy of this file.
         # A rank that disagrees with the others builds a different verify shape
         # and the TP collective hangs, so a failed push is fatal, not a warning.
-        remote_on "$host" "mkdir -p $WORKER_DIR/state && echo $payload | base64 -d > $WORKER_DIR/state/$name" \
+        remote_on "$host" "mkdir -p $(printf '%q' "$STATE_DIR") && echo $payload | base64 -d > $(printf '%q' "$STATE_DIR")/$(printf '%q' "$name")" \
           || die "could not push $name to $host: ranks would disagree on the DSpark verify schedule"
         info "pushed $name to $host"
       else
         # Likewise for a stale copy left from an earlier run.
-        remote_on "$host" "rm -f $WORKER_DIR/state/$name" \
+        remote_on "$host" "rm -f $(printf '%q' "$STATE_DIR")/$(printf '%q' "$name")" \
           || die "could not clear a stale $name on $host"
       fi
     done
@@ -547,7 +566,7 @@ worker_env_lines() {
     [[ -z "$_ed" ]] && continue
     _extra+="        -e '$_ed' \\"$'\n'
   done
-  [[ "${DSV41_TRITON_CACHE:-0}" != 1 ]] || _extra+=$'        -e TRITON_CACHE_DIR=/state/triton \\\n'
+  [[ "${DSV41_TRITON_CACHE:-0}" != 1 ]] || _extra+=$'        -e TRITON_CACHE_DIR=/root/.cache/triton \\\n'
   local _kv
   for _kv in ${EXTRA_CONTAINER_ENV:-}; do
     [[ -z "$_kv" ]] && continue
@@ -606,12 +625,12 @@ EOF
         -e DSV41_RESIDENT_SCALES=$DSV41_RESIDENT_SCALES \\
         -e DSV41_CACHE_WAYS=$DSV41_CACHE_WAYS \\
         -e DSV41_STATS_SECONDS=$DSV41_STATS_SECONDS \\
-        -v $WORKER_ENGRAM_DIR:/engram \\
+        -v $WORKER_ENGRAM_DIR:/engram:ro \\
         -e DSV41_PACKED_DIR=$DSV41_PACKED_DIR \\
         -e DSPARK_SPS_TABLE=$DSPARK_SPS_TABLE \\
         -e DSPARK_STS_TABLE=$DSPARK_STS_TABLE \\
-        -e DSV41_SOURCE=/models/DeepSeek-V4.1-Flash \\
-        -e MODEL_PATH=/models/DeepSeek-V4.1-Flash -e STATE_PATH=/state \\
+        -e DSV41_SOURCE=$MODEL_CONTAINER_PATH \\
+        -e MODEL_PATH=$MODEL_CONTAINER_PATH -e STATE_PATH=/state \\
         -e SERVER_PORT=$PORT -e HOST=0.0.0.0 \\
         -e CONTEXT_LENGTH=$CONTEXT_LENGTH \\
         -e MEM_FRACTION_STATIC=$MEM_FRACTION_STATIC \\
@@ -643,6 +662,9 @@ ${_compat_nccl_env}        -e DSV41_MXFP8_BACKEND=${DSV41_MXFP8_BACKEND:-b12x} \
         ${_gid_env} \\
         -e CUDA_DEVICE_ORDER=PCI_BUS_ID \\
         -e SGLANG_ENABLE_DSV41_ENGRAM_HOST_TABLE=0 \\
+        -e B12X_COMPILE_CACHE_DIR=/root/.cache/b12x-compile \\
+        -e B12X_NEXT_COMPILE_CACHE_DIR=/root/.cache/b12x-next-compile \\
+        -e B12X_ROCE_CACHE_DIR=/root/.cache/b12x-roce \\
         -e DSV41_TP_PAD=${DSV41_TP_PAD:-1} \\
         -e HOST_IP=$wip -e VLLM_HOST_IP=$wip \\
 ${_extra}
@@ -911,9 +933,17 @@ cmd_build() {
   case "$SPARK_BUILD_NETWORK" in
     default) ;;
     host)
-      docker buildx version >/dev/null 2>&1 \
-        || die "SPARK_BUILD_NETWORK=host requires the existing Docker Buildx plugin"
-      docker_build=(docker buildx build --allow network.host --network host --load)
+      if [[ -n "$SPARK_BUILDX_BUILDER" ]]; then
+        docker buildx version >/dev/null 2>&1 \
+          || die "SPARK_BUILDX_BUILDER requires the existing Docker Buildx plugin"
+        docker_build=(docker buildx build --allow network.host --network host --load \
+          --builder "$SPARK_BUILDX_BUILDER")
+      else
+        # The default builder resolves the pinned base from the local image
+        # store and applies host networking only to RUN steps. This avoids a
+        # registry metadata fetch for an offline/local base image.
+        docker_build=(docker build --network host)
+      fi
       ;;
     *) die "SPARK_BUILD_NETWORK must be default or host (got $SPARK_BUILD_NETWORK)" ;;
   esac
@@ -942,8 +972,7 @@ cmd_build() {
     # Anchored on purpose: an unanchored `models` also matches .../sglang/srt/models,
     # and an excluded directory is never transferred, so the worker's copy goes stale.
     rsync -aH --delete --exclude '.env' --exclude '.env.tp4' \
-      --exclude '/state' --exclude '/state-tp4' \
-      --exclude '/logs' --exclude '/logs-tp4' --exclude '/models' \
+      --exclude '/state' --exclude '/logs' --exclude '/models' \
       --exclude '/engram' \
       -e "$(ssh_rsync_e)" \
       "$ROOT/" "${WORKER_USER:+${WORKER_USER}@}${h}:${WORKER_DIR}/"
@@ -1053,11 +1082,7 @@ cmd_serve() {
   fi
 
   if ! overlay_image_present; then
-    if docker image inspect "$IMAGE" >/dev/null 2>&1; then
-      die "image $IMAGE exists but lacks com.spark.dsv41.overlay=1; run ./start-tp4.sh build to replace it"
-    fi
-    cmd_build
-    overlay_image_present || die "build did not produce the required overlay image $IMAGE"
+    die "image $IMAGE is missing or lacks com.spark.dsv41.overlay=1; start never rebuilds implicitly, run ./start-tp4.sh build explicitly"
   fi
 
   # Validate managed settings before a possible image transfer. Live per-rank
@@ -1073,9 +1098,7 @@ cmd_serve() {
     if [[ "${DSV41_LAUNCHER:-}" == tp4 ]]; then
       overlay_image_matches_remote "$h" "$expected_image_id" || needs_ring_ship=1
     elif ! remote_ok_on "$h" "docker image inspect $(printf '%q' "$IMAGE") >/dev/null 2>&1"; then
-      info "image missing on $h — building"
-      cmd_build
-      break
+      die "image $IMAGE is missing on $h; start never rebuilds implicitly, run ./start-tp4.sh build explicitly"
     fi
   done
   if [[ "${DSV41_LAUNCHER:-}" == tp4 && "$needs_ring_ship" == 1 ]]; then
@@ -1164,7 +1187,11 @@ cmd_serve() {
       set -e
       $worker_volume_check
       test -d /dev/infiniband || { echo 'MISSING /dev/infiniband on $h'; exit 1; }
-      mkdir -p $WORKER_DIR/state $WORKER_DIR/logs
+      # Every rank shares the same target-scoped layout so a later rank-local
+      # result or log never escapes to an ad-hoc host path. The API key keeps
+      # its existing state/api-key location owned by boot.py.
+      mkdir -p $(printf '%q' "$STATE_DIR") $(printf '%q' "$LOG_DIR") $(printf '%q' "$RESULTS_DIR") \
+        $(printf '%q' "$CACHE_DIR") $(printf '%q' "$ENGRAM_DIR")
 $(nccl_worker_settings)
       nccl_args=()
       nccl_mount_args nccl_args
@@ -1174,8 +1201,8 @@ $(nccl_worker_settings)
         --ulimit memlock=-1:-1 --ulimit stack=67108864 \
         --device /dev/infiniband:/dev/infiniband \
         --mount $(printf '%q' "$worker_model_mount") \
-        -v $WORKER_DIR/state:/state \
-        -v \$HOME/.cache:/root/.cache \
+        -v $(printf '%q' "$STATE_DIR"):/state \
+        -v $(printf '%q' "$CACHE_DIR"):/root/.cache \
         \"\${nccl_args[@]}\" \\
 $(worker_env_lines "$wip" "$wgid" "$rank")
         -e API_KEY=$(printf '%q' "$API_KEY") \\
@@ -1332,7 +1359,7 @@ cmd_status() {
   done
   echo "== API =="
   local key
-  key=$(cat "$STATE_DIR/api-key" 2>/dev/null || true)
+  key="$(api_key)"
   if { [[ -n "$key" ]] && curl -fsS --max-time 5 -H "Authorization: Bearer $key" "http://127.0.0.1:${PORT}/v1/models"; } \
      || curl -fsS --max-time 5 "http://127.0.0.1:${PORT}/v1/models"; then
     echo
@@ -1366,7 +1393,7 @@ cmd_logs() {
 
 cmd_smoke() {
   local key auth=()
-  key=$(cat "$STATE_DIR/api-key" 2>/dev/null || true)
+  key="$(api_key)"
   [[ -n "$key" ]] && auth=(-H "Authorization: Bearer $key")
   info "smoke: 19+23 (thinking off)"
   curl -fsS --max-time 180 "http://127.0.0.1:${PORT}/v1/chat/completions" \
@@ -1408,9 +1435,9 @@ cmd_pack() {
   info "packing Engram shards: head $ENGRAM_DIR, workers $WORKER_ENGRAM_DIR"
   mkdir -p "$ENGRAM_DIR"
   docker run --rm --network host \
-    -v "$src:/models/DeepSeek-V4.1-Flash:ro" \
+    -v "$src:$MODEL_CONTAINER_PATH:ro" \
     -v "$ENGRAM_DIR:/engram" \
-    -e DSV41_SOURCE=/models/DeepSeek-V4.1-Flash \
+    -e DSV41_SOURCE=$MODEL_CONTAINER_PATH \
     --entrypoint python3 "$IMAGE" \
     /opt/dsv41/scripts/pack_engram.py --rank 0 --tp "$TP_SIZE" --out /engram \
     || die "pack failed on head"
@@ -1421,7 +1448,7 @@ cmd_pack() {
     remote_on "$host" "mkdir -p $WORKER_ENGRAM_DIR && docker run --rm --network host \
       --mount $(printf '%q' "$worker_model_mount") \
       -v $WORKER_ENGRAM_DIR:/engram \
-      -e DSV41_SOURCE=/models/DeepSeek-V4.1-Flash \
+      -e DSV41_SOURCE=$MODEL_CONTAINER_PATH \
       --entrypoint python3 $IMAGE \
       /opt/dsv41/scripts/pack_engram.py --rank $idx --tp $TP_SIZE --out /engram" \
       || die "pack failed on $host"

@@ -107,7 +107,7 @@ class BuildTargetTests(unittest.TestCase):
         self.assertIn('local) printf \'type=bind,source=%s,target=%s,readonly', source)
         self.assertIn('worker_model_has_weights()', source)
         self.assertIn('WORKER_MODEL_DIR', source)
-        self.assertIn('"$src:/models/DeepSeek-V4.1-Flash:ro"', source)
+        self.assertIn('"$src:$MODEL_CONTAINER_PATH:ro"', source)
 
         with tempfile.TemporaryDirectory() as tmp:
             output = shell(r"""
@@ -124,10 +124,10 @@ class BuildTargetTests(unittest.TestCase):
         self.assertNotIn("named-volume-probe", output)
         self.assertIn(
             "type=bind,source=/opt/models/deepseek-ai/DeepSeek-V4.1-Flash-1017,"
-            "target=/models/DeepSeek-V4.1-Flash,readonly",
+            "target=/models/DeepSeek-V4.1-Flash-1017,readonly",
             output,
         )
-        self.assertIn('-v "$src:/models/DeepSeek-V4.1-Flash:ro"', source)
+        self.assertIn('-v "$src:$MODEL_CONTAINER_PATH:ro"', source)
         self.assertIn('--mount $(printf \'%q\' "$worker_model_mount")', source)
 
     def test_local_worker_preflight_checks_config_and_every_shard_without_a_volume(self):
@@ -149,7 +149,7 @@ class BuildTargetTests(unittest.TestCase):
         source = (ROOT / "start.sh").read_text()
         serve = source[source.index("cmd_serve()"):]
         serve = serve[:serve.index("\n}\n")]
-        self.assertLess(serve.index("worker_local_model_has_weights"), serve.index("cmd_build"))
+        self.assertNotIn("cmd_build", serve)
         self.assertLess(serve.index("worker_local_model_has_weights"), serve.index("docker rm"))
 
     def test_managed_tp4_preflights_every_rank_before_replacing_containers(self):

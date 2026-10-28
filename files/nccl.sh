@@ -291,17 +291,26 @@ nccl_file_sha256() {
   fi
 }
 
+_append_array_args() {
+  local array_name="$1"
+  shift
+  local item
+  for item in "$@"; do
+    eval "$array_name+=($(printf '%q' "$item"))"
+  done
+}
+
 # Mount the patched NCCL over the image's pip library when the ring is on, else keep
 # this profile's existing LD_LIBRARY_PATH mount.
 nccl_mount_args() {
-  local -n mounts=$1
   local library
   if library=$(nccl_library "$NCCL_HOST_DIR"); then
     if [[ "$NCCL_OVERLAY_PIP" == 1 ]]; then
-      mounts+=(-v "$library:$NCCL_PIP_SO:ro")
+      _append_array_args "$1" -v "$library:$NCCL_PIP_SO:ro"
     else
-      mounts+=(-v "$NCCL_HOST_DIR:$NCCL_CONTAINER_DIR:ro"
-               -e "LD_LIBRARY_PATH=$NCCL_CONTAINER_DIR")
+      _append_array_args "$1" \
+        -v "$NCCL_HOST_DIR:$NCCL_CONTAINER_DIR:ro" \
+        -e "LD_LIBRARY_PATH=$NCCL_CONTAINER_DIR"
     fi
   elif [[ "$NCCL_OVERLAY_PIP" == 1 || "${NCCL_SWITCHLESS_RING_ONLY:-0}" == 1 ]]; then
     echo "NCCL: no readable library in $NCCL_HOST_DIR" >&2
@@ -322,11 +331,11 @@ dual_pci_domain_args() {
   # The managed TP4 launcher injects the GID policy from the target field and
   # the companion PCI settings from extra_docker_env; this helper must not duplicate them.
   [[ "${DSV41_LAUNCHER:-}" == tp4 && "${NCCL_SWITCHLESS_RING_ONLY:-0}" == 1 ]] && return 0
-  local -n dd_args=$1
-  dd_args+=(-e NCCL_IB_EXTENDED_IPV4_GIDS=1
-    -e "NCCL_IB_PRESERVE_PCI_DOMAIN=${NCCL_IB_PRESERVE_PCI_DOMAIN:-1}"
-    -e "NCCL_IB_ROUTE_DIAGNOSTICS=${NCCL_IB_ROUTE_DIAGNOSTICS:-1}"
-    -e "NCCL_IB_QPS_PER_CONNECTION=${NCCL_IB_QPS_PER_CONNECTION:-1}")
+  _append_array_args "$1" \
+    -e NCCL_IB_EXTENDED_IPV4_GIDS=1 \
+    -e "NCCL_IB_PRESERVE_PCI_DOMAIN=${NCCL_IB_PRESERVE_PCI_DOMAIN:-1}" \
+    -e "NCCL_IB_ROUTE_DIAGNOSTICS=${NCCL_IB_ROUTE_DIAGNOSTICS:-1}" \
+    -e "NCCL_IB_QPS_PER_CONNECTION=${NCCL_IB_QPS_PER_CONNECTION:-1}"
 }
 
 dual_pci_domain_env_string() {
@@ -355,26 +364,27 @@ nccl_gid_publication_check() {
 switchless_ring_args() {
   switchless_ring_enabled || return 0
   local subnet_prefix
-  local -n ring_args=$1
   subnet_prefix="$(nccl_ring_subnet_prefix)" || return 1
-  ring_args+=(-e NCCL_SWITCHLESS_RING_ONLY=1)
+  _append_array_args "$1" -e NCCL_SWITCHLESS_RING_ONLY=1
   if [[ "${DSV41_LAUNCHER:-}" == tp4 ]]; then
     nccl_extra_docker_env_has_key NCCL_ALGO \
-      || ring_args+=(-e "NCCL_ALGO=${NCCL_ALGO:-Ring}")
-    ring_args+=(-e "NCCL_SKIP_TREE_CONNECT=${NCCL_SKIP_TREE_CONNECT:-1}"
-      -e "NCCL_IB_SUBNET_PREFIX_LEN=$subnet_prefix")
-    nccl_extra_docker_env_has_key NCCL_MIN_NCHANNELS \
-      || ring_args+=(-e "NCCL_MIN_NCHANNELS=${NCCL_MIN_NCHANNELS:-4}")
-    nccl_extra_docker_env_has_key NCCL_P2P_LEVEL \
-      || ring_args+=(-e "NCCL_P2P_LEVEL=${NCCL_P2P_LEVEL:-SYS}")
-  else
-    ring_args+=(-e "NCCL_ALGO=${NCCL_ALGO:-Ring}"
-      -e "NCCL_SKIP_TREE_CONNECT=${NCCL_SKIP_TREE_CONNECT:-1}"
+      || _append_array_args "$1" -e "NCCL_ALGO=${NCCL_ALGO:-Ring}"
+    _append_array_args "$1" \
+      -e "NCCL_SKIP_TREE_CONNECT=${NCCL_SKIP_TREE_CONNECT:-1}" \
       -e "NCCL_IB_SUBNET_PREFIX_LEN=$subnet_prefix"
-      -e "NCCL_MIN_NCHANNELS=${NCCL_MIN_NCHANNELS:-4}"
-      -e "NCCL_P2P_LEVEL=${NCCL_P2P_LEVEL:-SYS}")
+    nccl_extra_docker_env_has_key NCCL_MIN_NCHANNELS \
+      || _append_array_args "$1" -e "NCCL_MIN_NCHANNELS=${NCCL_MIN_NCHANNELS:-4}"
+    nccl_extra_docker_env_has_key NCCL_P2P_LEVEL \
+      || _append_array_args "$1" -e "NCCL_P2P_LEVEL=${NCCL_P2P_LEVEL:-SYS}"
+  else
+    _append_array_args "$1" \
+      -e "NCCL_ALGO=${NCCL_ALGO:-Ring}" \
+      -e "NCCL_SKIP_TREE_CONNECT=${NCCL_SKIP_TREE_CONNECT:-1}" \
+      -e "NCCL_IB_SUBNET_PREFIX_LEN=$subnet_prefix" \
+      -e "NCCL_MIN_NCHANNELS=${NCCL_MIN_NCHANNELS:-4}" \
+      -e "NCCL_P2P_LEVEL=${NCCL_P2P_LEVEL:-SYS}"
   fi
-  dual_pci_domain_args ring_args
+  dual_pci_domain_args "$1"
 }
 
 # Same environment as one shell-quoted `-e KEY=VALUE` string, for the worker heredoc.
@@ -572,7 +582,7 @@ nccl_worker_settings() {
   # switchless_ring_enabled is the first thing nccl_preflight and
   # nccl_gid_publication_check call; leaving it out makes the remote payload
   # exit 0 without running any check (command not found swallowed by `|| return 0`).
-  declare -f switchless_ring_enabled nccl_library nccl_mount_args ring_gid_index \
+  declare -f _append_array_args switchless_ring_enabled nccl_library nccl_mount_args ring_gid_index \
     nccl_file_sha256 nccl_preflight dual_pci_domain_args dual_pci_domain_env_string \
     nccl_gid_publication_check
 }

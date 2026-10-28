@@ -10,6 +10,7 @@ F 新基线 GSM8K 200 题 (idx0-199, 8-shot CoT) — Tessa / testing-expert
 """
 import argparse
 import json
+import os
 import re
 import sys
 import time
@@ -18,9 +19,16 @@ import urllib.request
 BASE = "http://127.0.0.1:8003"  # 网关 (worker <MGMT_OCTET>), 可通过 --base 覆盖
 MODEL = "deepseek-v4.1-flash"
 API_KEY = "YOUR_API_KEY"
-DATA = "/home/spark/data/gsm8k_test.jsonl"
-OUT_RAW = "/home/spark/dsv41-4x-spark/bench-results/gsm8k-dsv41.raw.jsonl"
-OUT_SUMMARY = "/home/spark/dsv41-4x-spark/bench-results/gsm8k-dsv41.summary.json"
+RUNTIME_ASSETS = os.environ.get(
+    "RUNTIME_ASSETS", "/opt/runtime_assets/deepseek_v4.1_flash_switchless"
+)
+DATA = os.environ.get("GSM8K_DATA", "/opt/models/datasets/gsm8k_test.jsonl")
+OUT_RAW = os.environ.get(
+    "GSM8K_OUT_RAW", f"{RUNTIME_ASSETS}/results/gsm8k-dsv41.raw.jsonl"
+)
+OUT_SUMMARY = os.environ.get(
+    "GSM8K_OUT_SUMMARY", f"{RUNTIME_ASSETS}/results/gsm8k-dsv41.summary.json"
+)
 MAX_TOKENS = 1024
 NQ = 200
 TEMPERATURE = 0.6

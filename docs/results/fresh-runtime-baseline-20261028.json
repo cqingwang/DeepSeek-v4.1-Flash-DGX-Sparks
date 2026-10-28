@@ -1,0 +1,188 @@
+{
+  "capturedAt": "2026-10-28T03:57:00Z",
+  "target": {
+    "engineId": "deepseek_v4.1_flash_switchless",
+    "sparkId": "spark-a",
+    "host": "192.168.2.180",
+    "port": 8888,
+    "modelId": "deepseek-v4.1-flash",
+    "checkpoint": "deepseek-ai/DeepSeek-V4.1-Flash-1017",
+    "imageTag": "lmsysorg/sglang:dsv41",
+    "imageId": "sha256:718f5c79a371221fa8d8c0cb503329c5d4f4e7e585501991d2e01c9c53673c0d",
+    "network": "local A-B-C-D switchless ring",
+    "runtimeAssets": "/opt/runtime_assets/deepseek_v4.1_flash_switchless"
+  },
+  "protocol": {
+    "harness": "SparkDash DecodeBench/PrefillBench",
+    "remoteSparkDashDefaultsWarning": "The running SparkDash 2.70.0 defaults DecodeBench to temperature=0.7 and thinking=true; temperature=0 and thinking=false must be sent explicitly to match the recorded 1.8.8 protocol.",
+    "decode": {
+      "promptType": "prose",
+      "maxTokens": 256,
+      "temperature": 0,
+      "thinking": false,
+      "warmupJobs": 2,
+      "measuredRepetitions": {
+        "1": 3,
+        "4": 3
+      },
+      "statistic": "arithmetic mean"
+    },
+    "prefill": {
+      "contextSizes": [
+        65536
+      ],
+      "jobs": 3,
+      "statistic": "arithmetic mean across job medians",
+      "filler": "SparkDash repeated-filler benchmark"
+    }
+  },
+  "decode": {
+    "warmups": [
+      {
+        "label": "warmup-prose-c1-1",
+        "benchId": "790b67d8-5ac8-4f07-b31a-0c8af557fdf5",
+        "aggregateDecodeTps": 84.29,
+        "meanTtftMs": 240.0
+      },
+      {
+        "label": "warmup-prose-c1-2",
+        "benchId": "9b384642-f7fe-4b32-a796-02db52d389c7",
+        "aggregateDecodeTps": 84.48,
+        "meanTtftMs": 241.01
+      }
+    ],
+    "c1": [
+      {
+        "benchId": "7e31d307-7148-4bb1-9580-0ef6c58c7d27",
+        "aggregateDecodeTps": 84.33,
+        "meanTtftMs": 229.63
+      },
+      {
+        "benchId": "82b0de29-4f97-4a7c-8917-abdd4f32cce0",
+        "aggregateDecodeTps": 84.56,
+        "meanTtftMs": 228.77
+      },
+      {
+        "benchId": "0cd7d520-16c2-4ecc-9246-9bc0cfb46ffb",
+        "aggregateDecodeTps": 84.66,
+        "meanTtftMs": 231.15
+      }
+    ],
+    "c4": [
+      {
+        "benchId": "76055301-5574-4be2-abeb-8f505aa32977",
+        "aggregateDecodeTps": 180.03,
+        "meanTtftMs": 270.71
+      },
+      {
+        "benchId": "027dcc11-423c-422f-904a-584b18df3eb0",
+        "aggregateDecodeTps": 183.95,
+        "meanTtftMs": 239.68
+      },
+      {
+        "benchId": "2107fde9-cca6-4f68-9071-23020bcc8cbd",
+        "aggregateDecodeTps": 183.56,
+        "meanTtftMs": 235.14
+      }
+    ],
+    "summary": {
+      "proseC1Values": [
+        84.33,
+        84.56,
+        84.66
+      ],
+      "proseC1Mean": 84.51666666666667,
+      "proseC4Values": [
+        180.03,
+        183.95,
+        183.56
+      ],
+      "proseC4Mean": 182.51333333333332
+    }
+  },
+  "prefill": {
+    "runs": [
+      {
+        "benchId": "49182b37-8e12-4f50-884f-cc7dfb0cee0b",
+        "prefillTps": 5403.63,
+        "promptTokens": 65553,
+        "ttftMs": 12440.86,
+        "samples": 2
+      },
+      {
+        "benchId": "bf994507-b8bf-4e1b-9148-7b02f7053d63",
+        "prefillTps": 5988.52,
+        "promptTokens": 65558,
+        "ttftMs": 11249.84,
+        "samples": 2
+      },
+      {
+        "benchId": "30df94d3-7d60-4fae-acc9-c4e0a5bd71a9",
+        "prefillTps": 6000.39,
+        "promptTokens": 65554,
+        "ttftMs": 11167.84,
+        "samples": 2
+      }
+    ],
+    "summary": {
+      "values": [
+        5403.63,
+        5988.52,
+        6000.39
+      ],
+      "mean": 5797.513333333333,
+      "targetTokens": 65536
+    }
+  },
+  "runtimeAcceptance": {
+    "containers": "four ranks running/healthy",
+    "oomKilled": false,
+    "restartCount": 0,
+    "healthHttpStatus": 200,
+    "apiKeyPath": "/opt/runtime_assets/deepseek_v4.1_flash_switchless/state/api-key",
+    "secretsDirectoryPresent": false,
+    "nccl": [
+      "NET/IB",
+      "Connected all rings",
+      "nranks=4",
+      "Init COMPLETE"
+    ],
+    "rdmaSmokeRequestCompletionTokens": 64,
+    "rdmaCounters": {
+      "spark-a": {
+        "movedHcas": 4,
+        "rxBytes": 153723134,
+        "txBytes": 153726163
+      },
+      "spark-b": {
+        "movedHcas": 4,
+        "rxBytes": 153786276,
+        "txBytes": 153784335
+      },
+      "spark-c": {
+        "movedHcas": 4,
+        "rxBytes": 153891787,
+        "txBytes": 153888750
+      },
+      "spark-d": {
+        "movedHcas": 4,
+        "rxBytes": 153831178,
+        "txBytes": 153833130
+      }
+    }
+  },
+  "comparison": {
+    "reference": {
+      "proseC1Mean": 84.70333333333333,
+      "proseC4Mean": 182.39333333333332,
+      "prefill64kMean": 5784.216666666666,
+      "source": "docs/results/decodebench-prose-c1-c4-dsv41-20261028.json and docs/results/prefill-64k-dsv41-20261028.json"
+    },
+    "deltaPercent": {
+      "proseC1": -0.22040909427909833,
+      "proseC4": 0.06580873062037925,
+      "prefill64k": 0.22987418395532602
+    },
+    "conclusion": "Decode and 64k prefill match the most recent baseline within noise; no performance parameter was changed."
+  }
+}

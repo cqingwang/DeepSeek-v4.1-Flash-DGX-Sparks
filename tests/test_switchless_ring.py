@@ -1184,7 +1184,7 @@ class NfsShareOffTests(unittest.TestCase):
         source = (ROOT / "start.sh").read_text()
         status = source[source.index("cmd_status()") :]
         status = status[:status.index("\n}\n")]
-        key_read = status.index('key=$(cat "$STATE_DIR/api-key"')
+        key_read = status.index('key="$(api_key)"')
         auth_probe = status.index('curl -fsS --max-time 5 -H "Authorization: Bearer $key"')
         anonymous_probe = status.index('curl -fsS --max-time 5 "http://127.0.0.1:${PORT}/v1/models"')
         self.assertLess(key_read, auth_probe)

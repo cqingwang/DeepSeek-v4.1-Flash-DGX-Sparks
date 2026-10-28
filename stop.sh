@@ -77,9 +77,10 @@ fi
 WORKER_USER="${WORKER_USER-zurih}"
 SSH_IDENTITY="$(_abs "${SSH_IDENTITY:-$HOME/.ssh/id_ed25519}")"
 NFS_VOLUME="${NFS_VOLUME:-dsv41-weights}"
-IMAGE="${IMAGE:-dsv41-3x-spark:local}"
+IMAGE="${IMAGE:-lmsysorg/sglang:dsv41}"
 REMOTE_PY="${REMOTE_PY:-$ROOT/scripts/remote.py}"
-LOG_DIR="${LOG_DIR:-$ROOT/logs}"
+RUNTIME_ASSETS="${RUNTIME_ASSETS:-$HOME/.local/share/spark/runtime_assets/${TARGET_ENGINE_ID:-deepseek_v4.1_flash_switchless}}"
+LOG_DIR="${LOG_DIR:-$RUNTIME_ASSETS/logs}"
 RM_TIMEOUT="${RM_TIMEOUT:-30}"
 
 GREEN=$'\033[0;32m'; YELLOW=$'\033[1;33m'; RED=$'\033[0;31m'; NC=$'\033[0m'

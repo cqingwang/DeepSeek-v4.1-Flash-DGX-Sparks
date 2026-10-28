@@ -5,7 +5,6 @@ set -euo pipefail
 MODULE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SPARK_DIR="$(cd "$MODULE_DIR/.." && pwd)"
 ENV_FILE="${ENV_FILE:-$MODULE_DIR/.env.tp4}"
-IMAGE_ARCHIVE_DIR="${IMAGE_ARCHIVE_DIR:-/opt/spark/images}"
 REMOTE_ARCHIVE_DIR="${REMOTE_ARCHIVE_DIR:-/var/tmp}"
 
 [[ -f "$ENV_FILE" ]] || { echo "缺少 managed 环境文件: $ENV_FILE" >&2; exit 2; }
@@ -19,7 +18,6 @@ command -v rsync >/dev/null 2>&1 || { echo "rank0 缺少 rsync" >&2; exit 2; }
 command -v ssh >/dev/null 2>&1 || { echo "rank0 缺少 ssh" >&2; exit 2; }
 
 ROUTE_FILE="$(mktemp -t dsv41-ring-image-route.XXXXXX)"
-trap 'rm -f "$ROUTE_FILE"' EXIT
 python3 "$SPARK_DIR/program.py" ring-transfer-route --config "$SPARK_DIR/config.yaml" >"$ROUTE_FILE"
 
 HEAD_NODE="$(awk -F '\t' 'NR == 1 { print $1 }' "$ROUTE_FILE")"
@@ -35,10 +33,10 @@ IMAGE_ID="$(docker image inspect --format '{{.Id}}' "$IMAGE" 2>/dev/null)" || {
 
 SAFE_IMAGE="${IMAGE//\//_}"
 SAFE_IMAGE="${SAFE_IMAGE//:/_}"
-mkdir -p "$IMAGE_ARCHIVE_DIR"
-IMAGE_ARCHIVE="${IMAGE_ARCHIVE:-$IMAGE_ARCHIVE_DIR/${SAFE_IMAGE}.tar}"
+IMAGE_ARCHIVE="$(mktemp --tmpdir=/var/tmp "${SAFE_IMAGE}.XXXXXX.tar")"
 PARTIAL_ARCHIVE="$IMAGE_ARCHIVE.partial"
 REMOTE_ARCHIVE="${REMOTE_ARCHIVE:-$REMOTE_ARCHIVE_DIR/${SAFE_IMAGE}-$$.tar}"
+trap 'rm -f "$ROUTE_FILE" "$IMAGE_ARCHIVE" "$PARTIAL_ARCHIVE" "$IMAGE_ARCHIVE.sha256.partial"' EXIT
 
 archive_image_id() {
   local archive="$1" config_path
@@ -71,34 +69,24 @@ print(config)
   tar -xOf "$archive" "$config_path" | sha256sum | awk '{print "sha256:" $1}'
 }
 
-if [[ -f "$IMAGE_ARCHIVE" && -s "$IMAGE_ARCHIVE" ]] \
-  && cached_image_id="$(archive_image_id "$IMAGE_ARCHIVE")" \
-  && [[ "$cached_image_id" == "$IMAGE_ID" ]]; then
-  echo "复用已验证的 Docker archive: $IMAGE_ARCHIVE ($cached_image_id)"
-else
-  [[ ! -e "$IMAGE_ARCHIVE" ]] || echo "archive 缺失、损坏或 image ID 已过期，将从当前镜像重建: $IMAGE_ARCHIVE"
-  echo "导出 $IMAGE ($IMAGE_ID)"
+echo "导出 $IMAGE ($IMAGE_ID) 到临时 archive $IMAGE_ARCHIVE"
+if ! docker save "$IMAGE" >"$PARTIAL_ARCHIVE"; then
   rm -f "$PARTIAL_ARCHIVE"
-  if ! docker save "$IMAGE" >"$PARTIAL_ARCHIVE"; then
-    rm -f "$PARTIAL_ARCHIVE"
-    echo "docker save 失败: $IMAGE" >&2
-    exit 1
-  fi
-  saved_image_id="$(archive_image_id "$PARTIAL_ARCHIVE")" || {
-    rm -f "$PARTIAL_ARCHIVE"
-    echo "无法从新 archive 读取 Docker image ID: $PARTIAL_ARCHIVE" >&2
-    exit 1
-  }
-  [[ "$saved_image_id" == "$IMAGE_ID" ]] || {
-    rm -f "$PARTIAL_ARCHIVE"
-    echo "新 archive image ID 不匹配: expected=$IMAGE_ID actual=$saved_image_id" >&2
-    exit 1
-  }
-  mv "$PARTIAL_ARCHIVE" "$IMAGE_ARCHIVE"
+  echo "docker save 失败: $IMAGE" >&2
+  exit 1
 fi
+saved_image_id="$(archive_image_id "$PARTIAL_ARCHIVE")" || {
+  rm -f "$PARTIAL_ARCHIVE"
+  echo "无法从新 archive 读取 Docker image ID: $PARTIAL_ARCHIVE" >&2
+  exit 1
+}
+[[ "$saved_image_id" == "$IMAGE_ID" ]] || {
+  rm -f "$PARTIAL_ARCHIVE"
+  echo "新 archive image ID 不匹配: expected=$IMAGE_ID actual=$saved_image_id" >&2
+  exit 1
+}
+mv "$PARTIAL_ARCHIVE" "$IMAGE_ARCHIVE"
 IMAGE_SHA256="$(sha256sum "$IMAGE_ARCHIVE" | awk '{print $1}')"
-printf '%s  %s\n' "$IMAGE_SHA256" "$IMAGE_ARCHIVE" >"$IMAGE_ARCHIVE.sha256.partial"
-mv "$IMAGE_ARCHIVE.sha256.partial" "$IMAGE_ARCHIVE.sha256"
 echo "archive_sha256=$IMAGE_SHA256"
 
 [[ "$IMAGE_SHA256" =~ ^[a-f0-9]{64}$ ]] || { echo "archive SHA-256 无效" >&2; exit 1; }
@@ -107,7 +95,8 @@ echo "archive_sha256=$IMAGE_SHA256"
   exit 2
 }
 REMOTE_ARCHIVE_QUOTED="$(printf '%q' "$REMOTE_ARCHIVE")"
-REMOTE_VERIFY_AND_LOAD="printf '%s  %s\\n' '$IMAGE_SHA256' $REMOTE_ARCHIVE_QUOTED | sha256sum -c - && docker load -i $REMOTE_ARCHIVE_QUOTED >/dev/null"
+REMOTE_VERIFY_AND_LOAD="printf '%s  %s\\n' '$IMAGE_SHA256' $REMOTE_ARCHIVE_QUOTED | sha256sum -c - && \
+  docker load -i $REMOTE_ARCHIVE_QUOTED >/dev/null"
 
 hop=0
 while IFS=$'\t' read -r source_node source_management source_iface source_fabric target_node target_management target_fabric; do

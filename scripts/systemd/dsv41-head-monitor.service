@@ -7,14 +7,17 @@ Wants=docker.service network-online.target
 
 [Service]
 Type=simple
-User=spark
-ExecStart=/home/spark/dsv41-4x-spark/scripts/dsv41-monitor-head.sh
+User=chan
+Environment=TARGET_ENGINE_ID=deepseek_v4.1_flash_switchless
+Environment=DEPLOY_ROOT=/opt/spark/deepseek_v4.1_flash_switchless
+Environment=RUNTIME_ASSETS=/opt/runtime_assets/deepseek_v4.1_flash_switchless
+ExecStart=/opt/spark/deepseek_v4.1_flash_switchless/scripts/dsv41-monitor-head.sh
 Restart=always
 RestartSec=5
 StartLimitIntervalSec=1800
 StartLimitBurst=20
-StandardOutput=append:/home/spark/dsv41-4x-spark/logs-tp4/monitor.log
-StandardError=append:/home/spark/dsv41-4x-spark/logs-tp4/monitor.log
+StandardOutput=append:/opt/runtime_assets/deepseek_v4.1_flash_switchless/logs/monitor.log
+StandardError=append:/opt/runtime_assets/deepseek_v4.1_flash_switchless/logs/monitor.log
 
 [Install]
 WantedBy=multi-user.target

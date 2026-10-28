@@ -13,8 +13,9 @@
 
 set -uo pipefail
 
-PORT="${SERVER_PORT:-8899}"
-KEY_FILE="${API_KEY_FILE:-$HOME/dsv41-4x-spark/state-tp4/api-key}"
+RUNTIME_ASSETS="${RUNTIME_ASSETS:-/opt/runtime_assets/deepseek_v4.1_flash_switchless}"
+PORT="${SERVER_PORT:-8888}"
+KEY_FILE="${API_KEY_FILE:-$RUNTIME_ASSETS/state/api-key}"
 BASE="http://127.0.0.1:${PORT}"
 FULL=0
 JSON=0
@@ -101,7 +102,7 @@ fi
 
 # ── 5/6. corruption + code-gate（复用 gates_suite，容器内跑） ───────────────
 gs=""
-for c in "/state/gates_suite.py" "$HOME/dsv41-4x-spark/state-tp4/gates_suite.py"; do
+for c in "/state/gates_suite.py" "$RUNTIME_ASSETS/state/gates_suite.py"; do
   [[ -f "$c" ]] && gs="$c" && break
 done
 if docker exec dsv41-head test -f /state/gates_suite.py 2>/dev/null; then

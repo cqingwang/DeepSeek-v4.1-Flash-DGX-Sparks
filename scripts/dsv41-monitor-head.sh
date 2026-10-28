@@ -1,13 +1,17 @@
 #!/bin/bash
-# dsv41 head(rank0) 自愈 monitor — 对齐 vllm-tp4-head 链的职责
-# 检测: 容器 healthy 且 8899 /health=200; 连续 3 次失败 -> 全链重建 (serve 流程自带 worker-first)
-# 维护标志: state-tp4/maintenance.flag 存在时挂起监控 (不重建)
+# Managed target head (rank0) health monitor.
+# The current deployment owns container names and runtime paths; no home-directory
+# or legacy state profile is used here.
 set -u
-ROOT=/home/spark/dsv41-4x-spark
-NAME=dsv41-head
-URL=http://127.0.0.1:8899/health
+ROOT="${DEPLOY_ROOT:-/opt/spark/deepseek_v4.1_flash_switchless}"
+RUNTIME_ASSETS="${RUNTIME_ASSETS:-/opt/runtime_assets/deepseek_v4.1_flash_switchless}"
+TARGET_ID="${TARGET_ENGINE_ID:-deepseek_v4.1_flash_switchless}"
+NAME="${TARGET_ID}-r0"
+URL="${HEALTH_URL:-http://127.0.0.1:8888/health}"
 FAILS=0
-MAINT_FLAG="$ROOT/state-tp4/maintenance.flag"
+MAINT_FLAG="$RUNTIME_ASSETS/state/maintenance.flag"
+LOG_FILE="$RUNTIME_ASSETS/logs/monitor.log"
+mkdir -p "$RUNTIME_ASSETS/logs"
 
 while :; do
   if [ -f "$MAINT_FLAG" ]; then
@@ -24,12 +28,9 @@ while :; do
   if [ "$ok" = 1 ]; then FAILS=0; sleep 60; continue; fi
   FAILS=$((FAILS+1))
   if [ "$FAILS" -lt 3 ]; then sleep 60; continue; fi
-  echo "[dsv41-monitor] $(date) rebuild: container=$(docker ps -q --filter name=$NAME | wc -l) /health=$(curl -s -m 8 -o /dev/null -w '%{http_code}' $URL 2>/dev/null)" >> "$ROOT/logs-tp4/monitor.log"
+  echo "[dsv41-monitor] $(date) rebuild: container=$(docker ps -q --filter name=$NAME | wc -l) /health=$(curl -s -m 8 -o /dev/null -w '%{http_code}' "$URL" 2>/dev/null)" >>"$LOG_FILE"
   docker rm -f "$NAME" >/dev/null 2>&1 || true
-  for h in 192.168.1.56 192.168.1.58 192.168.1.57; do
-    ssh -o BatchMode=yes -o ConnectTimeout=8 spark@$h 'docker rm -f dsv41-worker >/dev/null 2>&1' 2>/dev/null || true
-  done
-  cd "$ROOT" && ENV_FILE=.env.tp4 ./start-tp4.sh serve >> "$ROOT/logs-tp4/monitor.log" 2>&1 || true
+  cd "$ROOT" && ENV_FILE="$ROOT/.env.tp4" ./start-tp4.sh serve >>"$LOG_FILE" 2>&1 || true
   FAILS=0
   sleep 60
 done
